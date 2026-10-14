@@ -148,26 +148,27 @@ func (d Diagnostic) Symbol() string {
 	}
 }
 
-// Check applies the MVP completeness rules (plan §7) to every problem.
-func Check(repo *model.Repo) []Diagnostic {
+// Check applies the MVP completeness rules (plan §7) to every problem. The
+// action vocabulary comes from actions so custom configs are honoured.
+func Check(repo *model.Repo, actions *model.ActionSet) []Diagnostic {
 	var out []Diagnostic
 	for _, id := range IDs(repo) {
-		out = append(out, checkProblem(repo, repo.Problems[id])...)
+		out = append(out, checkProblem(repo, repo.Problems[id], actions)...)
 	}
 	return out
 }
 
-func checkProblem(repo *model.Repo, p *model.Problem) []Diagnostic {
+func checkProblem(repo *model.Repo, p *model.Problem, actions *model.ActionSet) []Diagnostic {
 	var diags []Diagnostic
 
-	// Rule 1: a problem must have at least one ask action.
-	if !hasKind(p, model.Ask) {
-		diags = append(diags, Diagnostic{LevelErr, p.ID, "缺少 ask：问题没有任何提问动作"})
+	// Rule 1: a problem must contain the start action (default ask).
+	if !hasKind(p, actions.Start()) {
+		diags = append(diags, Diagnostic{LevelErr, p.ID, "缺少 " + actions.Start() + "：问题没有起点动作"})
 	}
 
-	// Rule 2: the final action must close the loop.
-	if last, ok := p.Last(); ok && !model.IsTerminal(last.Kind) {
-		diags = append(diags, Diagnostic{LevelWarn, p.ID, "缺少 conclude/apply（当前 " + last.Kind + "）"})
+	// Rule 2: the final action must be terminal. Order is not checked.
+	if last, ok := p.Last(); ok && !actions.IsTerminal(last.Kind) {
+		diags = append(diags, Diagnostic{LevelWarn, p.ID, "缺少终点动作（当前 " + last.Kind + "）"})
 	}
 
 	// Rule 3: every derived-from parent must exist.
@@ -185,7 +186,7 @@ func checkProblem(repo *model.Repo, p *model.Problem) []Diagnostic {
 	}
 
 	if len(diags) == 0 {
-		diags = append(diags, Diagnostic{LevelOK, p.ID, "完整（" + strings.Join(kinds(p), " → ") + "）"})
+		diags = append(diags, Diagnostic{LevelOK, p.ID, "完整（" + strings.Join(kinds(p), ", ") + "）"})
 	}
 	return diags
 }
@@ -233,13 +234,13 @@ type Stats struct {
 }
 
 // Summarize computes repository-level counters.
-func Summarize(repo *model.Repo) Stats {
+func Summarize(repo *model.Repo, actions *model.ActionSet) Stats {
 	var s Stats
 	s.Total = len(repo.Problems)
 	for _, id := range IDs(repo) {
 		p := repo.Problems[id]
 		s.Actions += len(p.Actions)
-		if last, ok := p.Last(); ok && model.IsTerminal(last.Kind) {
+		if last, ok := p.Last(); ok && actions.IsTerminal(last.Kind) {
 			s.Complete++
 		} else {
 			s.InProgress++

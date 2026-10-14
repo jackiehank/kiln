@@ -49,18 +49,18 @@ func TestBuildAggregatesProblem(t *testing.T) {
 	if p == nil || len(p.Actions) != 3 {
 		t.Fatalf("unexpected problem: %+v", p)
 	}
-	if !model.IsTerminal(p.State()) {
+	if !model.DefaultActionSet().IsTerminal(p.State()) {
 		t.Fatalf("expected terminal state, got %q", p.State())
 	}
 }
 
 func TestCheckCompleteProblemIsOK(t *testing.T) {
 	repo := Build(ActionsFromCommits(sampleCommits()))
-	diags := Check(repo)
+	diags := Check(repo, model.DefaultActionSet())
 	if len(diags) != 1 || diags[0].Level != LevelOK {
 		t.Fatalf("expected a single OK diagnostic, got %+v", diags)
 	}
-	if !strings.HasPrefix(diags[0].Message, "完整（ask → test → conclude）") {
+	if !strings.HasPrefix(diags[0].Message, "完整（ask, test, conclude）") {
 		t.Fatalf("unexpected summary: %q", diags[0].Message)
 	}
 }
@@ -72,12 +72,12 @@ func TestCheckRules(t *testing.T) {
 		mkCommit("d1", "子不存在\nproblem: sub/bad-child\naction: ask\nspawns: missing/child", 2),
 	}
 	repo := Build(ActionsFromCommits(commits))
-	diags := Check(repo)
+	diags := Check(repo, model.DefaultActionSet())
 
 	if !hasDiag(diags, "sub/no-ask", LevelErr, "缺少 ask") {
 		t.Fatalf("rule 1 not reported: %+v", diags)
 	}
-	if !hasDiag(diags, "sub/no-ask", LevelWarn, "缺少 conclude/apply") {
+	if !hasDiag(diags, "sub/no-ask", LevelWarn, "缺少终点动作") {
 		t.Fatalf("rule 2 not reported: %+v", diags)
 	}
 	if !hasDiag(diags, "sub/bad-parent", LevelErr, "父问题不存在") {
@@ -85,6 +85,39 @@ func TestCheckRules(t *testing.T) {
 	}
 	if !hasDiag(diags, "sub/bad-child", LevelErr, "子问题不存在") {
 		t.Fatalf("rule 4 not reported: %+v", diags)
+	}
+}
+
+// Actions after the start are an unordered combination: the path below runs
+// ask -> test -> collect -> conclude, which is not the "canonical" order, and
+// must still count as complete.
+func TestCheckDoesNotEnforceOrder(t *testing.T) {
+	commits := []git.Commit{
+		mkCommit("h4", "结论\nproblem: o/r\naction: conclude", 4),
+		mkCommit("h3", "采集\nproblem: o/r\naction: collect", 3),
+		mkCommit("h2", "验证\nproblem: o/r\naction: test", 2),
+		mkCommit("h1", "提问\nproblem: o/r\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits))
+	diags := Check(repo, model.DefaultActionSet())
+	if len(diags) != 1 || diags[0].Level != LevelOK {
+		t.Fatalf("order must not be enforced, got %+v", diags)
+	}
+}
+
+func TestCheckHonoursCustomVocabulary(t *testing.T) {
+	commits := []git.Commit{
+		mkCommit("g2", "收尾\nproblem: x/y\naction: done", 2),
+		mkCommit("g1", "开始\nproblem: x/y\naction: begin", 1),
+	}
+	repo := Build(ActionsFromCommits(commits))
+	set, err := model.NewActionSet([]string{"begin", "probe", "done"}, "begin", []string{"done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diags := Check(repo, set)
+	if len(diags) != 1 || diags[0].Level != LevelOK {
+		t.Fatalf("custom vocabulary not honoured, got %+v", diags)
 	}
 }
 
@@ -110,7 +143,7 @@ func TestSummarize(t *testing.T) {
 	commitList := append(sampleCommits(),
 		mkCommit("x1", "进行中\nproblem: perf/ongoing\naction: ask", 5))
 	repo := Build(ActionsFromCommits(commitList))
-	s := Summarize(repo)
+	s := Summarize(repo, model.DefaultActionSet())
 	if s.Total != 2 || s.Complete != 1 || s.InProgress != 1 || s.Actions != 4 {
 		t.Fatalf("unexpected stats: %+v", s)
 	}
