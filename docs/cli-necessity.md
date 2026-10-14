@@ -421,6 +421,42 @@ jj 的 **operation log** 能告诉你"**历史被改写过**"。→ kiln 将来�
 - 本次未测「两 agent 落在**同一个** workspace」——那会争用同一个 `@`，属另一类问题（应为「一 agent 一 workspace」）。
 - jj 的冲突标记里带「from/to change-id」，比 git 的 `<<<<<<<` 更能说明**谁改了什么**。
 
+## test（再续 2）：必须手动声明 workspace 吗？+ jj 冲突机制与 agent 处理
+
+### A. 不声明 workspace / worktree 会怎样（实测）
+
+| | **jj**（同一工作区，无 workspace） | **git**（同一工作区，无 worktree） |
+| --- | --- | --- |
+| 两 agent 改**不同文件** | **互相吞并**：A 的 `kiln commit` 把 B 的**未提交改动一起提交**（实测 alpha 动作同时含 `a.md`+`b.md`）；B 的动作随之变成**空提交**（`f611e26`） | **能隔离**：`git add a.md` 只提交 A 的文件，B 的 `b.md` 仍游离（`?? b.md`） |
+| 原因 | **jj 无暂存区** → 任何快照 / 提交都捕获**整个**工作区 | 有**暂存区** → 能只挑自己的文件 |
+| 同文件 | 直接并进同一次提交 | stage 整个文件 → 也会混 |
+| 结论 | **并行 agent 必须手动 `jj workspace add`——不是可选** | worktree 是"更强隔离"；暂存区提供**部分**隔离 |
+
+> 反直觉点：**jj"无暂存区"对单个 agent 是便利，对同工作区的多 agent 却是隐患**——因为它没有"只提交我这份"的手段。这正是 `jj workspace add` 非用不可的原因。
+
+### B. jj 的冲突机制（补充）
+
+- 冲突**存在提交里**（不是工作区临时态）：合并提交被标 `(conflict)`，命令**从不因冲突失败**；冲突随 rebase / clone 迁移。
+- 标记由 `ui.conflict-marker-style` 决定：`diff`（默认：一侧全文 + 另一侧 diff）/ `snapshot`（两侧全文 + base）/ **`git`**（标准 `<<<<<<< ||||||| ======= >>>>>>>`，实测生效）。
+- 解决三条路：
+  1. **手写文件**到最终内容 → jj 下次命令**自动快照即判定解决**（实测）；
+  2. **`jj resolve --tool=:ours | :theirs`** → **非交互选边**（实测 `:theirs` 一条命令解成 side #2）；
+  3. `jj resolve`（配 3-way 工具，交互式）。
+- `jj resolve --list` → 机器可读的冲突清单（路径 + 元数）。
+
+### C. agent 处理冲突的推荐流程
+
+1. 合并后先 `jj resolve --list`；
+2. 逐文件：能选边 → `:ours` / `:theirs`；要真合并 → 读 marker、写回最终内容；
+3. 复查 `resolve --list` 为空、`jj st` 无 `(conflict)`；
+4. **再** `kiln commit` 落 action——**别把冲突带进动作提交**；
+5. 延后可以（冲突在提交里、不阻断），但**结案前必须清干净**（冲突会渗进带 trailer 的子树）。
+
+### D. 对 kiln 的含义
+
+- kiln 的**读视图**在冲突 / 并行下都**不受影响**；风险全在**写侧**。
+- **并行 agent 的正确姿势**：**一 agent 一 workspace**（jj）/ 一 worktree（git）。否则——如 A 节实测——"动作 = 提交"会把**别人的改动算进你的动作**，动作归属被静默打乱。
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
