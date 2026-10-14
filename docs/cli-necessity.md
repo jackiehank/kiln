@@ -358,6 +358,42 @@ jj 的 **operation log** 能告诉你"**历史被改写过**"。→ kiln 将来�
 4. **造提交差异被证实**：git 只提交**已暂存**内容；jj 终结**整个**工作区变更（契约差异见上段 hypothesize §4.1）。
 5. **colocated 下 git 适配器本可直接用**：印证了假设"§3.1"——纯 colocated 其实不"必须" jj 适配器；jj 适配器的净收益是**非 colocated 仓 + 原生渲染**（本次为验证而实现）。
 
+## test（续）：实测 git vs jj 后端差异与 jj 的优势
+
+> 用测试仓实证。实验 1 建**纯 jj 仓**（`--no-colocate`），其余在 **colocated** 仓。
+
+### 实验与结果
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 1 | 纯 jj 仓（`jj git init --no-colocate`） | 工作区只有 `.jj`，`git log` **直接失败**（not a git repository）；**kiln + jj 适配器完整可用**（commit / path / show）→ **jj 适配器是真必要**，不是可选 |
+| 1b | `jj git init`（默认） | **jj 0.45 默认就是 colocated**（`.git` + `.jj` 同时建）——与"独立仓需要显式建"的直觉相反 |
+| 2 | 造提交（有**未暂存**改动） | **git 后端失败**（`git commit: exit 1`，须先 `git add`）；**jj 后端成功**（`jj commit --message` 终结工作区变更）→ **jj 免掉暂存步** |
+| 3 | 改写历史（`jj describe` 改 collect 的标题） | **change_id 不变**、**commit_id 漂移**（`3a6a9ba`→`9b5185c`）；**后代自动 rebase**（test `32a13db`→`062ac26`，"Rebased 2 descendant commits"）；kiln `path` 的短 id 随之漂移，但**序号寻址仍自洽**；`jj op log` 记下"describe …"这次改写 |
+| 4 | 删除 + 撤销（`jj abandon` → `jj undo`） | 动作**秒删**，kiln 视图立即少一步；`jj undo` **原样恢复**。abandon 触发冲突时 jj **把冲突记进提交、命令不中断**，kiln 仍能照读 |
+
+### jj 的优势（本次实测支持）
+
+1. **无暂存区** → agent 少一步、少一个失败点（实验 2）。
+2. **change_id 跨改写稳定** → 真正的稳定标识；**git 没有等价物**（hash 必漂，实验 3）。
+3. **操作日志 + `undo`** → 敢试错、可回滚（实验 4）；op log 还能告诉你"**历史被改写过**"（git 给不了）。
+4. **冲突可提交、命令不中断** → agent 不被卡死（实验 4）。
+5. **纯 jj 仓也能用** → 不依赖 `.git`（实验 1）。
+
+### jj 的代价（也实测到）
+
+1. **历史是流体** → 动作"证据"可被**任意改写 / 删除**（实验 3/4）——与 kiln"记录"取向的张力**被实证**。
+2. **commit_id 漂移** → kiln 现在印的短 id 会变（实验 3）。
+3. **渲染形态不同** → `path --stat` / `show` 与 git 不同（见上一段 test）。
+4. **abandon 有副作用** → 自动 rebase 会引发冲突（实验 4），"删一个动作"并不总是干净。
+
+### 对 kiln 的结论
+
+- **git 后端**：稳、通用、与"历史 = 证据"取向一致；代价是造动作要先暂存、改写危险。
+- **jj 后端**：对 agent 更友好（无暂存、可 undo、change id 稳定、冲突不阻断）；代价是**历史可被轻易改写**。
+- **改进候选（实测催生）**：jj 适配器可改用 **change_id** 作 `Commit.ID`（跨改写稳定）→ `path` 的短 id 不再漂移；`show` / `stat` 用 change_id 寻址即可（jj 支持）。代价：ID 语义变成"jj change id"，与 git 的 hash 不再同形。
+- **仍成立的张力**：除非把"动作路径"当**可改写草稿**，否则"证据可被改写"要靠 **op log 校验**或**约定不改写**来兜——这是取向取舍，适配器解决不了。
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
