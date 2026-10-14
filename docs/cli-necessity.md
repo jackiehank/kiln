@@ -184,6 +184,84 @@ kiln 面向 agent 的 UX：
 
 > 来源（官方 jj 文档为主；"面向 agent"的包装来自社区技能页，标 ★）：[jj：Git comparison](https://docs.jj-vcs.dev/latest/git-comparison/) ｜ [jj：Git command table](https://docs.jj-vcs.dev/latest/git-command-table/) ｜ [jj：Revsets](https://docs.jj-vcs.dev/v0.40.0/revsets/) ｜ ★ [jj 技能：change ID 跨改写稳定](https://skills.cat/skills/dashed/claude-marketplace/jj) ｜ ★ [onevcat-jj（面向 agent 的 jj）](https://www.skill4agent.com/en/skill/onevcat-skills/onevcat-jj) ｜ ★ [hivebook：jj with stable change IDs](https://hivebook.wiki/wiki/jujutsu-jj-git-compatible-vcs-with-stable-change-ids) ｜ [15 Years of Git, Then Jujutsu](https://dev.to/oukayuka/15-years-of-git-then-jujutsu-why-i-cant-go-back-2o6n)
 
+## hypothesize：VCS adapter（git 可选、可接 jj）
+
+> 结论先行：**把"git 硬编码"提升为"可插拔的仓库后端"**——接口原型其实**已经存在**（`internal/git.Runner`），工作只是①把它提升为后端中立的 `vcs.Repo`、②加一个选择/探测机制、③（将来真用 jj 时）补一个 jj 适配器。渲染继续**委托给后端**（现在已是如此）。
+> 分阶段：**P1 = 只做抽象与选择（行为不变，便宜）**；**P2 = jj 适配器（真用 jj 再上，避免投机）**。
+
+### 1. 现状：seam 已经存在，只是名字里带 git
+
+- [`internal/git`](file:///c:/Users/jacki/kiln/internal/git/git.go) 里已有 `Runner` 接口：`Log / Commit / Show / ShowStat`，外加 `ExecRunner`（shell 出 git）。
+- [`cli.env`](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L115-L123) 已把 `git.Runner` 当**接口**持有——**这正是 adapter 的雏形**，只是包名/类型名把它和 git 绑死了。
+- 引擎只消费 `[]git.Commit`（纯数据），**根本不碰 exec**。→ 后端替换对引擎**零影响**。
+
+### 2. 目标抽象：`vcs.Repo`（后端中立）
+
+```go
+// package vcs：后端中立的仓库抽象
+type Commit struct {
+    ID      string    // 后端给的不透明标识（git: hash；jj: change id / commit id）
+    Date    time.Time
+    Message string
+}
+
+type Repo interface {
+    Log() ([]Commit, error)                          // 全部提交：id + 时间 + 消息
+    Show(id string) (string, error)                  // 单条变更原文（后端渲染）
+    ShowStat(id string, short bool) (string, error)  // 单条变更的统计（后端渲染）
+    Action(message string) error                     // 记录一条 kiln 动作
+}
+
+// Open 按偏好选择后端；prefer = "auto" | "git" | "jj"
+func Open(dir, prefer string) (Repo, error)
+```
+
+- `Commit(message)` **改名 `Action(message)`**：既中立，又正好对上 kiln 的词汇（"记录一条动作"）。
+- `ID` 保持**不透明**——kiln 对外仍用**序号**寻址（`action-diff` 的决定），所以不依赖任何后端的 id 稳定性。
+
+### 3. 方法映射（预期；**待 `test` 用真实 jj 验证**）
+
+| `Repo` 方法 | git | jj（预期） |
+| --- | --- | --- |
+| `Log` | `git log --format=%H%x1f%aI%x1f%B%x1e` | `jj log -r 'all()' --no-graph -T '<id/date/desc 模板>'` |
+| `Show(id)` | `git show <hash>` | `jj show <rev>` |
+| `ShowStat(id, short)` | `git show --stat` / `--shortstat --format=` | `jj diff -r <rev> --stat`（形态待验证） |
+| `Action(msg)` | 暂存后 `git commit -m` | `jj commit -m`（把工作区变更**终结**成一条带该消息的提交） |
+
+### 4. 三处"硬分歧"（抽象真正要吞掉的东西）
+
+1. **造提交的语义**（最难）：
+   - git：**先暂存、再 `commit`**；kiln 的 `commit` 只提交**已暂存**的内容。
+   - jj：**无暂存区**，工作区**本身就是**当前变更；`jj commit -m` 会把**整个工作区变更**终结成提交。
+   - → 契约要定义成"**用这条消息记录当前变更**"，并把差异**写进文档**，而不是假装两者一致。
+2. **历史范围**：git `log` 默认给全量；jj `log` 默认只给一个 revset。→ 适配器**必须显式传 `all()`/`::`** 才能与 git 对齐。
+3. **仓库探测**：jj 常用 **colocated** 仓（`.jj/` 与 `.git/` **并存**）。→ 自动探测必须**`.jj` 优先于 `.git`**，否则会**静默**读成 git 的视图（看到不同的 commit 集合、看不到 jj 的 change id）。
+
+### 5. 为什么模型能"免费"移植
+
+kiln 的模型**全在 commit message 里**（`issue:` / `action:` 等 trailer），不在对象存储里。两个后端都**原样保留提交消息** → **模型天然与后端无关**，换后端不用迁数据。
+
+> 这也把 cli-necessity 的结论落地成一句架构话：**kiln 的产品是「模型 + 校验 + 综合」，VCS 只是可换的底座。**
+
+### 6. 选择机制
+
+- `.kiln.json` 增 `"vcs": "auto" | "git" | "jj"`（默认 `auto`）；
+- `auto`：有 `.jj/` → jj，否则有 `.git/` → git，都无 → 报错；
+- 可选：`kiln <cmd> --vcs=jj` 命令行覆盖。
+
+### 7. 成本 / 风险 / 非目标
+
+- **风险**：造提交语义可能"泄漏"（适配器吞不干净）→ 这是本设计最脆的一处。
+- **风险**：jj 渲染格式与 git 不同 → `show`/`path --stat` 的示例与测试**绑定 git 形态**的地方要**中立化**（把正文当**不透明文本**）。
+- **风险**：维护两个后端；`path` 里现在印"短 hash"，jj 下要印"短 id"。
+- **反方**：若**只用 colocated 仓**，现有 git 适配器**已能工作**；jj 原生适配器的净收益是**非 colocated 仓 + 稳定 change id + 原生渲染**。→ 所以 **P2 应等真用 jj 再上**。
+- **非目标**：本轮不改代码；不引入 jj 依赖；不动引擎与模型。
+
+### 8. 与 cli-necessity 的呼应
+
+- 该 issue 的结论是"kiln 的价值 = 模型 / 校验 / 综合 / 规范写"。**adapter 让这句话的边界更清楚**：这四件事与后端无关，git/jj 只是 substrate。
+- 收集到的"jj 与 kiln 可叠加"也在此具象化：jj 提供**安全地写**（无暂存、可 undo、change id 稳定），kiln 提供**语义校验与复盘**。
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
