@@ -122,7 +122,7 @@ derived-from: deep-dive
 | --- | --- |
 | `issue` | ✅ 采用。GitHub issues 是最主流的追踪术语，LLM 先验最强，覆盖 question / bug / task |
 | `problem` | 弃用。工程直觉强，但英文隐含“有毛病”，与 ask 驱动的探究语义有偏差 |
-| `question` | 弃用。与起点动作 `ask` 呼应，但终点常是 `apply`（落地代码）时语义别扭，且与 `object: q1` 易混 |
+| `question` | 弃用。与起点动作 `ask` 呼应，但终点常是 `apply`（落地代码）时语义别扭 |
 | `topic` / `inquiry` | 弃用。中立贴“研究路径”，但前者略泛、后者 LLM 先验弱 |
 
 中文“问题”同时覆盖 issue / question / problem，因此中文文案沿用“问题”不影响理解，**英文键名统一为 `issue`**。
@@ -242,7 +242,7 @@ kiln/
 3. 父存在：声明 `derived-from` 时，父 issue 必须存在
 4. 子存在：声明 `spawns` 时，子 issue 必须存在
 
-**后续迭代**：阻塞已关闭 issue、`derived-from` 环检测、`object` 引用文件存在性。
+**后续迭代**：阻塞已关闭 issue、`derived-from` 环检测。
 
 输出分级：`✓` 完整 / `⚠` 警告 / `✗` 错误。约定：CI 中任何 `✗` 阻断合并，`⚠` 仅提示。
 
