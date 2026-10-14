@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"kiln/internal/engine"
+	"kiln/internal/model"
 )
 
 func TestDoPrintsCanonicalMessage(t *testing.T) {
@@ -31,14 +34,14 @@ func TestDoRejectsUnknownAction(t *testing.T) {
 
 func TestDoWarnsOnLooseIssueID(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := Run([]string{"do", "badid", "ask"}, &out, &errb)
+	code := Run([]string{"do", "Bad_ID", "ask"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	if !strings.Contains(errb.String(), "不符合") {
 		t.Fatalf("expected a naming warning, stderr = %q", errb.String())
 	}
-	if !strings.Contains(out.String(), "issue: badid") {
+	if !strings.Contains(out.String(), "issue: Bad_ID") {
 		t.Fatalf("expected output to still be produced, got %q", out.String())
 	}
 }
@@ -47,6 +50,36 @@ func TestUnknownCommand(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := Run([]string{"nope"}, &out, &errb); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
+	}
+}
+
+// Domain blocks render as `<domain>/<id>` lines, separated by blank lines, with
+// cross-domain children nested under their parent.
+func TestStatusRendersDomainBlocks(t *testing.T) {
+	issue := func(id, domain, kind string) *model.Issue {
+		return &model.Issue{ID: id, Domain: domain, Actions: []model.Action{{Kind: kind}}}
+	}
+	groups := []engine.DomainGroup{
+		{Domain: "cli", Entries: []engine.Entry{{Issue: issue("help-alignment", "cli", "apply")}}},
+		{Domain: "design", Entries: []engine.Entry{
+			{Issue: issue("action-config", "design", "apply")},
+			{Issue: issue("status-by-domain", "design", "ask"), Children: []engine.Entry{
+				{Issue: issue("child", "cli", "apply")},
+			}},
+		}},
+	}
+	var buf bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), out: &buf}
+	e.renderStatus(e.statusLines(groups))
+	got := buf.String()
+
+	for _, want := range []string{"cli/help-alignment", "design/action-config", "└── cli/child"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status output missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "\n\n") {
+		t.Fatalf("expected a blank line between domain blocks:\n%s", got)
 	}
 }
 

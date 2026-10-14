@@ -166,23 +166,11 @@ type Repo struct {
 	Issues map[string]*Issue
 }
 
-// ValidIssueID reports whether id follows the `<namespace>/<slug>` convention:
-// at least one slash, every segment a non-empty lowercase kebab-case token, and
-// the whole ID at most 50 characters.
+// ValidIssueID reports whether id is a lowercase kebab-case slug of at most 50
+// characters. Issue IDs carry no namespace: uniqueness within a repository is
+// maintained by naming convention plus `kiln check`, without a registry.
 func ValidIssueID(id string) bool {
-	if id == "" || len(id) > 50 {
-		return false
-	}
-	parts := strings.Split(id, "/")
-	if len(parts) < 2 {
-		return false
-	}
-	for _, p := range parts {
-		if !validSegment(p) {
-			return false
-		}
-	}
-	return true
+	return len(id) > 0 && len(id) <= 50 && validSegment(id)
 }
 
 func validSegment(s string) bool {

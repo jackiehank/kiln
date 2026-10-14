@@ -297,3 +297,131 @@ func stateOf(repo *model.Repo, id string) string {
 	}
 	return "missing"
 }
+
+// NoDomain is the bucket for issues that never declared a domain.
+const NoDomain = "(未分类)"
+
+// Entry is one line of the domain view: an issue plus the issues nested under it.
+type Entry struct {
+	Issue    *model.Issue
+	Children []Entry
+}
+
+// DomainGroup is one domain block. Domain is the domain of the block's
+// top-level entries; nested entries may belong to other domains.
+type DomainGroup struct {
+	Domain  string
+	Entries []Entry
+}
+
+// GroupByDomain arranges the repository as domain blocks for `kiln status`.
+//
+// Blocks are keyed by the domain of their top-level issues and sorted by domain
+// name, with NoDomain last; issues inside a block are sorted by ID. An issue that
+// another domain's issue claims as a child — via `spawns:` on the parent or
+// `derived-from:` on the child — is relocated under that parent instead of
+// staying in its own block. Same-domain relations do not nest: those stay flat
+// and are left to `kiln graph`.
+func GroupByDomain(repo *model.Repo) []DomainGroup {
+	ids := IDs(repo)
+
+	// spawnedBy reverses `spawns:` so a child can find the parents that claim it.
+	spawnedBy := map[string][]string{}
+	for _, id := range ids {
+		for _, ref := range repo.Issues[id].Spawns {
+			spawnedBy[ref] = append(spawnedBy[ref], id)
+		}
+	}
+
+	// parent[child] = the first, in ID order, cross-domain parent that claims it.
+	parent := map[string]string{}
+	for _, id := range ids {
+		c := repo.Issues[id]
+		cands := append([]string(nil), c.DerivedFrom...)
+		cands = append(cands, spawnedBy[id]...)
+		sort.Strings(cands)
+		for _, ref := range cands {
+			p, ok := repo.Issues[ref]
+			if !ok || ref == id || domainKey(p) == domainKey(c) {
+				continue
+			}
+			if loops(parent, id, ref) {
+				continue
+			}
+			parent[id] = ref
+			break
+		}
+	}
+
+	groups := map[string]*DomainGroup{}
+	for _, id := range ids {
+		if _, nested := parent[id]; nested {
+			continue
+		}
+		p := repo.Issues[id]
+		key := domainKey(p)
+		g := groups[key]
+		if g == nil {
+			g = &DomainGroup{Domain: key}
+			groups[key] = g
+		}
+		g.Entries = append(g.Entries, buildEntry(repo, id, parent))
+	}
+
+	out := make([]DomainGroup, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].Domain == NoDomain) != (out[j].Domain == NoDomain) {
+			return out[j].Domain == NoDomain
+		}
+		return out[i].Domain < out[j].Domain
+	})
+	return out
+}
+
+// CountDomains returns how many groups are real domains (NoDomain excluded).
+func CountDomains(groups []DomainGroup) int {
+	n := 0
+	for _, g := range groups {
+		if g.Domain != NoDomain {
+			n++
+		}
+	}
+	return n
+}
+
+// domainKey returns the grouping key for an issue.
+func domainKey(p *model.Issue) string {
+	if p.Domain == "" {
+		return NoDomain
+	}
+	return p.Domain
+}
+
+// loops reports whether linking candidate as the parent of child would form a
+// cycle in the parent links already assigned.
+func loops(parent map[string]string, child, candidate string) bool {
+	for node := candidate; node != ""; node = parent[node] {
+		if node == child {
+			return true
+		}
+	}
+	return false
+}
+
+func buildEntry(repo *model.Repo, id string, parent map[string]string) Entry {
+	en := Entry{Issue: repo.Issues[id]}
+	var kids []string
+	for child, par := range parent {
+		if par == id {
+			kids = append(kids, child)
+		}
+	}
+	sort.Strings(kids)
+	for _, k := range kids {
+		en.Children = append(en.Children, buildEntry(repo, k, parent))
+	}
+	return en
+}

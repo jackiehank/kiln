@@ -149,6 +149,60 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
+// A cross-domain child is relocated under its parent and leaves its own block.
+func TestGroupByDomainRelocatesCrossDomainChild(t *testing.T) {
+	commits := []git.Commit{
+		mkCommit("k3", "子\nissue: child\naction: ask\ndomain: cli\nderived-from: parent", 3),
+		mkCommit("k2", "父\nissue: parent\naction: conclude\ndomain: design", 2),
+	}
+	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
+	if len(groups) != 1 || groups[0].Domain != "design" {
+		t.Fatalf("expected one design block, got %+v", groups)
+	}
+	entries := groups[0].Entries
+	if len(entries) != 1 || entries[0].Issue.ID != "parent" {
+		t.Fatalf("unexpected entries: %+v", entries)
+	}
+	if len(entries[0].Children) != 1 || entries[0].Children[0].Issue.ID != "child" {
+		t.Fatalf("child not nested: %+v", entries[0].Children)
+	}
+}
+
+// Relations between issues of the same domain must not nest.
+func TestGroupByDomainKeepsSameDomainFlat(t *testing.T) {
+	commits := []git.Commit{
+		mkCommit("m2", "二\nissue: second\naction: ask\ndomain: design\nspawns: first", 2),
+		mkCommit("m1", "一\nissue: first\naction: ask\ndomain: design", 1),
+	}
+	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
+	if len(groups) != 1 || len(groups[0].Entries) != 2 {
+		t.Fatalf("same-domain relations must stay flat: %+v", groups)
+	}
+	for _, en := range groups[0].Entries {
+		if len(en.Children) != 0 {
+			t.Fatalf("same-domain entry should not nest: %+v", en)
+		}
+	}
+}
+
+func TestGroupByDomainOrdersAndBucketsUndomained(t *testing.T) {
+	commits := []git.Commit{
+		mkCommit("n3", "无域\nissue: zeta\naction: ask", 3),
+		mkCommit("n2", "域二\nissue: beta\naction: ask\ndomain: zzz", 2),
+		mkCommit("n1", "域一\nissue: alpha\naction: ask\ndomain: aaa", 1),
+	}
+	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 blocks, got %d", len(groups))
+	}
+	if groups[0].Domain != "aaa" || groups[1].Domain != "zzz" || groups[2].Domain != NoDomain {
+		t.Fatalf("unexpected order: %q, %q, %q", groups[0].Domain, groups[1].Domain, groups[2].Domain)
+	}
+	if CountDomains(groups) != 2 {
+		t.Fatalf("CountDomains = %d, want 2", CountDomains(groups))
+	}
+}
+
 func hasDiag(diags []Diagnostic, issue string, level Level, substr string) bool {
 	for _, d := range diags {
 		if d.Issue == issue && d.Level == level && strings.Contains(d.Message, substr) {

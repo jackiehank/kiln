@@ -44,7 +44,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 | Trailer | 含义 | 示例 |
 | --- | --- | --- |
-| `issue:` | issue ID | `auth/session-expiry` |
+| `issue:` | issue ID | `session-expiry` |
 | `action:` | 动作类型 | `ask` / `hypothesize` / `collect` / `test` / `conclude` / `apply` |
 
 **可选（描述）**
@@ -95,23 +95,23 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 ### 2.4 issue ID 命名约定
 
-- 格式：`<namespace>/<slug>`
-- `namespace`：项目名或创建者名；`slug`：kebab-case 简短描述
-- 规则：小写；只允许字母、数字、`-`、`/`；长度 ≤ 50
-- 示例：`auth/session-expiry`、`alice/perf-issue`、`payments/race-condition`
-- 唯一性范围：单个仓库内；跨仓库引用追加仓库前缀 `repo-name/auth/session-expiry`
+- 格式：单段 **kebab-case slug**，如 `session-expiry`、`action-config`
+- 规则：小写；只允许字母、数字、`-`；长度 ≤ 50；不允许 `/`
+- 唯一性范围：单个仓库内
 - 唯一性**不靠注册表**，靠命名约定 + `kiln check` 检测 + 人工确认
+
+> 早期设计用过 `<namespace>/<slug>`（namespace = 项目名或创建者名）来降低重名概率，并给跨仓库引用留了 `repo-name/...` 前缀。但单仓库、单人使用时 namespace 恒等于项目名、零信息量，于是**去掉**：ID 收敛为单段 slug。去重与跨仓库引用怎么做，已作为 issue `status-by-domain` 派生的独立问题追踪。
 
 ### 2.5 规范提交信息样例
 
 ```
 发现 X 并发可能出错
 
-issue: auth/session-expiry
+issue: session-expiry
 action: ask
 object: q1
 title: X 并发可能出错
-derived-from: perf/deep-dive
+derived-from: deep-dive
 ```
 
 标题行与 trailers 之间**留一个空行**：git 会把没有空行分隔的整段当作同一个 subject，导致 `git log --oneline` / PR 标题把 trailer 一起挤进去。
@@ -147,29 +147,29 @@ derived-from: perf/deep-dive
 ### 输出示例
 
 ```
-$ kiln do auth/session-expiry ask q1 --title "X 并发可能出错"
+$ kiln do session-expiry ask q1 --title "X 并发可能出错"
 发现 X 并发可能出错
 
-issue: auth/session-expiry
+issue: session-expiry
 action: ask
 object: q1
 title: X 并发可能出错
 ```
 
 ```
-$ kiln path auth/session-expiry
-auth/session-expiry  进行中（当前 test）
+$ kiln path session-expiry
+session-expiry  进行中（当前 test）
   1. ask          q1     a1b2c3d  发现 X 并发可能出错
   2. hypothesize  h1     e4f5g6h  假设锁竞争导致
   3. test         t1     i7j8k9l  压测复现
-  关系: derived-from perf/deep-dive
+  关系: derived-from deep-dive
 ```
 
 ```
 $ kiln check
-✓ auth/session-expiry   完整（ask, hypothesize, test, conclude）
-⚠ perf/deep-dive        缺少终点动作（当前 test）
-✗ broken/ref            父 issue 不存在：derived-from 指向 missing/parent
+✓ session-expiry   完整（ask, hypothesize, test, conclude）
+⚠ deep-dive        缺少终点动作（当前 test）
+✗ broken-ref            父 issue 不存在：derived-from 指向 missing-parent
 ```
 
 ## 4. 数据模型（Go）
@@ -276,59 +276,48 @@ kiln/
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
 - 封装为 MCP server：把结构化工具暴露给 Agent，彻底避免其拼 CLI
 
-## 11. `kiln status` 按 domain 分组（设计，待评审）
+## 11. `kiln status`：按 domain 分组的目录视图
 
-**目标**：`status` 不再平铺列出 issue，而是以 `domain` 为“目录”，同一 domain 的 issue 归到该目录下。
-
-### 11.1 数据来源与规则
-
-- issue 的 domain 取自它各次动作里**最后一个非空 `domain:`**（即现有 `Build` 的行为，此处显式化）。
-- 完全没有声明 domain 的 issue 归入伪目录 `(未分类)`，固定排最后。
-- 同一 issue 只属于一个 domain（`domain:` 是单值 trailer）；跨 domain 归属不在本设计内。
-- domain 值按**不透明字符串**处理：`cli`、`design` 各成一组；`a/b` 不拆成层级（不引入嵌套语义）。
-
-### 11.2 输出格式
+`status` 以 `domain` 为“目录”：同一 domain 的 issue 成块相邻，跨域派生的 issue 以树形嵌在父 issue 下。
 
 ```
-问题总数: 4（完成 4 / 进行中 0）｜domain 2 个
-kiln 动作数: 8
+问题总数: 5（完成 4 / 进行中 1）｜domain 2 个
+kiln 动作数: 9
 
-cli/ (1)
-└── ✓ kiln/help-alignment          apply
-design/ (3)
-├── ✓ kiln/action-config           apply
-├── ✓ kiln/commit-format           apply
-└── ✓ kiln/problem-naming          apply
+cli/help-alignment     ✓ apply
+cli/status-by-domain     ask
+
+design/action-config   ✓ apply
+design/commit-format   ✓ apply
+design/problem-naming  ✓ apply
 ```
 
-- 目录行：`<domain>/ (N)`，目录名后带 `/` 强化“目录”心智。
-- 排序：目录按名称升序；目录内 issue 按 ID 升序；`(未分类)` 固定最后。
-- 树形前缀：组内非末项 `├── `、末项 `└── `。
-- 列对齐：沿用 `pad`/`displayWidth`，ID 列宽取**所有分组中的最大值**（全局统一，跨目录也对齐）。
-- 完成标记沿用现有 `✓`，进行中留空。
+规则：
 
-### 11.3 分层落点
+- 每行写作 `<domain>/<issue-id>`；**不设目录标题行**，块之间用空行分隔——域名由每行的前缀携带，所以跨域嵌套行的域名依然一眼可见。
+- 块按 domain 名升序；块内按 issue ID 升序；未声明 domain 的 issue 归入 `(未分类)` 块，固定最后（这些行不带前缀，只写 ID）。
+- 完成标记 `✓` 放在 ID 之后，进行中留空。
+- 列宽取全部行的**显示宽度**最大值，跨块统一对齐。
 
-- `engine`：新增 `GroupByDomain(repo) []DomainGroup`，返回**已排序**的分组数据（纯数据、可单测）：
+### 11.1 跨域派生（嵌套）
 
-  ```go
-  type DomainGroup struct {
-      Name   string
-      Issues []*Issue
-  }
-  const NoDomain = "(未分类)"
-  ```
+若父 issue 的 `spawns:` 或子 issue 的 `derived-from:` 指向的 issue 处在**不同 domain**，则子 issue **移动**到父 issue 之下，以 `├──`/`└──` 呈现，**不在自己的 domain 块里重复**：
 
-- `cli`：`status` 消费分组数据渲染树，复用 `pad`/`displayWidth`；`list`/`graph` 不动。
+```
+design/status-by-domain     ask
+└── cli/help-alignment    ✓ apply
+```
 
-### 11.4 边界与非目标
+- 只有跨域关系才嵌套；同域关系保持平铺（关系视图交给 `kiln graph`）。
+- 多个父声明同一个子时，按 ID 序取第一个；会成环的候选被跳过。
 
-- 空仓库：沿用现有提示，不打印空分组。
-- 非目标：不拆嵌套 domain；不改 `list`（仍是过滤用的平铺表）与 `graph`；不新增 `--flat` 开关（后续需要再加）；不新增 check 规则（“同一 issue 前后 domain 不一致”留待后续）。
-- 兼容性：`status` 输出格式变化是**破坏性**的（脚本可能依赖平铺），MVP 阶段无外部消费者，可接受。
+### 11.2 落点
 
-### 11.5 验收
+- `engine.GroupByDomain(repo) []DomainGroup`：返回已排序、已嵌套的纯数据；单测覆盖分组/排序/`(未分类)` 兜底/跨域移动/同域平铺。
+- `cli`：`statusLines` + `renderStatus` 负责渲染；`list`/`graph`/`check` 不受影响。
 
-- 单测：`GroupByDomain` 的分组、排序、`(未分类)` 兜底。
-- 输出：本仓库现状应渲染出 `cli/` 与 `design/` 两组，且列对齐。
+### 11.3 非目标
+
+- 不拆嵌套 domain（`a/b` 是一个不透明键）；不改 `list`/`graph`；不新增 `--flat` 开关；不新增 check 规则。
+- 兼容性：`status` 输出是**破坏性**变更（脚本可能依赖旧平铺格式），MVP 阶段无外部消费者。
 

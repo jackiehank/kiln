@@ -36,6 +36,19 @@ func TestActionSetNormalizesNames(t *testing.T) {
 	}
 }
 
+func TestValidIssueID(t *testing.T) {
+	for _, id := range []string{"action-config", "status-by-domain", "a", "issue1", "x-1-2"} {
+		if !ValidIssueID(id) {
+			t.Fatalf("%q should be valid", id)
+		}
+	}
+	for _, id := range []string{"", "Bad", "has space", "a/b", "UPPER", "中文", "with_underscore"} {
+		if ValidIssueID(id) {
+			t.Fatalf("%q should be invalid", id)
+		}
+	}
+}
+
 func TestDefaultActionSet(t *testing.T) {
 	set := DefaultActionSet()
 	if len(set.Names()) != 6 {

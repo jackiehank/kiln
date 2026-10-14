@@ -277,21 +277,100 @@ func (e *env) status(args []string) int {
 		return code
 	}
 	s := engine.Summarize(repo, e.actions)
-	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）\n", s.Total, s.Complete, s.InProgress)
-	fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
 	if s.Total == 0 {
+		fmt.Fprintf(e.out, "问题总数: 0（完成 0 / 进行中 0）\n")
+		fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
 		fmt.Fprintln(e.out, "提示: 用 `kiln do <issue> <action> [object]` 生成规范提交信息")
 		return 0
 	}
-	for _, id := range engine.IDs(repo) {
-		p := repo.Issues[id]
+	groups := engine.GroupByDomain(repo)
+	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）｜domain %d 个\n",
+		s.Total, s.Complete, s.InProgress, engine.CountDomains(groups))
+	fmt.Fprintf(e.out, "kiln 动作数: %d\n\n", s.Actions)
+	e.renderStatus(e.statusLines(groups))
+	return 0
+}
+
+// statusLine is one rendered row of the domain view; an empty left is a blank
+// separator between domain blocks.
+type statusLine struct {
+	left  string
+	done  bool
+	state string
+}
+
+func (e *env) statusLines(groups []engine.DomainGroup) []statusLine {
+	var lines []statusLine
+	for gi, g := range groups {
+		if gi > 0 {
+			lines = append(lines, statusLine{})
+		}
+		for i, en := range g.Entries {
+			e.appendEntry(&lines, en, "", i == len(g.Entries)-1, 0)
+		}
+	}
+	return lines
+}
+
+// appendEntry walks an entry and its nested children. Depth 0 lines carry no
+// tree connector; deeper ones get ├── / └── with │ continuation.
+func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, isLast bool, depth int) {
+	left := issueLabel(en.Issue)
+	if depth > 0 {
+		conn := "├── "
+		if isLast {
+			conn = "└── "
+		}
+		left = indent + conn + left
+	}
+	*lines = append(*lines, statusLine{left: left, done: e.isDone(en.Issue), state: stateWord(en.Issue)})
+
+	nextIndent := indent
+	if depth > 0 {
+		if isLast {
+			nextIndent += "    "
+		} else {
+			nextIndent += "│   "
+		}
+	}
+	for i, c := range en.Children {
+		e.appendEntry(lines, c, nextIndent, i == len(en.Children)-1, depth+1)
+	}
+}
+
+// renderStatus prints the rows aligned by display width.
+func (e *env) renderStatus(lines []statusLine) {
+	width := 0
+	for _, l := range lines {
+		if w := displayWidth(l.left); w > width {
+			width = w
+		}
+	}
+	for _, l := range lines {
+		if l.left == "" {
+			fmt.Fprintln(e.out)
+			continue
+		}
 		mark := " "
-		if last, ok := p.Last(); ok && e.actions.IsTerminal(last.Kind) {
+		if l.done {
 			mark = "✓"
 		}
-		fmt.Fprintf(e.out, "  %s %s %s\n", mark, pad(p.ID, 30), stateWord(p))
+		fmt.Fprintf(e.out, "%s %s %s\n", pad(l.left, width), mark, l.state)
 	}
-	return 0
+}
+
+func (e *env) isDone(p *model.Issue) bool {
+	last, ok := p.Last()
+	return ok && e.actions.IsTerminal(last.Kind)
+}
+
+// issueLabel renders an issue as `<domain>/<id>`; undomained issues show the bare
+// ID.
+func issueLabel(p *model.Issue) string {
+	if p.Domain == "" {
+		return p.ID
+	}
+	return p.Domain + "/" + p.ID
 }
 
 func (e *env) check(args []string) int {
