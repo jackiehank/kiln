@@ -4,12 +4,12 @@
 
 ## 1. 背景与定位
 
-kiln 不发明新的存储格式，也不接管文件创建。它把自己定位成 **"Git 提交信息的规范器 + 研究路径的重建器"**。
+kiln 不发明新的存储格式，也不接管文件创建。它把自己定位成 **“Git 提交信息的规范器 + 研究路径的重建器”**。
 
 一句话：**kiln 是过滤器，不是注册器。** 它只做两件事：
 
 1. **写**：把一次研究动作（提问 / 假设 / 采集 / 验证 / 结论 / 落地）编码成一段**携带语义 trailer 的规范提交信息**。
-2. **读**：从 Git 历史里按约定**过滤**出 kiln 动作，进而重建某个问题的研究路径、关系网与完整性。
+2. **读**：从 Git 历史里按约定**过滤**出 kiln 动作，进而重建某个 issue 的研究路径、关系网与完整性。
 
 所有状态都住在 Git 提交信息里，kiln 自身**不落任何数据库 / 索引 / 注册表**。这样做的收益：
 
@@ -21,7 +21,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 | 原则 | 含义 |
 | --- | --- |
-| 无模式（no modes） | 没有"纯变更模式 / 变更+记录模式 / 纯记录模式"之分，一切靠 trailer 约定 |
+| 无模式（no modes） | 没有“纯变更模式 / 变更+记录模式 / 纯记录模式”之分，一切靠 trailer 约定 |
 | 不建文件 | `q1.md`、`h1.md` 等记录文件由人或 Agent 自建，kiln 不代劳 |
 | 不区分变更类型 | 新增还是修改对 kiln 无意义，kiln 不看 diff |
 | 宽容输入，严格输出 | 解析时大小写不敏感、容忍冒号前后空格；生成时输出规范格式 |
@@ -30,11 +30,11 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 ## 2. 核心约定
 
-### 2.1 识别规则（唯一的"签名"）
+### 2.1 识别规则（唯一的“签名”）
 
-> **一个提交是 kiln 动作，当且仅当它同时包含 `problem:` 与 `action:` 两个 trailer。**
+> **一个提交是 kiln 动作，当且仅当它同时包含 `issue:` 与 `action:` 两个 trailer。**
 
-- 只有其中一个（如普通提交里恰好写了 `problem: 性能瓶颈`）→ 忽略。
+- 只有其中一个（如普通提交里恰好写了 `issue: 性能瓶颈`）→ 忽略。
 - 两个同时出现 → 纳入，几乎不可能被无意写出，误判率极低。
 - 误判的后果仅仅是路径里多一条记录，不是错误；`kiln check` 可辅助发现漏写。
 
@@ -44,7 +44,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 | Trailer | 含义 | 示例 |
 | --- | --- | --- |
-| `problem:` | 问题 ID | `auth/session-expiry` |
+| `issue:` | issue ID | `auth/session-expiry` |
 | `action:` | 动作类型 | `ask` / `hypothesize` / `collect` / `test` / `conclude` / `apply` |
 
 **可选（描述）**
@@ -63,8 +63,8 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 | Trailer | 含义 | 方向 |
 | --- | --- | --- |
-| `derived-from:` | 这个问题从哪来 | 子 → 父 |
-| `spawns:` | 这个问题引出了什么 | 父 → 子 |
+| `derived-from:` | 这个 issue 从哪来 | 子 → 父 |
+| `spawns:` | 这个 issue 引出了什么 | 父 → 子 |
 | `relates-to:` | 相关但不派生 | 双向 |
 | `blocks:` | 阻塞了什么 | 阻塞者 → 被阻塞者 |
 | `supersedes:` | 取代了什么 | 新 → 旧 |
@@ -74,7 +74,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 默认词表：`ask` / `hypothesize` / `collect` / `test` / `conclude` / `apply`
 默认起点：`ask`；默认终点：`conclude`、`apply`（`apply` 表示结论已落地到代码）。
 
-**顺序不是约束**：`ask` 只负责"开启一个问题"，其后的动作是一个**无序集合**——任意组合、任意次序都合法，不存在"必须先 hypothesize 再 test"之类的流水线要求。正常情况一个问题只有一个 `ask`；同一 problem ID 下再出现 `ask`，实际属于另一个问题（该识别留待后续迭代）。
+**顺序不是约束**：`ask` 只负责“开启一个 issue”，其后的动作是一个**无序集合**——任意组合、任意次序都合法，不存在“必须先 hypothesize 再 test”之类的流水线要求。正常情况一个 issue 只有一个 `ask`；同一 issue ID 下再出现 `ask`，实际属于另一个 issue（该识别留待后续迭代）。
 
 词表由当前目录的 `.kiln.json` 覆盖（不存在则用上面的默认值）：
 
@@ -87,13 +87,13 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 ```
 
 - `actions`：合法词表（大小写不敏感，入库时归一为小写）
-- `start`：开启问题的动作，缺省取 `actions` 首项
-- `terminal`：关闭问题的动作集合，缺省取 `actions` 末项
+- `start`：开启 issue 的动作，缺省取 `actions` 首项
+- `terminal`：关闭 issue 的动作集合，缺省取 `actions` 末项
 - `start` / `terminal` 不在 `actions` 中，或词表为空/有重名 → 启动时报错
 
 最小配置只需列出词表，例如 `{"actions": ["ask", "probe", "done"]}` → `start=ask`、`terminal=done`。
 
-### 2.4 问题 ID 命名约定
+### 2.4 issue ID 命名约定
 
 - 格式：`<namespace>/<slug>`
 - `namespace`：项目名或创建者名；`slug`：kebab-case 简短描述
@@ -107,7 +107,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 ```
 发现 X 并发可能出错
 
-problem: auth/session-expiry
+issue: auth/session-expiry
 action: ask
 object: q1
 title: X 并发可能出错
@@ -116,33 +116,33 @@ derived-from: perf/deep-dive
 
 标题行与 trailers 之间**留一个空行**：git 会把没有空行分隔的整段当作同一个 subject，导致 `git log --oneline` / PR 标题把 trailer 一起挤进去。
 
-### 2.6 术语：`problem` 是否合适（开放问题）
+### 2.6 术语：为什么用 `issue`
 
-当前把被追踪的单元叫 `problem`（trailer 键 `problem:`，中文"问题 ID"）。它的本质是"以 `ask` 开启、经若干动作、以终点动作收尾"的一条**探究线**，并不必然是一个缺陷。候选：
+被追踪单元最初叫 `problem`（“缺陷”含义偏重），而它的本质是“以 `ask` 开启、经若干动作、以终点动作收尾”的一条**探究线**，并不必然是一个缺陷。经评估后**改用 `issue`**（trailer 键 `issue:`）：
 
-| 候选 | 贴合度 | 风险 |
-| --- | --- | --- |
-| `problem` | 工程直觉强："要解决的问题" | 隐含"有毛病"，与 ask 驱动的探究语义略有偏差 |
-| `issue` | 最主流（GitHub issues），LLM 先验最强，覆盖 question / bug / task | 偏"缺陷 / 工单" |
-| `question` | 与起点动作 `ask` 呼应最紧 | 终点是 `apply`（落地代码）时不像"问题"；与 `object: q1` 的 q 易混 |
-| `topic` / `inquiry` | 中立，贴合"研究路径" | 前者略泛；后者 LLM 先验弱 |
+| 候选 | 结论 |
+| --- | --- |
+| `issue` | ✅ 采用。GitHub issues 是最主流的追踪术语，LLM 先验最强，覆盖 question / bug / task |
+| `problem` | 弃用。工程直觉强，但英文隐含“有毛病”，与 ask 驱动的探究语义有偏差 |
+| `question` | 弃用。与起点动作 `ask` 呼应，但终点常是 `apply`（落地代码）时语义别扭，且与 `object: q1` 易混 |
+| `topic` / `inquiry` | 弃用。中立贴“研究路径”，但前者略泛、后者 LLM 先验弱 |
 
-中文"问题"同时覆盖 question 与 problem，所以中文语境下 `problem` 读起来并无不妥，张力主要在英文。
+中文“问题”同时覆盖 issue / question / problem，因此中文文案沿用“问题”不影响理解，**英文键名统一为 `issue`**。
 
-**决定待定。** 若改名，需同步改动：`trailer` 的识别规则（`problem:` + `action:`）、`knownKeys`、文档与测试，以及已有的历史提交（当前仅 6 条，成本极低）。
+> 迁移记录：本仓库早期 5 条提交曾用 `problem:`，已通过改写历史统一为 `issue:`。
 
 ## 3. 命令面（CLI）
 
 | 命令 | 作用 | MVP |
 | --- | --- | --- |
-| `kiln do <problem> <action> [object]` | 生成规范提交信息（**只打印，不写文件**） | ✅ |
-| `kiln commit <problem> <action> [object]` | 用规范信息直接提交 | ✅ |
-| `kiln path <problem>` | 重建该问题的研究路径 | ✅ |
+| `kiln do <issue> <action> [object]` | 生成规范提交信息（**只打印，不写文件**） | ✅ |
+| `kiln commit <issue> <action> [object]` | 用规范信息直接提交 | ✅ |
+| `kiln path <issue>` | 重建该 issue 的研究路径 | ✅ |
 | `kiln status` | 全库概览 | ✅ |
 | `kiln check` | 语义完整性校验 | ✅ |
-| `kiln list [--domain=] [--tag=] [--action=]` | 按条件过滤问题 | ✅ |
-| `kiln graph [--format=ascii\|dot\|mermaid]` | 问题关系图 | 仅 `ascii` |
-| `kiln rename <old> <new>` | 重命名问题并改写相关 trailer | ❌（后续） |
+| `kiln list [--domain=] [--tag=] [--action=]` | 按条件过滤 issue | ✅ |
+| `kiln graph [--format=ascii\|dot\|mermaid]` | issue 关系图 | 仅 `ascii` |
+| `kiln rename <old> <new>` | 重命名 issue 并改写相关 trailer | ❌（后续） |
 
 ### 输出示例
 
@@ -150,7 +150,7 @@ derived-from: perf/deep-dive
 $ kiln do auth/session-expiry ask q1 --title "X 并发可能出错"
 发现 X 并发可能出错
 
-problem: auth/session-expiry
+issue: auth/session-expiry
 action: ask
 object: q1
 title: X 并发可能出错
@@ -158,18 +158,18 @@ title: X 并发可能出错
 
 ```
 $ kiln path auth/session-expiry
-auth/session-expiry  未完成（当前 test）
-  1. ask          q1   a1b2c3d  发现 X 并发可能出错
-  2. hypothesize  h1   e4f5g6h  假设锁竞争导致
-  3. test         t1   i7j8k9l  压测复现
+auth/session-expiry  进行中（当前 test）
+  1. ask          q1     a1b2c3d  发现 X 并发可能出错
+  2. hypothesize  h1     e4f5g6h  假设锁竞争导致
+  3. test         t1     i7j8k9l  压测复现
   关系: derived-from perf/deep-dive
 ```
 
 ```
 $ kiln check
-✓ auth/session-expiry      完整（ask → hypothesize → test → conclude）
-⚠ perf/deep-dive           缺少 conclude（当前 test）
-✗ orphan/issue             孤立问题（无任何关系声明）
+✓ auth/session-expiry   完整（ask, hypothesize, test, conclude）
+⚠ perf/deep-dive        缺少终点动作（当前 test）
+✗ broken/ref            父 issue 不存在：derived-from 指向 missing/parent
 ```
 
 ## 4. 数据模型（Go）
@@ -180,7 +180,7 @@ type Action struct {
     Hash     string
     Subject  string
     Date     time.Time
-    Problem  string
+    Issue    string
     Kind     string   // ask|hypothesize|collect|test|conclude|apply
     Object   string
     Title    string
@@ -196,8 +196,8 @@ type Action struct {
     Supersedes  []string
 }
 
-// 由若干 Action 聚合出的问题
-type Problem struct {
+// 由若干 Action 聚合出的 issue
+type Issue struct {
     ID      string
     Actions []Action // 按时间升序
     Domain  string
@@ -206,7 +206,7 @@ type Problem struct {
 
 // 全库聚合结果（引擎的输出，CLI 只消费它）
 type Repo struct {
-    Problems map[string]*Problem
+    Issues map[string]*Issue
 }
 ```
 
@@ -216,7 +216,7 @@ type Repo struct {
 kiln/
 ├── cmd/kiln/main.go         # 进程入口
 ├── internal/
-│   ├── model/               # 领域类型（Action / Problem / Repo）+ ActionSet 词表
+│   ├── model/               # 领域类型（Action / Issue / Repo）+ ActionSet 词表
 │   ├── config/              # 读取 .kiln.json → ActionSet（缺省用内置默认）
 │   ├── trailer/             # 提交信息 → trailers 的解析（纯函数，可单测）
 │   ├── git/                 # Git 适配层：log / commit（接口 + exec 实现）
@@ -236,17 +236,17 @@ kiln/
 
 ## 7. `check` 校验规则
 
-核心原则：**每个问题必须由起点动作开启、由终点动作收尾。**（中间动作不设顺序约束）
+核心原则：**每个 issue 必须由起点动作开启、由终点动作收尾。**（中间动作不设顺序约束）
 
 **MVP 必须实现**
 
-1. 存在性：每个 problem 至少含一个 `start` 动作（默认 `ask`）
+1. 存在性：每个 issue 至少含一个 `start` 动作（默认 `ask`）
 2. 终点：路径的最后一个动作必须是 `terminal` 动作（默认 `conclude` / `apply`）
    （不校验动作顺序；起点之后的动作是无序组合）
-3. 父存在：声明 `derived-from` 时，父 problem 必须存在
-4. 子存在：声明 `spawns` 时，子 problem 必须存在
+3. 父存在：声明 `derived-from` 时，父 issue 必须存在
+4. 子存在：声明 `spawns` 时，子 issue 必须存在
 
-**后续迭代**：阻塞已关闭问题、`derived-from` 环检测、`object` 引用文件存在性。
+**后续迭代**：阻塞已关闭 issue、`derived-from` 环检测、`object` 引用文件存在性。
 
 输出分级：`✓` 完整 / `⚠` 警告 / `✗` 错误。约定：CI 中任何 `✗` 阻断合并，`⚠` 仅提示。
 
@@ -257,20 +257,20 @@ kiln/
 | M1 解析内核 | `trailer` + `model` | 单测：识别规则、大小写/空格容错、tags 列表全部通过 |
 | M2 引擎 | `git` 接口 + `engine`（path/check/status/list） | 用假提交集单测：路径重建、闭环校验正确 |
 | M3 CLI | `do`/`commit`/`path`/`status`/`check`/`list`/`graph` | 在真实仓库跑通，输出符合示例 |
-| M4 收尾 | README、`go vet`、`go test ./...` 全绿 | CI 可加 `go test` |
+| M4 收尾 | `go vet`、`go test ./...` 全绿 | CI 可加 `go test` |
 
 ## 9. Agent 集成
 
 让 Agent 知道约定的三种方式（任选，建议前两种）：
 
-1. **Skill / 系统提示**：在 Agent 的 Skill 里写明"做研究动作时用 `git commit -m "$(kiln do <problem> <action> <object>)"`"。
+1. **Skill / 系统提示**：在 Agent 的 Skill 里写明“做研究动作时用 `git commit -m "$(kiln do <issue> <action> <object>)"`”。
 2. **`kiln do` 默认输出**：直接产出完整提交信息，Agent 复制即可，无需记忆格式。
 3. **Git hook（可选，非 MVP）**：检测 missing trailer 时提示。
 
 ## 10. 后续迭代（MVP 之后）
 
-- `kiln rename`：重命名 problem 并改写全部相关 trailer
-- 同一 problem ID 下出现第二个 `ask` 时的识别（视为新问题的分叉）
+- `kiln rename`：重命名 issue 并改写全部相关 trailer
+- 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性

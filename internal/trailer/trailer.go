@@ -1,6 +1,6 @@
 // Package trailer parses kiln's semantic metadata out of a git commit message.
 //
-// A commit is a kiln action iff it carries both a `problem:` and an `action:`
+// A commit is a kiln action iff it carries both an `issue:` and an `action:`
 // trailer. Parsing is deliberately lenient (case-insensitive keys, optional
 // spaces around the colon, `[a, b]` or comma-separated lists) so that agents and
 // humans can write naturally; formatting (see Format) is strict.
@@ -10,10 +10,10 @@ import "strings"
 
 // Fields is the semantic content of one kiln commit message.
 type Fields struct {
-	Problem string
-	Action  string
-	Object  string
-	Title   string
+	Issue  string
+	Action string
+	Object string
+	Title  string
 
 	Refs   []string
 	Target string
@@ -29,7 +29,7 @@ type Fields struct {
 }
 
 var knownKeys = map[string]bool{
-	"problem": true, "action": true, "object": true, "title": true,
+	"issue": true, "action": true, "object": true, "title": true,
 	"refs": true, "target": true, "scope": true, "domain": true, "tags": true,
 	"derived-from": true, "spawns": true, "relates-to": true,
 	"blocks": true, "supersedes": true,
@@ -54,8 +54,8 @@ func Parse(message string) (Fields, bool) {
 			continue
 		}
 		switch key {
-		case "problem":
-			f.Problem = val
+		case "issue":
+			f.Issue = val
 		case "action":
 			f.Action = val
 		case "object":
@@ -85,7 +85,7 @@ func Parse(message string) (Fields, bool) {
 		}
 	}
 	f.Action = strings.ToLower(f.Action)
-	return f, f.Problem != "" && f.Action != ""
+	return f, f.Issue != "" && f.Action != ""
 }
 
 // splitList accepts `[a, b]` or `a, b` and returns the trimmed items.
@@ -104,7 +104,7 @@ func splitList(v string) []string {
 
 // order is the canonical trailer order used by Format.
 var order = []string{
-	"problem", "action", "object", "title", "refs", "target", "scope",
+	"issue", "action", "object", "title", "refs", "target", "scope",
 	"domain", "tags", "derived-from", "spawns", "relates-to", "blocks", "supersedes",
 }
 
@@ -120,8 +120,8 @@ func Format(f Fields) string {
 	}
 	for _, k := range order {
 		switch k {
-		case "problem":
-			writeScalar(&b, "problem", f.Problem)
+		case "issue":
+			writeScalar(&b, "issue", f.Issue)
 		case "action":
 			writeScalar(&b, "action", f.Action)
 		case "object":

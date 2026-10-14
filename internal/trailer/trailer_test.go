@@ -6,12 +6,12 @@ import (
 )
 
 func TestParseDetectsKilnAction(t *testing.T) {
-	msg := "发现 X 并发可能出错\nproblem: auth/session-expiry\naction: ask\nobject: q1\n"
+	msg := "发现 X 并发可能出错\nissue: auth/session-expiry\naction: ask\nobject: q1\n"
 	f, ok := Parse(msg)
 	if !ok {
 		t.Fatalf("expected a kiln action")
 	}
-	if f.Problem != "auth/session-expiry" || f.Action != "ask" || f.Object != "q1" {
+	if f.Issue != "auth/session-expiry" || f.Action != "ask" || f.Object != "q1" {
 		t.Fatalf("unexpected fields: %+v", f)
 	}
 }
@@ -19,11 +19,11 @@ func TestParseDetectsKilnAction(t *testing.T) {
 func TestParseIgnoresLoneTrailers(t *testing.T) {
 	cases := map[string]string{
 		"plain commit":     "fix: 修复登录超时\n\n问题出在 session 过期时间配置错误",
-		"problem only":     "problem: 性能瓶颈在数据库\n",
+		"issue only":       "issue: 性能瓶颈在数据库\n",
 		"action only":      "action: ask\n",
-		"unknown key":      "note: problem: 不算\n",
-		"empty value":      "problem:\naction:\n",
-		"subject mentions": "problem: 和 action: 是 kiln 约定的 trailer",
+		"unknown key":      "note: issue: 不算\n",
+		"empty value":      "issue:\naction:\n",
+		"subject mentions": "issue: 和 action: 是 kiln 约定的 trailer",
 	}
 	for name, msg := range cases {
 		if _, ok := Parse(msg); ok {
@@ -33,13 +33,13 @@ func TestParseIgnoresLoneTrailers(t *testing.T) {
 }
 
 func TestParseIsLenient(t *testing.T) {
-	msg := "Problem:My/Thing\nACTION : Ask\ntags: [security, performance]\nrefs: q1,h1\n"
+	msg := "Issue:My/Thing\nACTION : Ask\ntags: [security, performance]\nrefs: q1,h1\n"
 	f, ok := Parse(msg)
 	if !ok {
 		t.Fatalf("expected a kiln action despite messy formatting")
 	}
-	if f.Problem != "My/Thing" {
-		t.Fatalf("problem = %q", f.Problem)
+	if f.Issue != "My/Thing" {
+		t.Fatalf("issue = %q", f.Issue)
 	}
 	if f.Action != "ask" {
 		t.Fatalf("action should be lower-cased, got %q", f.Action)
@@ -53,7 +53,7 @@ func TestParseIsLenient(t *testing.T) {
 }
 
 func TestParseRelationLists(t *testing.T) {
-	msg := "problem: a/x\naction: ask\nderived-from: b/y\nspawns: c/z, d/w\n"
+	msg := "issue: a/x\naction: ask\nderived-from: b/y\nspawns: c/z, d/w\n"
 	f, _ := Parse(msg)
 	if !reflect.DeepEqual(f.DerivedFrom, []string{"b/y"}) {
 		t.Fatalf("derived-from = %+v", f.DerivedFrom)
@@ -65,7 +65,7 @@ func TestParseRelationLists(t *testing.T) {
 
 func TestFormatRoundTrip(t *testing.T) {
 	in := Fields{
-		Problem:     "auth/session-expiry",
+		Issue:       "auth/session-expiry",
 		Action:      "ask",
 		Object:      "q1",
 		Title:       "X 并发可能出错",
@@ -78,7 +78,7 @@ func TestFormatRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("round trip lost detection:\n%s", msg)
 	}
-	if back.Problem != in.Problem || back.Action != in.Action || back.Object != in.Object || back.Title != in.Title {
+	if back.Issue != in.Issue || back.Action != in.Action || back.Object != in.Object || back.Title != in.Title {
 		t.Fatalf("round trip scalar mismatch:\n%s\n%+v", msg, back)
 	}
 	if !reflect.DeepEqual(back.Tags, in.Tags) || !reflect.DeepEqual(back.Refs, in.Refs) {
@@ -89,7 +89,7 @@ func TestFormatRoundTrip(t *testing.T) {
 	}
 	// Format is strict: canonical key casing and spacing, with a blank line
 	// separating the subject from the trailer block.
-	if msg != "X 并发可能出错\n\nproblem: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
+	if msg != "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
 		t.Fatalf("unexpected canonical output:\n%s", msg)
 	}
 }

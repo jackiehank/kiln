@@ -1,6 +1,6 @@
-// Package engine turns a stream of raw commits into a repository of problems and
-// answers the questions the CLI asks: what is the path of this problem, is the
-// repository semantically complete, how do problems relate.
+// Package engine turns a stream of raw commits into a repository of issues and
+// answers the questions the CLI asks: what is the path of this issue, is the
+// repository semantically complete, how do issues relate.
 package engine
 
 import (
@@ -26,7 +26,7 @@ func ActionsFromCommits(commits []git.Commit) []model.Action {
 			Hash:        c.Hash,
 			Subject:     subject(c.Message),
 			Date:        c.Date,
-			Problem:     f.Problem,
+			Issue:       f.Issue,
 			Kind:        f.Action,
 			Object:      f.Object,
 			Title:       f.Title,
@@ -55,14 +55,14 @@ func subject(message string) string {
 	return ""
 }
 
-// Build aggregates actions into a repository of problems.
+// Build aggregates actions into a repository of issues.
 func Build(actions []model.Action) *model.Repo {
-	repo := &model.Repo{Problems: map[string]*model.Problem{}}
+	repo := &model.Repo{Issues: map[string]*model.Issue{}}
 	for _, a := range actions {
-		p := repo.Problems[a.Problem]
+		p := repo.Issues[a.Issue]
 		if p == nil {
-			p = &model.Problem{ID: a.Problem}
-			repo.Problems[a.Problem] = p
+			p = &model.Issue{ID: a.Issue}
+			repo.Issues[a.Issue] = p
 		}
 		p.Actions = append(p.Actions, a)
 		if a.Domain != "" {
@@ -75,7 +75,7 @@ func Build(actions []model.Action) *model.Repo {
 		p.Blocks = appendUnique(p.Blocks, a.Blocks...)
 		p.Supersedes = appendUnique(p.Supersedes, a.Supersedes...)
 	}
-	for _, p := range repo.Problems {
+	for _, p := range repo.Issues {
 		sort.SliceStable(p.Actions, func(i, j int) bool {
 			return p.Actions[i].Date.Before(p.Actions[j].Date)
 		})
@@ -83,10 +83,10 @@ func Build(actions []model.Action) *model.Repo {
 	return repo
 }
 
-// IDs returns problem IDs sorted for stable output.
+// IDs returns issue IDs sorted for stable output.
 func IDs(repo *model.Repo) []string {
-	ids := make([]string, 0, len(repo.Problems))
-	for id := range repo.Problems {
+	ids := make([]string, 0, len(repo.Issues))
+	for id := range repo.Issues {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
@@ -111,7 +111,7 @@ func containsStr(list []string, v string) bool {
 	return false
 }
 
-func hasKind(p *model.Problem, kind string) bool {
+func hasKind(p *model.Issue, kind string) bool {
 	for _, a := range p.Actions {
 		if a.Kind == kind {
 			return true
@@ -132,7 +132,7 @@ const (
 // Diagnostic is one finding from Check.
 type Diagnostic struct {
 	Level   Level
-	Problem string
+	Issue   string
 	Message string
 }
 
@@ -148,20 +148,20 @@ func (d Diagnostic) Symbol() string {
 	}
 }
 
-// Check applies the MVP completeness rules (plan §7) to every problem. The
+// Check applies the MVP completeness rules (plan §7) to every issue. The
 // action vocabulary comes from actions so custom configs are honoured.
 func Check(repo *model.Repo, actions *model.ActionSet) []Diagnostic {
 	var out []Diagnostic
 	for _, id := range IDs(repo) {
-		out = append(out, checkProblem(repo, repo.Problems[id], actions)...)
+		out = append(out, checkIssue(repo, repo.Issues[id], actions)...)
 	}
 	return out
 }
 
-func checkProblem(repo *model.Repo, p *model.Problem, actions *model.ActionSet) []Diagnostic {
+func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Diagnostic {
 	var diags []Diagnostic
 
-	// Rule 1: a problem must contain the start action (default ask).
+	// Rule 1: a issue must contain the start action (default ask).
 	if !hasKind(p, actions.Start()) {
 		diags = append(diags, Diagnostic{LevelErr, p.ID, "缺少 " + actions.Start() + "：问题没有起点动作"})
 	}
@@ -173,14 +173,14 @@ func checkProblem(repo *model.Repo, p *model.Problem, actions *model.ActionSet) 
 
 	// Rule 3: every derived-from parent must exist.
 	for _, parent := range p.DerivedFrom {
-		if _, ok := repo.Problems[parent]; !ok {
+		if _, ok := repo.Issues[parent]; !ok {
 			diags = append(diags, Diagnostic{LevelErr, p.ID, "父问题不存在：derived-from 指向 " + parent})
 		}
 	}
 
 	// Rule 4: every spawned child must exist.
 	for _, child := range p.Spawns {
-		if _, ok := repo.Problems[child]; !ok {
+		if _, ok := repo.Issues[child]; !ok {
 			diags = append(diags, Diagnostic{LevelErr, p.ID, "子问题不存在：spawns 指向 " + child})
 		}
 	}
@@ -191,7 +191,7 @@ func checkProblem(repo *model.Repo, p *model.Problem, actions *model.ActionSet) 
 	return diags
 }
 
-func kinds(p *model.Problem) []string {
+func kinds(p *model.Issue) []string {
 	out := make([]string, 0, len(p.Actions))
 	for _, a := range p.Actions {
 		out = append(out, a.Kind)
@@ -199,18 +199,18 @@ func kinds(p *model.Problem) []string {
 	return out
 }
 
-// FilterOptions narrows a list of problems.
+// FilterOptions narrows a list of issues.
 type FilterOptions struct {
 	Domain string
 	Tag    string
 	Action string
 }
 
-// Filter returns problem IDs matching every provided option.
+// Filter returns issue IDs matching every provided option.
 func Filter(repo *model.Repo, o FilterOptions) []string {
 	var out []string
 	for _, id := range IDs(repo) {
-		p := repo.Problems[id]
+		p := repo.Issues[id]
 		if o.Domain != "" && p.Domain != o.Domain {
 			continue
 		}
@@ -236,9 +236,9 @@ type Stats struct {
 // Summarize computes repository-level counters.
 func Summarize(repo *model.Repo, actions *model.ActionSet) Stats {
 	var s Stats
-	s.Total = len(repo.Problems)
+	s.Total = len(repo.Issues)
 	for _, id := range IDs(repo) {
-		p := repo.Problems[id]
+		p := repo.Issues[id]
 		s.Actions += len(p.Actions)
 		if last, ok := p.Last(); ok && actions.IsTerminal(last.Kind) {
 			s.Complete++
@@ -249,15 +249,15 @@ func Summarize(repo *model.Repo, actions *model.ActionSet) Stats {
 	return s
 }
 
-// Graph renders an ASCII relationship tree: one block per problem, listing the
-// problems it spawns, relates to and derives from.
+// Graph renders an ASCII relationship tree: one block per issue, listing the
+// issues it spawns, relates to and derives from.
 func Graph(repo *model.Repo) string {
 	var b strings.Builder
 	for i, id := range IDs(repo) {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		p := repo.Problems[id]
+		p := repo.Issues[id]
 		state := p.State()
 		if state == "" {
 			state = "?"
@@ -275,7 +275,7 @@ func Graph(repo *model.Repo) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func relationLines(repo *model.Repo, p *model.Problem) []string {
+func relationLines(repo *model.Repo, p *model.Issue) []string {
 	var lines []string
 	for _, c := range p.Spawns {
 		lines = append(lines, "spawns "+c+" ("+stateOf(repo, c)+")")
@@ -290,7 +290,7 @@ func relationLines(repo *model.Repo, p *model.Problem) []string {
 }
 
 func stateOf(repo *model.Repo, id string) string {
-	if p, ok := repo.Problems[id]; ok {
+	if p, ok := repo.Issues[id]; ok {
 		if s := p.State(); s != "" {
 			return s
 		}

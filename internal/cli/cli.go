@@ -18,9 +18,9 @@ import (
 const usage = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 用法:
-  kiln do <problem> <action> [object] [flags]     生成规范提交信息（不写文件）
-  kiln commit <problem> <action> [object] [flags] 用规范信息直接提交
-  kiln path <problem>                             重建问题的研究路径
+  kiln do <issue> <action> [object] [flags]     生成规范提交信息（不写文件）
+  kiln commit <issue> <action> [object] [flags] 用规范信息直接提交
+  kiln path <issue>                             重建问题的研究路径
   kiln status                                     全库概览
   kiln check [--verbose]                          语义完整性校验
   kiln list [--domain=] [--tag=] [--action=]      按条件过滤问题
@@ -124,10 +124,10 @@ func parse(args []string) ([]string, flags) {
 func (e *env) write(args []string, commit bool) int {
 	pos, f := parse(args)
 	if len(pos) < 2 {
-		fmt.Fprintf(e.errw, "用法: kiln %s <problem> <action> [object] [flags]\n", modeName(commit))
+		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [object] [flags]\n", modeName(commit))
 		return 2
 	}
-	problem := pos[0]
+	issue := pos[0]
 	action := strings.ToLower(strings.TrimSpace(pos[1]))
 	object := f.get("object")
 	if object == "" && len(pos) > 2 {
@@ -137,12 +137,12 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprintf(e.errw, "非法 action: %q（可选: %s）\n", action, strings.Join(e.actions.Names(), ", "))
 		return 2
 	}
-	if !model.ValidProblemID(problem) {
-		fmt.Fprintf(e.errw, "警告: problem ID %q 不符合 <namespace>/<slug> 约定\n", problem)
+	if !model.ValidIssueID(issue) {
+		fmt.Fprintf(e.errw, "警告: issue ID %q 不符合 <namespace>/<slug> 约定\n", issue)
 	}
 
 	msg := trailer.Format(trailer.Fields{
-		Problem:     problem,
+		Issue:       issue,
 		Action:      action,
 		Object:      object,
 		Title:       f.get("title"),
@@ -172,14 +172,14 @@ func (e *env) write(args []string, commit bool) int {
 func (e *env) path(args []string) int {
 	pos, _ := parse(args)
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln path <problem>")
+		fmt.Fprintln(e.errw, "用法: kiln path <issue>")
 		return 2
 	}
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
 	}
-	p, ok := repo.Problems[pos[0]]
+	p, ok := repo.Issues[pos[0]]
 	if !ok {
 		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
 		return 1
@@ -203,11 +203,11 @@ func (e *env) status(args []string) int {
 	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）\n", s.Total, s.Complete, s.InProgress)
 	fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
 	if s.Total == 0 {
-		fmt.Fprintln(e.out, "提示: 用 `kiln do <problem> <action> [object]` 生成规范提交信息")
+		fmt.Fprintln(e.out, "提示: 用 `kiln do <issue> <action> [object]` 生成规范提交信息")
 		return 0
 	}
 	for _, id := range engine.IDs(repo) {
-		p := repo.Problems[id]
+		p := repo.Issues[id]
 		mark := " "
 		if last, ok := p.Last(); ok && e.actions.IsTerminal(last.Kind) {
 			mark = "✓"
@@ -224,18 +224,18 @@ func (e *env) check(args []string) int {
 	if repo == nil {
 		return code
 	}
-	if len(repo.Problems) == 0 {
-		fmt.Fprintln(e.out, "没有 kiln 动作（检查提交信息是否同时带了 problem: 与 action:）")
+	if len(repo.Issues) == 0 {
+		fmt.Fprintln(e.out, "没有 kiln 动作（检查提交信息是否同时带了 issue: 与 action:）")
 		return 0
 	}
 	failed := false
 	for _, d := range engine.Check(repo, e.actions) {
-		fmt.Fprintf(e.out, "%s %-30s %s\n", d.Symbol(), d.Problem, d.Message)
+		fmt.Fprintf(e.out, "%s %-30s %s\n", d.Symbol(), d.Issue, d.Message)
 		if d.Level == engine.LevelErr {
 			failed = true
 		}
 		if verbose {
-			if p, ok := repo.Problems[d.Problem]; ok {
+			if p, ok := repo.Issues[d.Issue]; ok {
 				for _, a := range p.Actions {
 					fmt.Fprintf(e.out, "      %-12s %-6s %s\n", a.Kind, a.Object, shortHash(a.Hash))
 				}
@@ -260,7 +260,7 @@ func (e *env) list(args []string) int {
 		Action: f.get("action"),
 	})
 	for _, id := range ids {
-		p := repo.Problems[id]
+		p := repo.Issues[id]
 		fmt.Fprintf(e.out, "%-30s %-12s %s\n", p.ID, stateWord(p), tagsSuffix(p))
 	}
 	return 0
@@ -280,7 +280,7 @@ func (e *env) graph(args []string) int {
 	if repo == nil {
 		return code
 	}
-	if len(repo.Problems) == 0 {
+	if len(repo.Issues) == 0 {
 		fmt.Fprintln(e.out, "（空）")
 		return 0
 	}
@@ -305,21 +305,21 @@ func modeName(commit bool) string {
 	return "do"
 }
 
-func stateWord(p *model.Problem) string {
+func stateWord(p *model.Issue) string {
 	if s := p.State(); s != "" {
 		return s
 	}
 	return "未知"
 }
 
-func (e *env) progressWord(p *model.Problem) string {
+func (e *env) progressWord(p *model.Issue) string {
 	if last, ok := p.Last(); ok && e.actions.IsTerminal(last.Kind) {
 		return "已完成"
 	}
 	return "进行中"
 }
 
-func relationSummary(p *model.Problem) string {
+func relationSummary(p *model.Issue) string {
 	var parts []string
 	add := func(label string, vals []string) {
 		if len(vals) > 0 {
@@ -334,7 +334,7 @@ func relationSummary(p *model.Problem) string {
 	return strings.Join(parts, "; ")
 }
 
-func tagsSuffix(p *model.Problem) string {
+func tagsSuffix(p *model.Issue) string {
 	var parts []string
 	if p.Domain != "" {
 		parts = append(parts, "domain="+p.Domain)

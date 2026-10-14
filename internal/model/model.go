@@ -1,5 +1,5 @@
 // Package model defines kiln's domain types: a parsed action, an aggregated
-// problem, the repository-wide aggregation, and the (configurable) action
+// issue, the repository-wide aggregation, and the (configurable) action
 // vocabulary. Nothing here touches git or the filesystem, so the whole package
 // is trivially testable.
 package model
@@ -31,7 +31,7 @@ var (
 // ActionSet is the vocabulary of actions kiln recognises.
 //
 // Order is deliberately not a constraint. The start action (default `ask`) only
-// opens a problem; every action after it belongs to an unordered combination.
+// opens an issue; every action after it belongs to an unordered combination.
 // The sole structural rules are "contains the start action" and "ends with a
 // terminal action".
 type ActionSet struct {
@@ -94,13 +94,13 @@ func normalizeName(n string) string { return strings.ToLower(strings.TrimSpace(n
 // Names returns the vocabulary in declaration order.
 func (s *ActionSet) Names() []string { return append([]string(nil), s.names...) }
 
-// Start returns the action that opens a problem.
+// Start returns the action that opens an issue.
 func (s *ActionSet) Start() string { return s.start }
 
 // IsValid reports whether name is part of the vocabulary.
 func (s *ActionSet) IsValid(name string) bool { return s.valid[name] }
 
-// IsStart reports whether name opens a problem.
+// IsStart reports whether name opens an issue.
 func (s *ActionSet) IsStart(name string) bool { return name == s.start }
 
 // IsTerminal reports whether name closes a research loop.
@@ -112,15 +112,15 @@ type Action struct {
 	Subject string
 	Date    time.Time
 
-	Problem string
-	Kind    string
-	Object  string
-	Title   string
-	Refs    []string
-	Target  string
-	Scope   string
-	Domain  string
-	Tags    []string
+	Issue  string
+	Kind   string
+	Object string
+	Title  string
+	Refs   []string
+	Target string
+	Scope  string
+	Domain string
+	Tags   []string
 
 	DerivedFrom []string
 	Spawns      []string
@@ -129,9 +129,9 @@ type Action struct {
 	Supersedes  []string
 }
 
-// Problem aggregates every action that shares one problem ID, plus the union of
+// Issue aggregates every action that shares one issue ID, plus the union of
 // the relationship and classification trailers declared across those actions.
-type Problem struct {
+type Issue struct {
 	ID      string
 	Actions []Action
 
@@ -146,15 +146,15 @@ type Problem struct {
 }
 
 // Last returns the final action in the path.
-func (p *Problem) Last() (Action, bool) {
+func (p *Issue) Last() (Action, bool) {
 	if len(p.Actions) == 0 {
 		return Action{}, false
 	}
 	return p.Actions[len(p.Actions)-1], true
 }
 
-// State returns the kind of the final action, or "" when the problem has none.
-func (p *Problem) State() string {
+// State returns the kind of the final action, or "" when the issue has none.
+func (p *Issue) State() string {
 	if a, ok := p.Last(); ok {
 		return a.Kind
 	}
@@ -163,13 +163,13 @@ func (p *Problem) State() string {
 
 // Repo is the whole-repository aggregation produced by the engine.
 type Repo struct {
-	Problems map[string]*Problem
+	Issues map[string]*Issue
 }
 
-// ValidProblemID reports whether id follows the `<namespace>/<slug>` convention:
+// ValidIssueID reports whether id follows the `<namespace>/<slug>` convention:
 // at least one slash, every segment a non-empty lowercase kebab-case token, and
 // the whole ID at most 50 characters.
-func ValidProblemID(id string) bool {
+func ValidIssueID(id string) bool {
 	if id == "" || len(id) > 50 {
 		return false
 	}

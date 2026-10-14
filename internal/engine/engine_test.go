@@ -21,9 +21,9 @@ func mkCommit(hash, msg string, day int) git.Commit {
 // newest first, mirroring `git log`
 func sampleCommits() []git.Commit {
 	return []git.Commit{
-		mkCommit("c3", "得出结论\nproblem: auth/session-expiry\naction: conclude", 3),
-		mkCommit("c2", "验证假设\nproblem: auth/session-expiry\naction: test", 2),
-		mkCommit("c1", "提出问题\nproblem: auth/session-expiry\naction: ask\nobject: q1", 1),
+		mkCommit("c3", "得出结论\nissue: auth/session-expiry\naction: conclude", 3),
+		mkCommit("c2", "验证假设\nissue: auth/session-expiry\naction: test", 2),
+		mkCommit("c1", "提出问题\nissue: auth/session-expiry\naction: ask\nobject: q1", 1),
 		mkCommit("c0", "fix: 无关提交\n\n普通正文", 0),
 	}
 }
@@ -40,21 +40,21 @@ func TestActionsFromCommitsFiltersAndOrders(t *testing.T) {
 	}
 }
 
-func TestBuildAggregatesProblem(t *testing.T) {
+func TestBuildAggregatesIssue(t *testing.T) {
 	repo := Build(ActionsFromCommits(sampleCommits()))
-	if len(repo.Problems) != 1 {
-		t.Fatalf("expected 1 problem, got %d", len(repo.Problems))
+	if len(repo.Issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(repo.Issues))
 	}
-	p := repo.Problems["auth/session-expiry"]
+	p := repo.Issues["auth/session-expiry"]
 	if p == nil || len(p.Actions) != 3 {
-		t.Fatalf("unexpected problem: %+v", p)
+		t.Fatalf("unexpected issue: %+v", p)
 	}
 	if !model.DefaultActionSet().IsTerminal(p.State()) {
 		t.Fatalf("expected terminal state, got %q", p.State())
 	}
 }
 
-func TestCheckCompleteProblemIsOK(t *testing.T) {
+func TestCheckCompleteIssueIsOK(t *testing.T) {
 	repo := Build(ActionsFromCommits(sampleCommits()))
 	diags := Check(repo, model.DefaultActionSet())
 	if len(diags) != 1 || diags[0].Level != LevelOK {
@@ -67,9 +67,9 @@ func TestCheckCompleteProblemIsOK(t *testing.T) {
 
 func TestCheckRules(t *testing.T) {
 	commits := []git.Commit{
-		mkCommit("d3", "没有 ask，也没闭环\nproblem: sub/no-ask\naction: test", 4),
-		mkCommit("d2", "父不存在\nproblem: sub/bad-parent\naction: ask\nderived-from: missing/parent", 3),
-		mkCommit("d1", "子不存在\nproblem: sub/bad-child\naction: ask\nspawns: missing/child", 2),
+		mkCommit("d3", "没有 ask，也没闭环\nissue: sub/no-ask\naction: test", 4),
+		mkCommit("d2", "父不存在\nissue: sub/bad-parent\naction: ask\nderived-from: missing/parent", 3),
+		mkCommit("d1", "子不存在\nissue: sub/bad-child\naction: ask\nspawns: missing/child", 2),
 	}
 	repo := Build(ActionsFromCommits(commits))
 	diags := Check(repo, model.DefaultActionSet())
@@ -93,10 +93,10 @@ func TestCheckRules(t *testing.T) {
 // must still count as complete.
 func TestCheckDoesNotEnforceOrder(t *testing.T) {
 	commits := []git.Commit{
-		mkCommit("h4", "结论\nproblem: o/r\naction: conclude", 4),
-		mkCommit("h3", "采集\nproblem: o/r\naction: collect", 3),
-		mkCommit("h2", "验证\nproblem: o/r\naction: test", 2),
-		mkCommit("h1", "提问\nproblem: o/r\naction: ask", 1),
+		mkCommit("h4", "结论\nissue: o/r\naction: conclude", 4),
+		mkCommit("h3", "采集\nissue: o/r\naction: collect", 3),
+		mkCommit("h2", "验证\nissue: o/r\naction: test", 2),
+		mkCommit("h1", "提问\nissue: o/r\naction: ask", 1),
 	}
 	repo := Build(ActionsFromCommits(commits))
 	diags := Check(repo, model.DefaultActionSet())
@@ -107,8 +107,8 @@ func TestCheckDoesNotEnforceOrder(t *testing.T) {
 
 func TestCheckHonoursCustomVocabulary(t *testing.T) {
 	commits := []git.Commit{
-		mkCommit("g2", "收尾\nproblem: x/y\naction: done", 2),
-		mkCommit("g1", "开始\nproblem: x/y\naction: begin", 1),
+		mkCommit("g2", "收尾\nissue: x/y\naction: done", 2),
+		mkCommit("g1", "开始\nissue: x/y\naction: begin", 1),
 	}
 	repo := Build(ActionsFromCommits(commits))
 	set, err := model.NewActionSet([]string{"begin", "probe", "done"}, "begin", []string{"done"})
@@ -123,8 +123,8 @@ func TestCheckHonoursCustomVocabulary(t *testing.T) {
 
 func TestFilter(t *testing.T) {
 	commits := []git.Commit{
-		mkCommit("f1", "问题一\nproblem: auth/token\naction: conclude\ndomain: auth\ntags: [security]", 3),
-		mkCommit("f2", "问题二\nproblem: perf/slow\naction: ask\ndomain: perf\ntags: [performance]", 2),
+		mkCommit("f1", "问题一\nissue: auth/token\naction: conclude\ndomain: auth\ntags: [security]", 3),
+		mkCommit("f2", "问题二\nissue: perf/slow\naction: ask\ndomain: perf\ntags: [performance]", 2),
 	}
 	repo := Build(ActionsFromCommits(commits))
 
@@ -141,7 +141,7 @@ func TestFilter(t *testing.T) {
 
 func TestSummarize(t *testing.T) {
 	commitList := append(sampleCommits(),
-		mkCommit("x1", "进行中\nproblem: perf/ongoing\naction: ask", 5))
+		mkCommit("x1", "进行中\nissue: perf/ongoing\naction: ask", 5))
 	repo := Build(ActionsFromCommits(commitList))
 	s := Summarize(repo, model.DefaultActionSet())
 	if s.Total != 2 || s.Complete != 1 || s.InProgress != 1 || s.Actions != 4 {
@@ -149,9 +149,9 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
-func hasDiag(diags []Diagnostic, problem string, level Level, substr string) bool {
+func hasDiag(diags []Diagnostic, issue string, level Level, substr string) bool {
 	for _, d := range diags {
-		if d.Problem == problem && d.Level == level && strings.Contains(d.Message, substr) {
+		if d.Issue == issue && d.Level == level && strings.Contains(d.Message, substr) {
 			return true
 		}
 	}
