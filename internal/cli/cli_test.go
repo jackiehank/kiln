@@ -46,6 +46,42 @@ func TestDoWarnsOnLooseIssueID(t *testing.T) {
 	}
 }
 
+// List flags accept both `--refs a,b` and `--refs a --refs b`; both forms must
+// render the same canonical `refs: a, b`.
+func TestDoListFlagsUseCanonicalForm(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"comma string", []string{"--refs", "a,b"}, "refs: a, b"},
+		{"repeated flags", []string{"--refs", "a", "--refs", "b"}, "refs: a, b"},
+		{"comma spaced tags", []string{"--tag", "security, performance"}, "tags: security, performance"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			args := append([]string{"do", "smoke-test", "ask"}, tc.args...)
+			if code := Run(args, &out, &errb); code != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("output = %q, want it to contain %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestDoDropsEmptyListFlag(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := Run([]string{"do", "smoke-test", "ask", "--refs", ""}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(out.String(), "refs:") {
+		t.Fatalf("output = %q, want no refs line", out.String())
+	}
+}
+
 func TestUnknownCommand(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := Run([]string{"nope"}, &out, &errb); code != 2 {

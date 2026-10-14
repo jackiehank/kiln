@@ -171,7 +171,21 @@ func (f flags) get(key string) string {
 	return ""
 }
 
-func (f flags) list(key string) []string { return f[key] }
+// list returns the values for a list-valued key, flattening comma-separated
+// strings: each collected value is split on commas, each item trimmed, and
+// blank items dropped. This makes `--refs a,b` and `--refs a --refs b` produce
+// the same canonical output.
+func (f flags) list(key string) []string {
+	var out []string
+	for _, v := range f[key] {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
+}
 
 // parse splits args into positionals and flags. `--key=value`, `--key value` and
 // repeated `--key` all accumulate. A trailing flag with no value becomes "".
