@@ -108,13 +108,15 @@ var order = []string{
 	"domain", "tags", "derived-from", "spawns", "relates-to", "blocks", "supersedes",
 }
 
-// Format renders fields as a canonical kiln commit message: the title (when set)
-// on the subject line, then trailers in a fixed order.
+// Format renders fields as a canonical kiln commit message: the title (when
+// set) on the subject line, a blank line, then trailers in a fixed order. The
+// blank line keeps git from folding the whole message into one "subject"
+// paragraph, so `git log --oneline` and PR titles show only the title.
 func Format(f Fields) string {
 	var b strings.Builder
 	if f.Title != "" {
 		b.WriteString(f.Title)
-		b.WriteByte('\n')
+		b.WriteString("\n\n")
 	}
 	for _, k := range order {
 		switch k {

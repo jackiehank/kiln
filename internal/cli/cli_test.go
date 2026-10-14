@@ -12,7 +12,7 @@ func TestDoPrintsCanonicalMessage(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
-	want := "X 并发可能出错\nproblem: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\n"
+	want := "X 并发可能出错\n\nproblem: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\n"
 	if out.String() != want {
 		t.Fatalf("output =\n%q\nwant\n%q", out.String(), want)
 	}

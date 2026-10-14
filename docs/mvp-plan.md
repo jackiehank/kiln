@@ -106,12 +106,15 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 ```
 发现 X 并发可能出错
+
 problem: auth/session-expiry
 action: ask
 object: q1
 title: X 并发可能出错
 derived-from: perf/deep-dive
 ```
+
+标题行与 trailers 之间**留一个空行**：git 会把没有空行分隔的整段当作同一个 subject，导致 `git log --oneline` / PR 标题把 trailer 一起挤进去。
 
 ## 3. 命令面（CLI）
 
@@ -131,6 +134,7 @@ derived-from: perf/deep-dive
 ```
 $ kiln do auth/session-expiry ask q1 --title "X 并发可能出错"
 发现 X 并发可能出错
+
 problem: auth/session-expiry
 action: ask
 object: q1
@@ -250,7 +254,6 @@ kiln/
 
 ## 10. 后续迭代（MVP 之后）
 
-- 提交信息格式：`kiln do` 输出在标题行与 trailers 之间补一个空行，使 `git log --oneline` / PR 标题只显示标题（当前无空行，整段被当成同一段落）
 - `kiln rename`：重命名 problem 并改写全部相关 trailer
 - 同一 problem ID 下出现第二个 `ask` 时的识别（视为新问题的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染

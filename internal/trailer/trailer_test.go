@@ -87,8 +87,9 @@ func TestFormatRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(back.DerivedFrom, in.DerivedFrom) {
 		t.Fatalf("round trip relation mismatch: %+v", back.DerivedFrom)
 	}
-	// Format is strict: canonical key casing and spacing.
-	if msg != "X 并发可能出错\nproblem: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
+	// Format is strict: canonical key casing and spacing, with a blank line
+	// separating the subject from the trailer block.
+	if msg != "X 并发可能出错\n\nproblem: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
 		t.Fatalf("unexpected canonical output:\n%s", msg)
 	}
 }
