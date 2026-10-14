@@ -95,6 +95,40 @@
 
 > 来源：[Jira link types](https://support.atlassian.com/jira-software-cloud/docs/link-issues/) ｜ [GitHub issue dependencies](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies) ｜ [GitHub sub-issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues) ｜ [Linear parent & sub-issues](https://linear.app/docs/parent-and-sub-issues) ｜ [Azure Boards link types](https://learn.microsoft.com/en-gb/azure/devops/boards/queries/link-type-reference) ｜ [Redmine issues](https://www.redmine.org/projects/redmine/wiki/RedmineIssues/) ｜ [YouTrack link types](https://www.jetbrains.com/help/youtrack/server/link-types.html) ｜ [PMI Scheduling 101](https://www.pmi.org/learning/library/schedule-101-basic-best-practices-6701) ｜ [ISO 21511 (WBS)](https://www.iso.org/obp/ui/#iso:std:iso:21511:ed-1:v1:en) ｜ [BPMN Appendix C (AND-join)](https://www.omg.org/bpmn/Documents/BPMN_Appendix_C.pdf) ｜ [MS Project subtasks & summary tasks](https://support.microsoft.com/en-us/office/create-and-work-with-subtasks-and-summary-tasks-in-project-desktop-b3ff64ce-b121-42cc-905b-cb9b8ce0255f) ｜ [Asana dependency types](https://help.asana.com/s/article/dependency-types) ｜ [arXiv 2102.08485](https://arxiv.org/abs/2102.08485)
 
+## 命名草案
+
+分类已定：**三族**——引发（无序）、分解（有序，母等全部子）、依赖（有序，阻塞）；外加一个**无向**的弱关联。
+
+命名规则：
+
+- 每条**有向**关系有两个名字（正 / 反）。用户只需声明**任意一侧**，kiln 在读侧推导并**自动补全反向关系**（不要求两头都写）。
+- **无向**关系（弱关联）只有一个名字，没有反向。
+- 风格：kebab-case；贴合主流 tracker 的用词（Jira / GitHub / Linear 的原文名）；望文生义。
+
+| 族 | 正名 | 反名 | 语义 | 现状 |
+| --- | --- | --- | --- | --- |
+| **引发**（无序） | `derived-from`（子→父） | `spawns`（父→子） | 由它引发，可分头处理 | 已有且在用 |
+| **分解**（有序，AND） | `part-of`（子→父） | `has-part`（父→子） | 母问题拆成这些子问题；母要等**全部**子 | **新增** |
+| **依赖**（有序） | `blocks`（阻塞者→被阻塞者） | `blocked-by`（被阻塞者→阻塞者） | 谁必须先完成 | 已有 `blocks`，补反名 |
+| **弱关联**（无向） | `relates-to` | ——（同一名字，无反向） | 相关但不派生 | 已有 |
+| **取代**（有向、弱） | `supersedes`（新→旧） | `superseded-by`（旧→新） | 新的取代旧的 | 已有 `supersedes`，补反名 |
+
+**数的口径**：有向关系 **4 条 × 2 名 = 8 个名字**（引发 / 分解 / 依赖 / 取代），无向 **1 条 = 1 个名字**（弱关联），合计 **9 个名字**。若把"取代"并入弱关联家族，则族数仍是"三族 + 一个无向"。
+
+### 待定的命名选择
+
+**分解**是全新一族，名字有两个候选：
+
+- `part-of` / `has-part` —— 最短最对称；`part-of` 是天然的声明方向
+- `sub-issue-of` / `has-sub-issue` —— 贴 GitHub 现行术语，LLM 先验可能更强，但更长
+
+**依赖**以哪一侧为正名：
+
+- `blocks` / `blocked-by` —— Jira / Linear / GitHub 全用这套，且 kiln 已有 `blocks`
+- `depends-on` / `required-by` —— YouTrack 风格，站在"等待方"视角写起来更顺（"B 依赖 A"）
+
+**引发**的命名不够对称（`derived-from` 是 "from" 视角、`spawns` 是动作视角）。可改成 `spawned-by` / `spawns` 求对称，但 `derived-from` 已写进历史，**建议保持不动**。
+
 ## 待探讨
 
 1. **"引发"与"分解"要不要分成两个类型？** 还是合并进 `derived-from`、再加一个 and/or 标记？
