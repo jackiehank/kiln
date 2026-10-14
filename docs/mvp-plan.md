@@ -271,6 +271,7 @@ kiln/
 - 动作粒度：实现一个 issue 时，中间动作（`hypothesize` / `test` / …）要不要分阶段提交——见 [docs/action-granularity.md](action-granularity.md)
 - 关系类型落地：新增 `part-of`（分解）；**取消反向名**（词表共 5 个名字），方向由**箭头**渲染——规格见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
 - 关系词表规格：5 个名字、方向渲染、命名原则——见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
+- issue「同源」的表达：两个 issue 共用**非 issue 的来源**（故障 / 论文 / 会议）时，用 `relates-to` 兜底还是新增对称关系 / 外部来源引用——见 [docs/common-origin.md](common-origin.md)
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
