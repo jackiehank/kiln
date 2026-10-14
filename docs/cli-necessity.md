@@ -394,6 +394,33 @@ jj 的 **operation log** 能告诉你"**历史被改写过**"。→ kiln 将来�
 - **改进候选（实测催生）**：jj 适配器可改用 **change_id** 作 `Commit.ID`（跨改写稳定）→ `path` 的短 id 不再漂移；`show` / `stat` 用 change_id 寻址即可（jj 支持）。代价：ID 语义变成"jj change id"，与 git 的 hash 不再同形。
 - **仍成立的张力**：除非把"动作路径"当**可改写草稿**，否则"证据可被改写"要靠 **op log 校验**或**约定不改写**来兜——这是取向取舍，适配器解决不了。
 
+## test（再续）：并发——不同 issue 交给不同 agent，jj vs git
+
+> 同一仓、两个「agent」并行处理**不同 issue**，考察**并发冲突**。jj 用 **workspace**、git 用 **worktree**。
+
+### 场景与结果
+
+| 场景 | **jj**（workspace + `jj new`） | **git**（worktree + `git merge`） |
+| --- | --- | --- |
+| 初始化 | `jj workspace add w1/w2`：**共享同一 store**，各带自己的**工作区提交 `@`** | `git worktree add a/b -b a -b b`：各带分支与 `HEAD` |
+| 两 agent 改**不同文件** | 各自 `kiln commit`（→ `jj commit`）→ 干净 | 各自 commit → 干净 |
+| 合并（不同文件） | `jj new <A> <B>` → **exit 0**，合并提交落地，`a.md`+`b.md` 都在，**kiln 同时看到 2 个 issue** | `git merge b` → 自动合并干净 |
+| 两 agent 改**同一文件** | `jj new <A> <B>` → **exit 0、不阻断**；冲突**记进合并提交**（`(conflict)`），`jj st` 报 unresolved；**kiln 照读 2 issue / 4 动作** | `git merge b` → **CONFLICT、exit 1、中止合并**；工作区进入 unmerged 态、**无合并提交**，必须手工解决并 `git commit` |
+| 机制 | 冲突是**提交的一等内容**（可推迟解决，命令不停） | 冲突是**工作区的临时态**（不解决就没有提交） |
+| 次工作区里能用另一套 VCS 吗 | **不能**——w2 里 `git log` 直接 `fatal: not a git repository` | 能（worktree 是 `.git` 文件） |
+
+### 结论
+
+1. **并行能力**：jj 用 **workspace**（共享 store、各自 `@`）天然适合「一仓多 agent」；git 用 **worktree + 分支**。两者都能并行——但…
+2. **冲突处理是分水岭**：**jj 不阻断**（冲突进提交、可延后解决，agent 继续干活）；**git 阻断**（merge 中止、必须立即解决才有提交）。→ 对 agent 场景，**jj 明显更安全**（呼应前面 test 的"冲突可提交、命令不中断"）。
+3. **对 kiln**：两种情形下 kiln 的**读视图都不受影响**（只要提交存在就能重建）；差别全在**写侧**——jj 让「并行 + 冲突」不成为卡点。
+4. **注意**：jj 的次 workspace **不是 git 仓**，那里 `kiln` 走 **jj 后端**（`auto` 探测到 `.jj`）；git 侧 worktree 仍走 git 后端。
+
+### 风险 / 备注
+
+- 本次未测「两 agent 落在**同一个** workspace」——那会争用同一个 `@`，属另一类问题（应为「一 agent 一 workspace」）。
+- jj 的冲突标记里带「from/to change-id」，比 git 的 `<<<<<<<` 更能说明**谁改了什么**。
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
