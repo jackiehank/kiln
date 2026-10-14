@@ -69,11 +69,29 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 | `blocks:` | 阻塞了什么 | 阻塞者 → 被阻塞者 |
 | `supersedes:` | 取代了什么 | 新 → 旧 |
 
-### 2.3 action 枚举
+### 2.3 action 词表（可配置）
 
-`ask` → `hypothesize` → `collect` → `test` → `conclude` → `apply`
+默认词表：`ask` / `hypothesize` / `collect` / `test` / `conclude` / `apply`
+默认起点：`ask`；默认终点：`conclude`、`apply`（`apply` 表示结论已落地到代码）。
 
-一条完整的研究闭环形如 `ask → … → conclude/apply`；`apply` 表示结论已落地到代码。
+**顺序不是约束**：`ask` 只负责"开启一个问题"，其后的动作是一个**无序集合**——任意组合、任意次序都合法，不存在"必须先 hypothesize 再 test"之类的流水线要求。正常情况一个问题只有一个 `ask`；同一 problem ID 下再出现 `ask`，实际属于另一个问题（该识别留待后续迭代）。
+
+词表由当前目录的 `.kiln.json` 覆盖（不存在则用上面的默认值）：
+
+```json
+{
+  "actions": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+  "start": "ask",
+  "terminal": ["conclude", "apply"]
+}
+```
+
+- `actions`：合法词表（大小写不敏感，入库时归一为小写）
+- `start`：开启问题的动作，缺省取 `actions` 首项
+- `terminal`：关闭问题的动作集合，缺省取 `actions` 末项
+- `start` / `terminal` 不在 `actions` 中，或词表为空/有重名 → 启动时报错
+
+最小配置只需列出词表，例如 `{"actions": ["ask", "probe", "done"]}` → `start=ask`、`terminal=done`。
 
 ### 2.4 问题 ID 命名约定
 
@@ -179,7 +197,8 @@ type Repo struct {
 kiln/
 ├── cmd/kiln/main.go         # 进程入口
 ├── internal/
-│   ├── model/               # 领域类型（Action / Problem / Repo）
+│   ├── model/               # 领域类型（Action / Problem / Repo）+ ActionSet 词表
+│   ├── config/              # 读取 .kiln.json → ActionSet（缺省用内置默认）
 │   ├── trailer/             # 提交信息 → trailers 的解析（纯函数，可单测）
 │   ├── git/                 # Git 适配层：log / commit（接口 + exec 实现）
 │   ├── engine/              # 聚合、path / check / status / list / graph
@@ -192,18 +211,19 @@ kiln/
 
 ## 6. MVP 范围 / 非目标
 
-**做**：识别规则、trailer 解析、`do`、`commit`、`path`、`status`、`check`（规则 1–4）、`list`、`graph --format=ascii`。
+**做**：识别规则、trailer 解析、可配置 action 词表（`.kiln.json`）、`do`、`commit`、`path`、`status`、`check`（规则 1–4）、`list`、`graph --format=ascii`。
 
 **不做（MVP 明确排除）**：文件创建、变更类型区分、模式切换、中央注册表、签名校验、`rename` 自动改写、`check` 的规则 5–7（阻塞状态 / 循环依赖 / 对象引用）、`--format=json`、MCP server。
 
 ## 7. `check` 校验规则
 
-核心原则：**每个问题从 `ask` 到 `conclude/apply` 必须形成闭环。**
+核心原则：**每个问题必须由起点动作开启、由终点动作收尾。**（中间动作不设顺序约束）
 
 **MVP 必须实现**
 
-1. 存在性：每个 problem 至少有一个 `ask`
-2. 终点：路径的最后一个动作必须是 `conclude` 或 `apply`
+1. 存在性：每个 problem 至少含一个 `start` 动作（默认 `ask`）
+2. 终点：路径的最后一个动作必须是 `terminal` 动作（默认 `conclude` / `apply`）
+   （不校验动作顺序；起点之后的动作是无序组合）
 3. 父存在：声明 `derived-from` 时，父 problem 必须存在
 4. 子存在：声明 `spawns` 时，子 problem 必须存在
 
@@ -231,6 +251,7 @@ kiln/
 ## 10. 后续迭代（MVP 之后）
 
 - `kiln rename`：重命名 problem 并改写全部相关 trailer
+- 同一 problem ID 下出现第二个 `ask` 时的识别（视为新问题的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
