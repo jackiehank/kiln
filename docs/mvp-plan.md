@@ -116,6 +116,21 @@ derived-from: perf/deep-dive
 
 标题行与 trailers 之间**留一个空行**：git 会把没有空行分隔的整段当作同一个 subject，导致 `git log --oneline` / PR 标题把 trailer 一起挤进去。
 
+### 2.6 术语：`problem` 是否合适（开放问题）
+
+当前把被追踪的单元叫 `problem`（trailer 键 `problem:`，中文"问题 ID"）。它的本质是"以 `ask` 开启、经若干动作、以终点动作收尾"的一条**探究线**，并不必然是一个缺陷。候选：
+
+| 候选 | 贴合度 | 风险 |
+| --- | --- | --- |
+| `problem` | 工程直觉强："要解决的问题" | 隐含"有毛病"，与 ask 驱动的探究语义略有偏差 |
+| `issue` | 最主流（GitHub issues），LLM 先验最强，覆盖 question / bug / task | 偏"缺陷 / 工单" |
+| `question` | 与起点动作 `ask` 呼应最紧 | 终点是 `apply`（落地代码）时不像"问题"；与 `object: q1` 的 q 易混 |
+| `topic` / `inquiry` | 中立，贴合"研究路径" | 前者略泛；后者 LLM 先验弱 |
+
+中文"问题"同时覆盖 question 与 problem，所以中文语境下 `problem` 读起来并无不妥，张力主要在英文。
+
+**决定待定。** 若改名，需同步改动：`trailer` 的识别规则（`problem:` + `action:`）、`knownKeys`、文档与测试，以及已有的历史提交（当前仅 6 条，成本极低）。
+
 ## 3. 命令面（CLI）
 
 | 命令 | 作用 | MVP |
