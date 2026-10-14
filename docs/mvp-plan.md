@@ -275,3 +275,60 @@ kiln/
 - `kiln check --format=json`：CI 集成与 PR 评论
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
 - 封装为 MCP server：把结构化工具暴露给 Agent，彻底避免其拼 CLI
+
+## 11. `kiln status` 按 domain 分组（设计，待评审）
+
+**目标**：`status` 不再平铺列出 issue，而是以 `domain` 为“目录”，同一 domain 的 issue 归到该目录下。
+
+### 11.1 数据来源与规则
+
+- issue 的 domain 取自它各次动作里**最后一个非空 `domain:`**（即现有 `Build` 的行为，此处显式化）。
+- 完全没有声明 domain 的 issue 归入伪目录 `(未分类)`，固定排最后。
+- 同一 issue 只属于一个 domain（`domain:` 是单值 trailer）；跨 domain 归属不在本设计内。
+- domain 值按**不透明字符串**处理：`cli`、`design` 各成一组；`a/b` 不拆成层级（不引入嵌套语义）。
+
+### 11.2 输出格式
+
+```
+问题总数: 4（完成 4 / 进行中 0）｜domain 2 个
+kiln 动作数: 8
+
+cli/ (1)
+└── ✓ kiln/help-alignment          apply
+design/ (3)
+├── ✓ kiln/action-config           apply
+├── ✓ kiln/commit-format           apply
+└── ✓ kiln/problem-naming          apply
+```
+
+- 目录行：`<domain>/ (N)`，目录名后带 `/` 强化“目录”心智。
+- 排序：目录按名称升序；目录内 issue 按 ID 升序；`(未分类)` 固定最后。
+- 树形前缀：组内非末项 `├── `、末项 `└── `。
+- 列对齐：沿用 `pad`/`displayWidth`，ID 列宽取**所有分组中的最大值**（全局统一，跨目录也对齐）。
+- 完成标记沿用现有 `✓`，进行中留空。
+
+### 11.3 分层落点
+
+- `engine`：新增 `GroupByDomain(repo) []DomainGroup`，返回**已排序**的分组数据（纯数据、可单测）：
+
+  ```go
+  type DomainGroup struct {
+      Name   string
+      Issues []*Issue
+  }
+  const NoDomain = "(未分类)"
+  ```
+
+- `cli`：`status` 消费分组数据渲染树，复用 `pad`/`displayWidth`；`list`/`graph` 不动。
+
+### 11.4 边界与非目标
+
+- 空仓库：沿用现有提示，不打印空分组。
+- 非目标：不拆嵌套 domain；不改 `list`（仍是过滤用的平铺表）与 `graph`；不新增 `--flat` 开关（后续需要再加）；不新增 check 规则（“同一 issue 前后 domain 不一致”留待后续）。
+- 兼容性：`status` 输出格式变化是**破坏性**的（脚本可能依赖平铺），MVP 阶段无外部消费者，可接受。
+
+### 11.5 验收
+
+- 单测：`GroupByDomain` 的分组、排序、`(未分类)` 兜底。
+- 输出：本仓库现状应渲染出 `cli/` 与 `design/` 两组，且列对齐。
+
