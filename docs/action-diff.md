@@ -96,6 +96,85 @@ A + C 可以并存（概览用 A、深挖用 C）；D 是独立价值，值得�
 
 > 来源：[GitHub：Closing issues using keywords](https://docs.github.com/en/enterprise-server@3.13/get-started/writing-on-github/working-with-advanced-formatting/using-keywords-in-issues-and-pull-requests) ｜ [Jira：View development information](https://support.atlassian.com/jira-software-cloud/docs/view-development-information-for-an-issue/) ｜ [Jira × GitHub 集成（显示 files changed / diffs）](https://www.gitkraken.com/git-integration-for-jira) ｜ [git-bug：Git as a Database](https://dev.to/eme_gug_0821b41b948be6516/git-as-a-database-how-git-bug-stores-issues-inside-your-repo-and-how-to-build-your-own-39mi) ｜ [git-bug 简介（Git Rev News 43）](https://git.github.io/rev_news/2018/09/19/edition-43/) ｜ [git-notes](https://git-scm.com/docs/git-notes) ｜ [git-interpret-trailers](https://git-scm.com/docs/git-interpret-trailers) ｜ [git-log（--stat / --patch）](https://git-scm.com/docs/git-log/zh_HANS-CN.html) ｜ [git-range-diff](https://git-scm.com/docs/git-range-diff) ｜ [Gerrit Change-Ids](https://review.opendev.org/Documentation/user-changeid.html) ｜ [Gerrit Changes / patch sets](https://review.opendev.org/Documentation/concept-changes.html) ｜ [commitlint Rules（trailer-exists）](https://commitlint.js.org/reference/rules) ｜ [commitlint CI Setup](https://commitlint.js.org/guides/ci-setup) ｜ [NASA SWE-052 Bidirectional Traceability](https://swehb.nasa.gov/display/SWEHBVD/SWE-052+-+Bidirectional+Traceability) ｜ [ReqToCode（arXiv 2603.13999）](https://arxiv.org/pdf/2603.13999v1) ｜ [Visure：Requirements Traceability Links](https://visuresolutions.com/alm-guide/requirements-traceability-links)
 
+## hypothesize：变更展示的 CLI 与呈现设计
+
+> 已认可：**两层（摘要 / 详情）**。本节只回答"**命令怎么设计、结果怎么展示**"，并把落点对齐 **git 自身的设计**。
+> 结论先行：**照搬 git 的「命令按基数拆分 + flag 复用同一套词 + 默认精简」三惯例**——`path` 对应 `git log`（一串动作），`show` 对应 `git show`（单个动作）；摘要/详情用 git 同名的 `--stat` / `--shortstat` / `--patch` 表达；渲染**委托 git 自己**，kiln 不重画 diff。
+
+### 0. 立足点：借 git 的三条惯例
+
+1. **命令按"基数"拆分**：`git log`（一段历史 = 多个 commit）vs `git show`（一个对象）。→ kiln `path`（一个 issue 的**全部**动作）vs `show`（**单个**动作）。这是本设计最核心的一条对齐。
+2. **flag 复用同一套词**：`--stat`（文件直方图）、`--shortstat`（一行汇总）、`--name-status`、`-p/--patch`。kiln **不新造词**，直接沿用 → 用户零学习成本，且直觉一致。
+3. **默认精简、详情 opt-in**：`git log` 默认一行/提交，`--stat`/`-p` 才展开。→ `path` 默认维持现状（精简），加 `--stat` 才带摘要，**全文交给 `show`**。
+
+### 1. 命令面（hypothesis）
+
+| 命令 | 对齐 git | 层次 | 输出 |
+| --- | --- | --- | --- |
+| `kiln path <issue>` | `git log` | 摘要（默认） | 现状不变：动作列表（`1.`/`2.` 序号 + kind + 短 hash + subject） |
+| `kiln path <issue> --stat` | `git log --stat` | 摘要+ | 每个动作后附 diffstat 块 |
+| `kiln path <issue> --shortstat` | `git log --shortstat` | 摘要+ | 每个动作后附**一行**总计 |
+| `kiln show <issue> [n]` | `git show` | **详情** | 第 n 个动作的完整变更（提交信息 trailer + patch） |
+| `kiln show <issue> [n] --stat` | `git show --stat` | 详情（摘要式） | 只给该动作的 diffstat（**可选**） |
+
+要点：
+
+- **不新增 `path --diff`（候选 B 否决）**：git 里"整段历史带全文 diff"（`log -p`）从来不是默认视图；**全文属于单动作**，交给 `show`。
+- **名字沿用 `show`，不叫 `diff`**：`git show <obj>` = 一个对象 + 它的 patch，正是我们要的；`git diff` 是"两态之间"，语义不同，不借用。
+- **最小落地面**：`path --stat/--shortstat` + `show`（默认整段 patch）。其余（`show --stat`、`--name-status`、hash 别名、着色、分页）都属**增量**，等真实需要再加。
+
+### 2. 寻址：`show` 吃"序号"，不吃 hash
+
+- `n` = `path` 里那个 **1-based 序号**（`path` 已经在印 `1. ask` / `2. collect`）。缺省 `kiln show <issue>` = **最后一个动作**。
+- **不变量**：`show` 与 `path` 共用同一套排序 —— `engine.Build` 对每个 issue 按 `Date` **稳定排序**（[engine.go](file:///c:/Users/jacki/kiln/internal/engine/engine.go#L77-L81)），`CLI.path` 依次编号（[cli.go](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L278-L280)）。所以 **`path` 标 #n 的，`show` 就渲染 #n**——正是 git 里 `show <rev>` 与 `log` 共用 revision 解析的翻版。
+- **为什么不用 hash 当主键**（呼应 collect §3）：hash 随历史重写漂移（本仓库重写过）；序号是**相对 path 的定位**，随 path 自洽。若历史被 rebase，序号**重算但仍与 `path` 一致**。
+- 可选增强（非必需）：同时接受**短 hash / 前缀**作别名（如 `kiln show action-diff 67981f1`），像 git 的 rev 解析"话到嘴边就能指"。
+
+### 3. 展示布局（对齐 `git log --stat` / `git show`）
+
+**摘要层 `path --stat`**——镜像 `git log --stat` 的"commit 行 + 缩进 stat 块 + 空行"：
+
+```
+action-diff  进行中（当前 collect）
+  1. ask       6679983  追踪 issue 全过程并查看每个 action 的变更
+        docs/action-diff.md | 56 ++++++++++++++++++++++++++++++++++++++
+        docs/mvp-plan.md    |  1 +
+        2 files changed, 57 insertions(+)
+  2. collect   67981f1  调研业内成熟做法：变更证据如何挂到 issue 生命周期
+        docs/action-diff.md | 49 ++++++++++++++++++++++++++++++++
+        1 file changed, 49 insertions(+)
+```
+
+`--shortstat` 把每个动作压成一行（用 git 原话）：
+
+```
+  2. collect   67981f1  调研业内成熟做法：变更证据如何挂到 issue 生命周期  (1 file changed, 49 insertions(+))
+```
+
+**详情层 `kiln show action-diff 2`**——kiln 头部一行定位动作，正文**委托 `git show`**：
+
+```
+action-diff · 2/2 collect · 67981f1 · 调研业内成熟做法：变更证据如何挂到 issue 生命周期
+
+<git show 67981f1 原样输出：提交信息（含 issue/action/title trailer）+ 完整 patch>
+```
+
+### 4. 渲染：委托 git，而非自己画
+
+- **(i) 委托渲染（推荐）**：摘要跑 `git show --stat <hash>`、详情跑 `git show <hash>`，kiln **原样呈现**。零重实现；rename / binary / color / 分页语义与 git **完全一致**；也守住"kiln 只读 + 呈现、不新增存储"。
+- (ii) 自行渲染：用 `git log --numstat` 取机器数据、kiln 自绘直方图。**仅当布局必须自控**才值得，代价是重实现 diffstat。
+- **性能注记**：`path --stat` 别对 N 个动作各起一次 `git show`；可一次 `git log --numstat`（或给现有 `git log` 加 `--stat`）拿到全部，再按 hash 关联。
+- **着色**：kiln 捕获 git 输出时，git 在非 tty 下默认不着色；要彩色需显式 `--color=always`（沿 git 惯例）。
+
+### 5. 与候选表的映射 / 遗留
+
+- **A**（`path --stat`）✅、**C**（`show <issue> <n>`）✅，二者并存——层次不同（A 概览全部、C 深挖单个）。
+- **B**（`path --diff`）**否决**。
+- **D**（`target:` 校验）**不在本轮**（用户指示先聚焦变更展示），单列待评估。
+- 遗留待定：`show` 是否接 pager；是否为 `path`/`show` 加 `--name-status`。**先都不做**，等真实需要。
+
+> git 侧来源：[git-log（--stat / --shortstat / --patch / --numstat）](https://git-scm.com/docs/git-log/zh_HANS-CN.html) ｜ [git-show（--stat）](https://git-scm.com/docs/git-show/2.29.0) ｜ [git-diff（--stat / --shortstat）](https://git-scm.com/docs/git-diff/2.12.5)
+
 ## 非目标
 
 - 不改 `graph` / `status`。
