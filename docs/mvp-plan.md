@@ -270,6 +270,7 @@ kiln/
 - 动作的**作者归属**：在每个 kiln 提交上标明动作由谁产生——人（如 `human/jackie`）、本 Agent、或将来接入的其他 Agent。两条路要先比较：① 直接用 git 自带的 author（`%an` / `%ae`，零新增 trailer，但要求每个 Agent 用独立 git 身份提交；现状是所有提交都共用同一个身份，信息量低）；② 新增 `author:`（或 `by:` / `agent:`）trailer，语义显式，代价是与 git 已有的 author 字段重复
 - 动作粒度：实现一个 issue 时，中间动作（`hypothesize` / `test` / …）要不要分阶段提交——见 [docs/action-granularity.md](action-granularity.md)
 - 关系类型落地：新增 `part-of` / `has-part` / `blocked-by` / `superseded-by`，并在**读侧推导反向关系**——规格见 [docs/relation-types.md](relation-types.md) 的结论
+- 关系词表的规模与清晰度：9 个名字会不会太多、`引发` / `分解` / `依赖` 会不会被 Agent 混淆、要不要收窄成"可写 5 + 只读 4"——见 [docs/relation-vocabulary.md](relation-vocabulary.md)
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
