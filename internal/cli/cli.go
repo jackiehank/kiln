@@ -6,6 +6,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"kiln/internal/config"
@@ -27,13 +28,17 @@ action 词表默认: ask | hypothesize | collect | test | conclude | apply
 do/commit 的 flags:
   --title  --refs  --target  --scope  --domain  --tag
   --derived-from  --spawns  --relates-to  --blocks  --supersedes
+
+path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
+show 的 flags:  --stat（只给该动作的文件统计）
 `
 
 // usageCommands is the command surface rendered by usageText.
 var usageCommands = [][2]string{
 	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
 	{"kiln commit <issue> <action> [flags]", "用规范信息直接提交"},
-	{"kiln path <issue>", "重建问题的研究路径"},
+	{"kiln path <issue>", "重建问题的研究路径（可加 --stat / --shortstat）"},
+	{"kiln show <issue> [n]", "展开某个动作的完整变更（可加 --stat）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
@@ -111,9 +116,12 @@ func isWide(r rune) bool {
 	return false
 }
 
-// env carries the resolved action vocabulary and the output streams.
+// env carries the resolved action vocabulary, the git access and the output
+// streams. git is an interface so tests can substitute a fake instead of
+// touching a real repository.
 type env struct {
 	actions *model.ActionSet
+	git     git.Runner
 	out     io.Writer
 	errw    io.Writer
 }
@@ -129,7 +137,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText())
 		return 0
-	case "do", "commit", "path", "status", "check", "list", "graph":
+	case "do", "commit", "path", "status", "check", "list", "graph", "show":
 		// handled below, once the vocabulary is loaded
 	default:
 		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
@@ -141,7 +149,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "配置错误: %v\n", err)
 		return 1
 	}
-	e := &env{actions: actions, out: stdout, errw: stderr}
+	e := &env{actions: actions, git: git.ExecRunner{Dir: "."}, out: stdout, errw: stderr}
 	switch cmd {
 	case "do":
 		return e.write(rest, false)
@@ -149,6 +157,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.write(rest, true)
 	case "path":
 		return e.path(rest)
+	case "show":
+		return e.show(rest)
 	case "status":
 		return e.status(rest)
 	case "check":
@@ -170,6 +180,9 @@ func (f flags) get(key string) string {
 	}
 	return ""
 }
+
+// has reports whether a (possibly value-less) flag was supplied at all.
+func (f flags) has(key string) bool { return len(f[key]) > 0 }
 
 // list returns the values for a list-valued key, flattening comma-separated
 // strings: each collected value is split on commas, each item trimmed, and
@@ -251,7 +264,7 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprintln(e.out, msg)
 		return 0
 	}
-	if err := (git.ExecRunner{Dir: "."}).Commit(msg); err != nil {
+	if err := e.git.Commit(msg); err != nil {
 		fmt.Fprintf(e.errw, "提交失败: %v\n", err)
 		return 1
 	}
@@ -260,9 +273,9 @@ func (e *env) write(args []string, commit bool) int {
 }
 
 func (e *env) path(args []string) int {
-	pos, _ := parse(args)
+	pos, f := parse(args)
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln path <issue>")
+		fmt.Fprintln(e.errw, "用法: kiln path <issue> [--stat|--shortstat]")
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -274,15 +287,132 @@ func (e *env) path(args []string) int {
 		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
 		return 1
 	}
+	mode := statMode(f)
 	fmt.Fprintf(e.out, "%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p))
 	for i, a := range p.Actions {
-		fmt.Fprintf(e.out, "  %d. %s %s %s\n", i+1, pad(a.Kind, 12), pad(shortHash(a.Hash), 8), a.Subject)
+		line := fmt.Sprintf("  %d. %s %s %s", i+1, pad(a.Kind, 12), pad(shortHash(a.Hash), 8), a.Subject)
+		if mode == statShort {
+			stat, err := e.git.ShowStat(a.Hash, true)
+			if err != nil {
+				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+				return 1
+			}
+			if s := strings.TrimSpace(stat); s != "" {
+				line += "  (" + s + ")"
+			}
+		}
+		fmt.Fprintln(e.out, line)
+		if mode == statBlock {
+			stat, err := e.git.ShowStat(a.Hash, false)
+			if err != nil {
+				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+				return 1
+			}
+			fmt.Fprint(e.out, indentStat(stat))
+		}
 	}
 	if rel := relationSummary(p); rel != "" {
 		fmt.Fprintf(e.out, "  关系: %s\n", rel)
 	}
 	return 0
 }
+
+// show implements `kiln show <issue> [n] [--stat]`: it expands a single action.
+// The action is addressed by its 1-based ordinal in `path` (default: the last
+// one), so the selector stays put even when commit hashes are rewritten by a
+// rebase. Rendering is delegated to git.
+func (e *env) show(args []string) int {
+	pos, f := parse(args)
+	if len(pos) < 1 {
+		fmt.Fprintln(e.errw, "用法: kiln show <issue> [n] [--stat]")
+		return 2
+	}
+	repo, code := e.loadRepo()
+	if repo == nil {
+		return code
+	}
+	p, ok := repo.Issues[pos[0]]
+	if !ok {
+		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
+		return 1
+	}
+	if len(p.Actions) == 0 {
+		fmt.Fprintf(e.errw, "问题没有动作: %s\n", pos[0])
+		return 1
+	}
+	ordinal := len(p.Actions)
+	if len(pos) >= 2 {
+		n, err := strconv.Atoi(pos[1])
+		if err != nil || n < 1 || n > len(p.Actions) {
+			fmt.Fprintf(e.errw, "动作序号超出范围: %q（可选 1..%d）\n", pos[1], len(p.Actions))
+			return 2
+		}
+		ordinal = n
+	}
+	a := p.Actions[ordinal-1]
+	fmt.Fprintf(e.out, "%s · %d/%d %s · %s · %s\n\n",
+		p.ID, ordinal, len(p.Actions), a.Kind, shortHash(a.Hash), a.Subject)
+
+	var (
+		body string
+		err  error
+	)
+	if f.has("stat") {
+		body, err = e.git.ShowStat(a.Hash, false)
+	} else {
+		body, err = e.git.Show(a.Hash)
+	}
+	if err != nil {
+		fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+		return 1
+	}
+	fmt.Fprint(e.out, trimNewlines(body))
+	fmt.Fprintln(e.out)
+	return 0
+}
+
+// statDisplay selects how `path` annotates each action with its diffstat.
+type statDisplay int
+
+const (
+	statNone statDisplay = iota
+	statBlock
+	statShort
+)
+
+// statMode reads the stat flags; the histogram (--stat) wins over --shortstat.
+func statMode(f flags) statDisplay {
+	switch {
+	case f.has("stat"):
+		return statBlock
+	case f.has("shortstat"):
+		return statShort
+	}
+	return statNone
+}
+
+// statIndent nests a diffstat block under the action line it belongs to.
+const statIndent = "        "
+
+// indentStat indents every line of a git diffstat block. Empty input yields
+// nothing, so an empty diff never leaves a stray indented blank line.
+func indentStat(stat string) string {
+	stat = trimNewlines(stat)
+	if stat == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(stat, "\n") {
+		b.WriteString(statIndent)
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// trimNewlines drops leading and trailing blank lines while preserving the
+// interior layout of a rendered block.
+func trimNewlines(s string) string { return strings.Trim(s, "\n") }
 
 func (e *env) status(args []string) int {
 	repo, code := e.loadRepo()
@@ -459,7 +589,7 @@ func (e *env) graph(args []string) int {
 
 // loadRepo reads history and aggregates it; returns (nil, exitCode) on failure.
 func (e *env) loadRepo() (*model.Repo, int) {
-	commits, err := (git.ExecRunner{Dir: "."}).Log()
+	commits, err := e.git.Log()
 	if err != nil {
 		fmt.Fprintf(e.errw, "读取 git 历史失败: %v\n", err)
 		return nil, 1

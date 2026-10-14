@@ -18,10 +18,12 @@ type Commit struct {
 	Message string
 }
 
-// Runner reads history and creates commits.
+// Runner reads history, creates commits and exposes a single commit's change.
 type Runner interface {
 	Log() ([]Commit, error)
 	Commit(message string) error
+	Show(hash string) (string, error)
+	ShowStat(hash string, short bool) (string, error)
 }
 
 // ExecRunner runs the real `git` binary in Dir.
@@ -62,6 +64,42 @@ func (r ExecRunner) Commit(message string) error {
 		return fmt.Errorf("git commit: %s", strings.TrimSpace(buf.String()))
 	}
 	return nil
+}
+
+// Show returns `git show <hash>` verbatim: the commit header (author, date,
+// message and trailers) followed by the patch.
+func (r ExecRunner) Show(hash string) (string, error) {
+	return r.run("show", hash)
+}
+
+// ShowStat returns the diffstat git renders for hash. short selects the
+// one-line `--shortstat` form, otherwise the file histogram (`--stat`). The
+// commit header is suppressed with an empty --format so only the stat block is
+// returned.
+func (r ExecRunner) ShowStat(hash string, short bool) (string, error) {
+	flag := "--stat"
+	if short {
+		flag = "--shortstat"
+	}
+	return r.run("show", flag, "--format=", hash)
+}
+
+// run executes git with args and returns stdout; on failure the error carries
+// git's stderr so the caller can surface a useful message.
+func (r ExecRunner) run(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.Dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("git %s: %s", args[0], msg)
+	}
+	return stdout.String(), nil
 }
 
 func parseLog(out string) []Commit {

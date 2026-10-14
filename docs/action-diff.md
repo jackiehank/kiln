@@ -175,6 +175,32 @@ action-diff · 2/2 collect · 67981f1 · 调研业内成熟做法：变更证据
 
 > git 侧来源：[git-log（--stat / --shortstat / --patch / --numstat）](https://git-scm.com/docs/git-log/zh_HANS-CN.html) ｜ [git-show（--stat）](https://git-scm.com/docs/git-show/2.29.0) ｜ [git-diff（--stat / --shortstat）](https://git-scm.com/docs/git-diff/2.12.5)
 
+## test：实现命令并验证
+
+> 按 hypothesize 落地 `path --stat/--shortstat` 与 `show`，跑了单测 + 真仓端到端。
+
+### 落地内容
+
+- **`internal/git`**：`Runner` 接口新增 `Show(hash)` / `ShowStat(hash, short)`；`ExecRunner` 用 `git show [--stat|--shortstat] [--format=] <hash>` **委托渲染**（`--format=` 抑制提交头，只回统计块）。
+- **`internal/cli`**：
+  - `env` 增 `git git.Runner` 字段（`Run` 注入 `ExecRunner{Dir:"."}`）——把 mvp-plan 里说的 `git.Runner` 缝隙**真正接上**，`path`/`show` 因此可用假 git 单测。
+  - `path` 增 `--stat`（每个动作后**缩进** git 统计块）/ `--shortstat`（统计**并入**动作行尾部）。
+  - 新增 **`show <issue> [n] [--stat]`**：缺省 = 最后一个动作；`n` 取 `path` 的 1-based 序号；头部一行 `issue · n/总 kind · 短hash · subject`，正文委托 `git show`（带 `--stat` 时只给统计块）。
+  - `-h` 增列 `show` 与两个 flag 行。
+
+### 验证
+
+- `gofmt -l` 干净；`go vet ./...` 通过；`go test ./...` 全绿——新增 8 个用例：`path --stat` / `--shortstat` / 无 flag、`show` 缺省 / 选序号 / `--stat` / 越界。
+- **真仓端到端**（本 issue 3 个动作）：
+  - `kiln path action-diff --stat` → 每个动作下缩进输出 git 统计块，形状与 `git log --stat` 一致。
+  - `kiln path action-diff --shortstat` → `…  (2 files changed, 57 insertions(+))` 并入动作行。
+  - `kiln show action-diff` → 最后一个动作（`3/3 hypothesize`）；`show 1` → 首个；`show 3 --stat` → 仅统计块；`show 9` → 退出码 2 +「序号超出范围（可选 1..3）」。
+
+### 对假设的修正（test 的产出）
+
+- **性能注记被实测调整**：实现采用**逐动作委托**（对每个动作跑一次 `git show --stat`），而非假设里写的"一次 `git log --numstat` 全量取数"。理由：委托渲染与 git **逐字节一致**（rename / binary 免自实现），而本 issue 仅 3 个动作 = 3 次 git 调用、毫秒级；`numstat` 单次取数则要 kiln **自绘直方图**，违背"不重实现"的初衷。→ **当前规模下逐动作委托更优**；`numstat` 方案仅在单 issue 动作数极大时才值得。
+- **`show --stat` 定为"只回统计块"**（复用 `path --stat` 的渲染、与 kiln 头部不重复），而非 `git show --stat` 的"提交头 + 统计"。
+
 ## 非目标
 
 - 不改 `graph` / `status`。
