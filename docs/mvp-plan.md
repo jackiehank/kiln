@@ -271,6 +271,7 @@ kiln/
 
 - `kiln rename`：重命名 issue 并改写全部相关 trailer
 - issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
+- `--refs` 传空值时会输出一行空的 `refs:`：`trailer.Format` 的 `writeList` 只判 `len(vals) != 0`，没过滤空串，遵守“严格输出”应跳过空值（解析侧本来就会忽略它，所以只是输出难看）
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
