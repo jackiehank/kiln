@@ -112,6 +112,78 @@ git show e98c23f --stat --format=""
 
 > 来源：[git-bug / git-appraise（Git Rev News 126）](https://git.github.io/rev_news/2025/08/31/edition-126/) ｜ [Radicle（P2P 替代 GitHub）](https://laoutaris.org/blog/radicle/) ｜ [Radicle（arXiv 2609.13555）](https://arxiv.org/pdf/2609.13555) ｜ [Fossil：Why Add Forum, Wiki, and Web Software To Your DVCS](https://www.fossil-scm.org/home/doc/edfa01d9/www/whyallinone.md) ｜ [Fossil：Bug-Tracking In Fossil](https://fossil-scm.org/home/doc/trunk/www/bugtheory.wiki) ｜ [Gerrit：Changes / patch sets](https://review.opendev.org/Documentation/concept-changes.html) ｜ [Jujutsu：Git comparison](https://docs.jj-vcs.dev/latest/git-comparison/) ｜ [StGit](https://stacked-git.github.io/) ｜ [Graphite CLI](https://www.graphite.com/docs/cli-overview) ｜ [GitHub CLI：vs Git](https://docs.github.com/en/enterprise-server@3.13/github-cli/github-cli/about-github-cli) ｜ [Jira：Configure development tools](https://support.atlassian.com/jira-software-cloud/docs/configure-development-tools/) ｜ [Jira：Reference work items in your development work](https://support.atlassian.com/jira-software-cloud/docs/reference-issues-in-your-development-work/)
 
+## collect（续）：jj（Jujutsu）vs kiln
+
+> 第二轮调研，专比一个对象：**jj**。三个角度——设计哲学、命令层面、面向 agent 的 UX。来源见本节末。
+
+### 一句话
+
+**jj 改的是「怎么动历史」，kiln 加的是「git 缺的模型」——两者正交，可叠加。**
+
+### 1. 设计哲学
+
+| | **jj** | **kiln** |
+| --- | --- | --- |
+| 一句话 | 给同一批 git 对象一个更好的**操作界面** | 给同一批 git 提交一个 git 没有的**语义模型** |
+| 抽象单元 | change / commit（**历史编辑**） | issue / action（**问题求解路径**） |
+| 对 git 的态度 | **重做界面**（可替代 git 做日常操作） | **叠加语义**（读写都委托 git） |
+| 数据 | 仍是 git 对象（另存 change id / op log） | 仍是 git 提交（+ trailer） |
+| 朝向 | 让"改历史"顺手、可撤销 | 让"看 / 校验问题路径"成为可能 |
+| **共同根** | **一切皆 commit、无隐藏状态**（都反 Jira 式外部库） | 同左 |
+
+分歧在**对历史的态度**：jj 视历史为**流体**（随时改写、后代自动 rebase）；kiln 视动作历史为**问题的记录 / 证据**。
+
+> 关键交叉点：jj 的流体历史会让 **hash 漂移**，它的解法是 **change ID「跨改写稳定」**；kiln 的解法（本会话）是 **用序号寻址、不用 hash**。→ **jj 的存在反而印证了 kiln 的两个选择**，且 jj 的 change-id 与 Gerrit 的 `Change-Id` 是同一思路（"提交内容里的稳定 id"）。
+
+### 2. 命令层面
+
+| 关注点 | **jj** | **kiln** |
+| --- | --- | --- |
+| 看一段历史 | `jj log -r <revset>`（**查询语言**） | `path <issue>`（按 issue 聚合，非查询语言） |
+| 看单个变更 | `jj show <rev>` / `jj diff -r <rev>`（自己渲染） | `show <issue> n`（**委托 `git show`**） |
+| 写 | `jj describe` / `new` / `commit` / `squash` / `split` | `do` / `commit`（**生成规范化 trailer**） |
+| 校验 | **无此层**（只保证仓库一致性） | `check`（**模型不变量**） |
+| 寻址 | **revset**（`::@`、`diff_lines()`、模板 `-T`） | **序号**（弱、但稳且免费） |
+| 撤销 | `jj undo` / `jj op log` / `jj op restore` | 无（交给 git） |
+| 状态 | `jj st`（**工作区**状态） | `status`（**全库 issue** 概览，语义不同） |
+
+四条命令层面的观察：
+
+1. **jj 有 revset 查询语言，kiln 没有**——kiln 的选择很粗（issue id + 序号）；`path <issue>` 相当于 `jj log -r "issue(...)"` 的一个特例。若 kiln 将来要更强的查询，**可参考 revset，不必自造**。
+2. **jj 是强 writer**（改写历史是核心能力）；**kiln 是 reader + 规范 writer**——面向"读 + 校验"的 kiln 在"改"上刻意退让给 git。
+3. **`jj show` 与 `kiln show` 同名同义**（一个对象 + 它的变更）——反过来印证 `action-diff` 里选 `show` 而非 `diff` 是对的。
+4. **结构化输出是 kiln 的短板**：jj 有模板（`jj log -T '<template>'`）；kiln MVP 无 `--json`——对 agent / 脚本不友好。
+
+### 3. 面向 agent 的 UX
+
+jj 正被大量"AI Agent Skills"包装（社区已成气候），卖点是**让 agent 安全地写 / 改仓库**：
+
+- **无暂存区**（工作区自动成为提交）→ agent 不会留下"半暂存"的坏状态；
+- **每步操作自动快照 + `jj undo` / `op log`** → 敢试错、可回滚；
+- **冲突可提交、命令不中断** → agent 不被冲突卡死；
+- **change ID 跨改写稳定** → agent 的引用不因 rebase 失效；
+- **revset + 模板** → 精确查询 + 可解析输出。
+
+→ 这批特性解决的是「**仓库被写坏**」这一类失败模式。
+
+kiln 面向 agent 的 UX：
+
+- `do` / `commit` 产出**规范化消息** → 减少 agent 自由拼字符串出错；
+- `check` 是**护栏**：agent 能拿它校验自己的产物并自纠——**真正的 agent-UX 价值**；
+- 短板：输出偏人读、无 `--json`；模型词汇（issue / action）需 agent 额外学。
+
+> **结论：二者在 agent 场景解决的失败模式不同**——**jj 防"仓库写坏"，kiln 防"语义写错 / 读错"**。因此**可叠加**：agent 用 jj 安全地写提交，用 kiln 校验语义 + 复盘路径。
+
+### 4. 对 cli-necessity 的启示
+
+1. **jj 证明"纯 UX 层"也能独立成立**——但它靠**明显更好**，且**不提供 git 没有的模型**。kiln 若也走 UX 路线，就要和 jj 比"更好"；kiln 的护城河应在**模型 + 校验**（jj 没有）。
+2. **"稳定标识"是行业共识**：Gerrit `Change-Id`、jj change ID 都在对抗 hash 漂移。kiln 用**序号**是同一动机的另一解——更弱但免费。
+3. **`check` 是 jj 明确没有的一层**——坐实了收集到的结论：**不变量校验是 kiln 最不可替代的部分**。
+4. **revset 值得借鉴、不必自造**：kiln 若需查询能力，可把选择器做得像 revset；否则维持"粗选择 + 精确校验"。
+5. **结构化输出是面向 agent 的真实短板**：jj 有 `-T` 模板，kiln 无 `--json`。若 agent 是主要用户，这比"命令重叠"更该先补。
+
+> 来源（官方 jj 文档为主；"面向 agent"的包装来自社区技能页，标 ★）：[jj：Git comparison](https://docs.jj-vcs.dev/latest/git-comparison/) ｜ [jj：Git command table](https://docs.jj-vcs.dev/latest/git-command-table/) ｜ [jj：Revsets](https://docs.jj-vcs.dev/v0.40.0/revsets/) ｜ ★ [jj 技能：change ID 跨改写稳定](https://skills.cat/skills/dashed/claude-marketplace/jj) ｜ ★ [onevcat-jj（面向 agent 的 jj）](https://www.skill4agent.com/en/skill/onevcat-skills/onevcat-jj) ｜ ★ [hivebook：jj with stable change IDs](https://hivebook.wiki/wiki/jujutsu-jj-git-compatible-vcs-with-stable-change-ids) ｜ [15 Years of Git, Then Jujutsu](https://dev.to/oukayuka/15-years-of-git-then-jujutsu-why-i-cant-go-back-2o6n)
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
