@@ -250,6 +250,7 @@ kiln/
 
 ## 10. 后续迭代（MVP 之后）
 
+- 提交信息格式：`kiln do` 输出在标题行与 trailers 之间补一个空行，使 `git log --oneline` / PR 标题只显示标题（当前无空行，整段被当成同一段落）
 - `kiln rename`：重命名 problem 并改写全部相关 trailer
 - 同一 problem ID 下出现第二个 `ask` 时的识别（视为新问题的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
