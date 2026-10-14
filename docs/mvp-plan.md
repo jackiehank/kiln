@@ -269,6 +269,7 @@ kiln/
 - issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
 - **kiln CLI 的存在必要性**：agent 手握 `git` + 约定文档时，哪些命令是"git 做不到的"（`check` 不变量 / `status`·`graph` 综合 / `path` 重建）、哪些只是方便包装——见 [docs/cli-necessity.md](cli-necessity.md)
 - 动作「证据」可被改写 / 删除（jj 的流体历史）与「记录」取向的张力：**阻塞 cli-necessity**——见 [docs/evidence-fluidity.md](evidence-fluidity.md)
+- 关系渲染不一致：`graph` / `status` 未渲染 `blocks` / `supersedes`（而 `path` 有）——见 [docs/relation-rendering.md](relation-rendering.md)
 - 动作的**作者归属**：**已定"不做"**——现状 1 人 + 1 agent 共用同一 git 身份，且无消费场景；重启触发条件与理由见 [docs/author-attribution.md](author-attribution.md)
 - 动作粒度：实现一个 issue 时，中间动作（`hypothesize` / `test` / …）要不要分阶段提交——见 [docs/action-granularity.md](action-granularity.md)
 - 关系类型落地：新增 `part-of`（分解）；**取消反向名**（词表共 5 个名字），方向由**箭头**渲染——规格见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
