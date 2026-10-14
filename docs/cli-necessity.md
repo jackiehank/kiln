@@ -262,6 +262,72 @@ kiln 的模型**全在 commit message 里**（`issue:` / `action:` 等 trailer�
 - 该 issue 的结论是"kiln 的价值 = 模型 / 校验 / 综合 / 规范写"。**adapter 让这句话的边界更清楚**：这四件事与后端无关，git/jj 只是 substrate。
 - 收集到的"jj 与 kiln 可叠加"也在此具象化：jj 提供**安全地写**（无暂存、可 undo、change id 稳定），kiln 提供**语义校验与复盘**。
 
+## hypothesize（续）：后端选 git 还是 jj？——jj 分两种模式
+
+> 说明：按 jj 官方把 jj 分**colocated** 与**非 colocated（独立）**两种模式来比（`jj git colocation status` / `--colocate` 佐证）。结论先行：**colocated 是"成本最低、先支持"的模式**（kiln 的 git 适配器直接可用）；**独立模式才真正需要 jj 适配器**。
+
+### 0. 先厘清"两种模式"
+
+| 模式 | 工作区里有什么 | 本地 git 命令能用吗 |
+| --- | --- | --- |
+| **jj · colocated** | `.jj/` **+** `.git/`（并存） | **能**——git/jj 共用同一工作区，是"安全、可逆的迁移路径" |
+| **jj · 非 colocated（独立）** | 只有 `.jj/`（git 仓库在 jj 内部存储里） | **不能**——工作区没有可用的 `.git` |
+
+### 1. 三种后端 × 关键维度
+
+| 维度 | **git** | **jj · colocated** | **jj · 独立** |
+| --- | --- | --- | --- |
+| kiln 如何探测 | `.git/` | `.jj/`+`.git/`（**须 `.jj` 优先**） | `.jj/`（无 `.git`） |
+| kiln 能否用 **git 适配器** | ✅ | ✅ | ❌ |
+| kiln 能否用 **jj 适配器** | ❌ | ✅ | ✅ |
+| 动作标识 | commit hash（**改写即漂移**） | change id（稳定）+ commit id | 同左 |
+| 历史形态 | 追加为主，改写是显式 / 危险操作 | **流体**：改写自由、后代自动 rebase | 同左 |
+| 造提交 | 先暂存 + `commit` | 工作区即变更，`jj commit -m` | 同左 |
+| 渲染 | `git show` / `--stat` | `jj show` / `jj diff --stat`（格式不同） | 同左 |
+| git 生态（IDE / CI / 托管 / `gh`） | ✅ 全通 | ✅ **全通**（工作区有真 `.git`） | ⚠ 本地 git 工具不可用（push 仍是标准 git） |
+| 对 kiln 模型的保真 | trailer 原样保留 | 同左 | 同左 |
+
+### 2. 优势 / 不足
+
+**git 后端**
+
+- **优势**：通用（IDE / CI / GitHub / `gh` 全认）；零额外依赖；历史**追加为主** → 与 kiln"动作历史 = 证据"的取向**天然一致**；适配器已实现。
+- **不足**：hash 随改写漂移（kiln 靠序号绕过）；**改写历史危险**（rebase / amend）→ agent 容易写坏；**无一等公民的撤销**。
+
+**jj 后端（两模式共有）**
+
+- **优势**：**change id 稳定**（跨改写）→ 比 hash 更适合当标识；**无暂存区 + 操作日志 + 可 undo + 冲突可提交** → **对 agent 明显更安全**；revset / 模板 → 可精确查询；正是收集到的"**jj 与 kiln 可叠加**"。
+- **不足**：**历史是流体** → 与 kiln"证据"取向**有张力**（记录随时可被改写）；渲染格式与 git 不同 → 测试 / 示例要**中立化**；多一个二进制依赖；生态较新。
+
+**jj · colocated 独有**
+
+- **优势**：**兼容甜点**——kiln 的 **git 适配器照常可用**（连 P1 都不必做），同时用户享受 jj 的 UX；IDE / CI / 托管**全认**；"安全可逆"（随时能退回纯 git）。
+- **不足**：`.jj` 与 `.git` 并存 → **探测歧义**（不显式偏好就会**静默**读成 git 视图）；两边同时操作可能互扰。
+
+**jj · 独立 独有**
+
+- **优势**：jj 的完整能力，无 git 工作区牵绊（更"纯"）。
+- **不足**：**kiln 只能用 jj 适配器**（没有退路）；**本地 git 工具 / IDE / CI 的本地部分失效**（远端托管不受影响，因为 push 仍是标准 git）。
+
+### 3. 对 kiln 的结论（倾向，待 `test`）
+
+1. **colocated 是"先支持、成本最低"的模式**：它让 **git 适配器直接可用** → **P1（抽 `vcs` 包）即可覆盖**，无需 jj 适配器。建议把 colocated 作为**推荐给 kiln 用户的 jj 用法**。
+2. **独立模式才真正需要 `vcs/jj`**（P2）。
+3. **jj 的 change id 更适合 kiln 的标识需求**（稳定），但 kiln 已用**序号**寻址 → 收益**边际**，除非将来 `path` / `show` 要显示稳定 id。
+4. **最大张力**：**jj 把历史当流体，kiln 把历史当证据**。序号寻址是对冲（改写后重算但仍自洽），但"**证据可被改写**"这点**适配器解决不了**——是**取向层面的取舍**，必须写清楚。
+5. **探测规则**（三后端）：**`.jj` 存在 → jj**（是 colocated 还是独立，看工作区**是否有 `.git`**）；否则 `.git` → git；都无 → 报错。`vcs.Open` 应返回**后端 + 模式**，而不只是后端名。
+
+### 4. 一个顺带的设计钩子
+
+jj 的 **operation log** 能告诉你"**历史被改写过**"。→ kiln 将来可据此**提示"这条动作的证据已被重写"**——这是 git 给不了、而 jj 独有的信息。留作候选，不在本轮。
+
+### 5. 风险 / 非目标
+
+- **风险**：两模式让探测与行为分支变多；`vcs.Open` 的返回要带上**模式**。
+- **非目标**：本轮不改代码；不引入 jj 依赖。
+
+> 来源：[jj：Git compatibility（colocated）](https://docs.jj-vcs.dev/latest/git-compatibility/) ｜ [jj FAQ：Should I colocate my repository?](https://docs.jj-vcs.dev/latest/faq/) ｜ [jj CLI：`--colocate`](https://docs.jj-vcs.dev/v0.29.0/cli-reference/)
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
