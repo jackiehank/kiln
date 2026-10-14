@@ -272,7 +272,7 @@ kiln/
 - 关系类型落地：新增 `part-of`（分解）；**取消反向名**（词表共 5 个名字），方向由**箭头**渲染——规格见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
 - 关系词表规格：5 个名字、方向渲染、命名原则——见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
 - issue「同源」的表达：两个 issue 共用**非 issue 的来源**（故障 / 论文 / 会议）时，用 `relates-to` 兜底还是新增对称关系 / 外部来源引用——见 [docs/common-origin.md](common-origin.md)
-- 追踪 issue 全过程并查看每个 action 的变更：`path --stat` / `path --diff` / `show <issue> <n>`，以及用 diff 反查 `target:` 声明是否属实——见 [docs/action-diff.md](action-diff.md)
+- 变更展示**已落地**：`path --stat` / `--shortstat` + `show <issue> [n]`（两层，对齐 git 的 log/show、委托 git 渲染）；`path --diff` 否决。用 diff 反查 `target:` 声明的校验（候选 D）仍待单独评估——见 [docs/action-diff.md](action-diff.md)
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论

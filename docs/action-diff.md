@@ -201,6 +201,34 @@ action-diff · 2/2 collect · 67981f1 · 调研业内成熟做法：变更证据
 - **性能注记被实测调整**：实现采用**逐动作委托**（对每个动作跑一次 `git show --stat`），而非假设里写的"一次 `git log --numstat` 全量取数"。理由：委托渲染与 git **逐字节一致**（rename / binary 免自实现），而本 issue 仅 3 个动作 = 3 次 git 调用、毫秒级；`numstat` 单次取数则要 kiln **自绘直方图**，违背"不重实现"的初衷。→ **当前规模下逐动作委托更优**；`numstat` 方案仅在单 issue 动作数极大时才值得。
 - **`show --stat` 定为"只回统计块"**（复用 `path --stat` 的渲染、与 kiln 头部不重复），而非 `git show --stat` 的"提交头 + 统计"。
 
+## 结论（已定）
+
+**变更展示 = 两层，完全对齐 git 的 `log` / `show` 惯例。代码已实现并通过验证；本文档即规格。**
+
+| 命令 | 对齐 git | 层次 | 状态 |
+| --- | --- | --- | --- |
+| `kiln path <issue>` | `git log` | 摘要（默认，保持精简） | 已有 |
+| `kiln path <issue> --stat` | `git log --stat` | 摘要+，每个动作后缩进统计块 | **已实现** |
+| `kiln path <issue> --shortstat` | `git log --shortstat` | 摘要+，统计并入动作行 | **已实现** |
+| `kiln show <issue> [n]` | `git show` | **详情**：完整变更（trailer + patch） | **已实现** |
+| `kiln show <issue> [n] --stat` | `git show --stat` | 详情：仅统计块 | **已实现** |
+
+定稿要点：
+
+1. **两层展示**：摘要用 `path`、详情用 `show`；候选 **A + C 并存**（层次不同）。
+2. **寻址用序号**：`n` = `path` 里的 1-based 序号，缺省 = 最后一个动作；**不用 commit hash 当主键**（hash 随历史重写漂移）。不变量：`show` 与 `path` 共用同一套排序，`path` 标 #n 即 `show` 渲染 #n。
+3. **渲染委托 git**：`git show [--stat|--shortstat] [--format=] <hash>`；**kiln 不重画 diff**，rename / binary / 着色语义与 git 逐字节一致。
+4. **命名与 flag 复用 git 同名词**（`--stat` / `--shortstat` / `show`），不新造；`show` 不叫 `diff`（`git diff` 是"两态之间"，语义不同）。
+5. **候选 B 否决**：`path --diff`（整段历史带全文）违背"默认精简"，全文归单动作。
+6. **实现取舍**：逐动作委托渲染（非 `git log --numstat` 单次取数）——当前规模更优，且守住"不重实现"。
+
+非目标 / 遗留：
+
+- **不改 `graph` / `status`**（结论：变更证据挂在**单个工作项视图**，与业内行规一致）。
+- **不新增存储**——diff 全部来自 git 本身，kiln 仍只是"读 + 呈现"。
+- **候选 D（`target:` 声明 vs 真实 diff 的一致性校验）不在本 issue 落地**——它是独立价值，留待单独评估 / 派生 issue 追踪。
+- **未做**（等真实需要再加）：pager、`--name-status`、hash 别名、着色。
+
 ## 非目标
 
 - 不改 `graph` / `status`。
