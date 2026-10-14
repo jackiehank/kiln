@@ -11,7 +11,7 @@ func TestParseDetectsKilnAction(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a kiln action")
 	}
-	if f.Issue != "auth/session-expiry" || f.Action != "ask" || f.Object != "q1" {
+	if f.Issue != "auth/session-expiry" || f.Action != "ask" {
 		t.Fatalf("unexpected fields: %+v", f)
 	}
 }
@@ -67,7 +67,6 @@ func TestFormatRoundTrip(t *testing.T) {
 	in := Fields{
 		Issue:       "auth/session-expiry",
 		Action:      "ask",
-		Object:      "q1",
 		Title:       "X 并发可能出错",
 		Tags:        []string{"security", "performance"},
 		Refs:        []string{"q1", "h1"},
@@ -78,7 +77,7 @@ func TestFormatRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("round trip lost detection:\n%s", msg)
 	}
-	if back.Issue != in.Issue || back.Action != in.Action || back.Object != in.Object || back.Title != in.Title {
+	if back.Issue != in.Issue || back.Action != in.Action || back.Title != in.Title {
 		t.Fatalf("round trip scalar mismatch:\n%s\n%+v", msg, back)
 	}
 	if !reflect.DeepEqual(back.Tags, in.Tags) || !reflect.DeepEqual(back.Refs, in.Refs) {
@@ -89,7 +88,7 @@ func TestFormatRoundTrip(t *testing.T) {
 	}
 	// Format is strict: canonical key casing and spacing, with a blank line
 	// separating the subject from the trailer block.
-	if msg != "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
+	if msg != "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
 		t.Fatalf("unexpected canonical output:\n%s", msg)
 	}
 }

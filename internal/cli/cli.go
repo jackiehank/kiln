@@ -25,14 +25,14 @@ action 词表默认: ask | hypothesize | collect | test | conclude | apply
 （可用当前目录的 .kiln.json 覆盖，见 docs/mvp-plan.md §2.3）
 
 do/commit 的 flags:
-  --title  --object  --refs  --target  --scope  --domain  --tag
+  --title  --refs  --target  --scope  --domain  --tag
   --derived-from  --spawns  --relates-to  --blocks  --supersedes
 `
 
 // usageCommands is the command surface rendered by usageText.
 var usageCommands = [][2]string{
-	{"kiln do <issue> <action> [object] [flags]", "生成规范提交信息（不写文件）"},
-	{"kiln commit <issue> <action> [object] [flags]", "用规范信息直接提交"},
+	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
+	{"kiln commit <issue> <action> [flags]", "用规范信息直接提交"},
 	{"kiln path <issue>", "重建问题的研究路径"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
@@ -215,15 +215,15 @@ func parse(args []string) ([]string, flags) {
 func (e *env) write(args []string, commit bool) int {
 	pos, f := parse(args)
 	if len(pos) < 2 {
-		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [object] [flags]\n", modeName(commit))
+		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [flags]\n", modeName(commit))
+		return 2
+	}
+	if len(pos) > 2 {
+		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit))
 		return 2
 	}
 	issue := pos[0]
 	action := strings.ToLower(strings.TrimSpace(pos[1]))
-	object := f.get("object")
-	if object == "" && len(pos) > 2 {
-		object = pos[2]
-	}
 	if !e.actions.IsValid(action) {
 		fmt.Fprintf(e.errw, "非法 action: %q（可选: %s）\n", action, strings.Join(e.actions.Names(), ", "))
 		return 2
@@ -235,7 +235,6 @@ func (e *env) write(args []string, commit bool) int {
 	msg := trailer.Format(trailer.Fields{
 		Issue:       issue,
 		Action:      action,
-		Object:      object,
 		Title:       f.get("title"),
 		Refs:        f.list("refs"),
 		Target:      f.get("target"),
@@ -277,7 +276,7 @@ func (e *env) path(args []string) int {
 	}
 	fmt.Fprintf(e.out, "%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p))
 	for i, a := range p.Actions {
-		fmt.Fprintf(e.out, "  %d. %s %s %s %s\n", i+1, pad(a.Kind, 12), pad(a.Object, 6), pad(shortHash(a.Hash), 8), a.Subject)
+		fmt.Fprintf(e.out, "  %d. %s %s %s\n", i+1, pad(a.Kind, 12), pad(shortHash(a.Hash), 8), a.Subject)
 	}
 	if rel := relationSummary(p); rel != "" {
 		fmt.Fprintf(e.out, "  关系: %s\n", rel)
@@ -294,7 +293,7 @@ func (e *env) status(args []string) int {
 	if s.Total == 0 {
 		fmt.Fprintf(e.out, "问题总数: 0（完成 0 / 进行中 0）\n")
 		fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
-		fmt.Fprintln(e.out, "提示: 用 `kiln do <issue> <action> [object]` 生成规范提交信息")
+		fmt.Fprintln(e.out, "提示: 用 `kiln do <issue> <action>` 生成规范提交信息")
 		return 0
 	}
 	groups := engine.GroupByDomain(repo)
@@ -407,7 +406,7 @@ func (e *env) check(args []string) int {
 		if verbose {
 			if p, ok := repo.Issues[d.Issue]; ok {
 				for _, a := range p.Actions {
-					fmt.Fprintf(e.out, "      %s %s %s\n", pad(a.Kind, 12), pad(a.Object, 6), shortHash(a.Hash))
+					fmt.Fprintf(e.out, "      %s %s\n", pad(a.Kind, 12), shortHash(a.Hash))
 				}
 			}
 		}

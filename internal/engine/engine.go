@@ -28,7 +28,6 @@ func ActionsFromCommits(commits []git.Commit) []model.Action {
 			Date:        c.Date,
 			Issue:       f.Issue,
 			Kind:        f.Action,
-			Object:      f.Object,
 			Title:       f.Title,
 			Refs:        f.Refs,
 			Target:      f.Target,

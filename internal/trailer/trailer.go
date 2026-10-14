@@ -12,7 +12,6 @@ import "strings"
 type Fields struct {
 	Issue  string
 	Action string
-	Object string
 	Title  string
 
 	Refs   []string
@@ -29,7 +28,7 @@ type Fields struct {
 }
 
 var knownKeys = map[string]bool{
-	"issue": true, "action": true, "object": true, "title": true,
+	"issue": true, "action": true, "title": true,
 	"refs": true, "target": true, "scope": true, "domain": true, "tags": true,
 	"derived-from": true, "spawns": true, "relates-to": true,
 	"blocks": true, "supersedes": true,
@@ -58,8 +57,6 @@ func Parse(message string) (Fields, bool) {
 			f.Issue = val
 		case "action":
 			f.Action = val
-		case "object":
-			f.Object = val
 		case "title":
 			f.Title = val
 		case "target":
@@ -104,7 +101,7 @@ func splitList(v string) []string {
 
 // order is the canonical trailer order used by Format.
 var order = []string{
-	"issue", "action", "object", "title", "refs", "target", "scope",
+	"issue", "action", "title", "refs", "target", "scope",
 	"domain", "tags", "derived-from", "spawns", "relates-to", "blocks", "supersedes",
 }
 
@@ -124,8 +121,6 @@ func Format(f Fields) string {
 			writeScalar(&b, "issue", f.Issue)
 		case "action":
 			writeScalar(&b, "action", f.Action)
-		case "object":
-			writeScalar(&b, "object", f.Object)
 		case "title":
 			writeScalar(&b, "title", f.Title)
 		case "refs":

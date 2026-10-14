@@ -114,7 +114,6 @@ type Action struct {
 
 	Issue  string
 	Kind   string
-	Object string
 	Title  string
 	Refs   []string
 	Target string

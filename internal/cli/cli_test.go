@@ -11,13 +11,26 @@ import (
 
 func TestDoPrintsCanonicalMessage(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := Run([]string{"do", "auth/session-expiry", "ask", "q1", "--title", "X 并发可能出错"}, &out, &errb)
+	code := Run([]string{"do", "auth/session-expiry", "ask", "--title", "X 并发可能出错"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
-	want := "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\nobject: q1\ntitle: X 并发可能出错\n"
+	want := "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\ntitle: X 并发可能出错\n"
 	if out.String() != want {
 		t.Fatalf("output =\n%q\nwant\n%q", out.String(), want)
+	}
+}
+
+// The third positional (the retired `object`) is rejected instead of silently
+// ignored, so a stray `q1` cannot slip through.
+func TestDoRejectsRetiredObjectPositional(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := Run([]string{"do", "x", "ask", "q1"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "object 已退役") {
+		t.Fatalf("stderr = %q", errb.String())
 	}
 }
 

@@ -51,7 +51,6 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 | Trailer | 含义 | 示例 |
 | --- | --- | --- |
-| `object:` | 对象 ID | `q1` / `h1` / `t1` / `c1` / `a1` |
 | `title:` | 人类可读标题 | `X 并发可能出错` |
 | `refs:` | 引用的对象 | `q1, h1` |
 | `target:` | 涉及的文件 | `src/x.go` |
@@ -109,7 +108,6 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 issue: session-expiry
 action: ask
-object: q1
 title: X 并发可能出错
 derived-from: deep-dive
 ```
@@ -135,8 +133,8 @@ derived-from: deep-dive
 
 | 命令 | 作用 | MVP |
 | --- | --- | --- |
-| `kiln do <issue> <action> [object]` | 生成规范提交信息（**只打印，不写文件**） | ✅ |
-| `kiln commit <issue> <action> [object]` | 用规范信息直接提交 | ✅ |
+| `kiln do <issue> <action>` | 生成规范提交信息（**只打印，不写文件**） | ✅ |
+| `kiln commit <issue> <action>` | 用规范信息直接提交 | ✅ |
 | `kiln path <issue>` | 重建该 issue 的研究路径 | ✅ |
 | `kiln status` | 全库概览 | ✅ |
 | `kiln check` | 语义完整性校验 | ✅ |
@@ -147,21 +145,20 @@ derived-from: deep-dive
 ### 输出示例
 
 ```
-$ kiln do session-expiry ask q1 --title "X 并发可能出错"
+$ kiln do session-expiry ask --title "X 并发可能出错"
 发现 X 并发可能出错
 
 issue: session-expiry
 action: ask
-object: q1
 title: X 并发可能出错
 ```
 
 ```
 $ kiln path session-expiry
 session-expiry  进行中（当前 test）
-  1. ask          q1     a1b2c3d  发现 X 并发可能出错
-  2. hypothesize  h1     e4f5g6h  假设锁竞争导致
-  3. test         t1     i7j8k9l  压测复现
+  1. ask          a1b2c3d  发现 X 并发可能出错
+  2. hypothesize  e4f5g6h  假设锁竞争导致
+  3. test         i7j8k9l  压测复现
   关系: derived-from deep-dive
 ```
 
@@ -182,7 +179,6 @@ type Action struct {
     Date     time.Time
     Issue    string
     Kind     string   // ask|hypothesize|collect|test|conclude|apply
-    Object   string
     Title    string
     Refs     []string
     Target   string
@@ -263,7 +259,7 @@ kiln/
 
 让 Agent 知道约定的三种方式（任选，建议前两种）：
 
-1. **Skill / 系统提示**：在 Agent 的 Skill 里写明“做研究动作时用 `git commit -m "$(kiln do <issue> <action> <object>)"`”。
+1. **Skill / 系统提示**：在 Agent 的 Skill 里写明“做研究动作时用 `git commit -m "$(kiln do <issue> <action>)"`”。
 2. **`kiln do` 默认输出**：直接产出完整提交信息，Agent 复制即可，无需记忆格式。
 3. **Git hook（可选，非 MVP）**：检测 missing trailer 时提示。
 
@@ -273,7 +269,6 @@ kiln/
 - issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
 - 动作的**作者归属**：在每个 kiln 提交上标明动作由谁产生——人（如 `human/jackie`）、本 Agent、或将来接入的其他 Agent。两条路要先比较：① 直接用 git 自带的 author（`%an` / `%ae`，零新增 trailer，但要求每个 Agent 用独立 git 身份提交；现状是所有提交都共用同一个身份，信息量低）；② 新增 `author:`（或 `by:` / `agent:`）trailer，语义显式，代价是与 git 已有的 author 字段重复
 - 动作粒度：实现一个 issue 时，中间动作（`hypothesize` / `test` / …）要不要分阶段提交——见 [docs/action-granularity.md](action-granularity.md)
-- `object:` 退役：从 trailer 词表、`Fields` / `Action` 模型、`--object` flag 与文档中移除（旧提交里的 `object:` 行会被新解析器忽略，不做迁移）——见 [docs/object-semantics.md](object-semantics.md) 的结论
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
