@@ -51,6 +51,50 @@
 | `supersedes` | 取代 | 新→旧 | — |
 | （组合算子？） | 全部完成(and) / 任一完成(or) | — | — |
 
+## 业内实践调研（collect）
+
+> 一次联网调研的整理，来源 URL 见本节末尾。目的：看成熟系统怎么划分关系、怎么处理依赖与分解。
+
+### 1. issue tracker 的关系类型：高度收敛为三族
+
+| 族 | 代表实现（原文名） |
+| --- | --- |
+| **有向依赖** | Jira `blocks` / `is blocked by`；GitHub `blocked by` / `blocking`；Linear `blocks` / `blocked-by`；Azure Boards `Predecessor` / `Successor`；Redmine `blocks` / `blocked by`、`precedes` / `follows`；YouTrack `depends on` / `is required for` |
+| **层级分解** | GitHub *sub-issues*（parent/child，可多级、父项带进度条）、tasklist 的 "tracked in"；Linear parent / sub-issue；Jira `is a child of`（sub-task）；Azure Boards `Parent` / `Child`；Redmine 子任务；YouTrack `Subtask` |
+| **弱关联 / 去重** | Jira `relates to`、`duplicates` / `is duplicated by`、`clones`、`causes`；Linear `related` / `duplicate`；Azure Boards `Related`；Redmine `related` / `duplicates`；YouTrack `Relates` / `Duplicate` |
+
+要点：① 依赖**有向**，且正反名成对；② 分解是**聚合**类关系，与依赖分开；③ kiln 把"引发 / 分解 / 依赖"混在 `derived-from` / `spawns` / `blocks` 里，**缺"分解"这一类**。
+
+### 2. 排程视角：依赖类型，以及"分解 = AND"
+
+- **CPM/PDM 四种依赖**：`Finish-to-Start (FS)`、`Start-to-Start (SS)`、`Finish-to-Finish (FF)`、`Start-to-Finish (SF)`，可带 lag。我们只用到 FS 这一档。
+- **WBS 100% rule**（ISO 21511）：子层必须代表父层 100% 的工作 → **直接推出：分解的组合语义天然是 AND**（母问题要等**全部**子问题完成）。
+- **AND-join / OR-join**（BPMN 术语）：AND-join = 等全部分支；OR / XOR-join = 任一（或活跃）分支即可。"全部完成 / 任一完成"在流程建模里有成熟词汇，不必自造。
+
+### 3. 依赖的粒度：主流挂在"工作项"级，不做步骤级
+
+- **MS Project**：依赖挂在最低层的 task 上；缩进生成的 **summary task 只做聚合、不建依赖**。PMI 明确指出"把两个摘要任务互连"是常见错误——那等于要求前者的**所有**子任务完成才能开始后者的**任何**子任务。
+- **Asana**：`blocking` / `blocked by`，并支持 FF（子任务没完成则母任务不能完成）。
+- **"动作 / 步骤级依赖"的成熟业界词表：未找到可靠来源**——实践停在 work item 级。
+
+### 4. 工程实现
+
+- **环检测**：有向图无环 = DFS 无 back edge；或 Tarjan 求强连通分量，**写入时拒绝成环边**。
+- **传递闭包**：按需预计算（Warshall）换 O(1) 可达查询；是否要"间接阻塞"可见性决定算不算。
+- **`blocks` 与 `depends-on` 是同一件事的两个视角**：YouTrack 的做法是**存单向边 + 自动生成反向名**（加了 `depends on`，对方自动挂 `is required for`）。
+
+### 5. 对本设计最相关的 5 条
+
+1. **关系分三族**：依赖 / 分解 / 弱关联。kiln 必须**另立"分解"类**（如 `part-of` / `sub-issue`），不能拿 `blocks` 顶替。
+2. **"引发" ≠ "分解"**：引发无序、不阻塞；分解因 100% rule 天然是 **AND**——母问题等全部子问题。
+3. **`blocks` 与 `depends-on` 是同一件事**：存单向键、系统自动生成反向名（YouTrack 模式），别让用户两头都写。
+4. **依赖粒度挂 issue / 工作项级即可**：主流排程工具都明确"依赖只挂最底层项、摘要层不建依赖"，且**没有**步骤级依赖的成熟实践——这基本上**否掉了"action 级依赖"**。
+5. **工程**：写入时用 DFS / Tarjan 检测环；传递闭包按需预计算。
+
+> 这几条直接收窄了下面的「待探讨」：第 2 条回答了粒度问题（走 issue 级），第 3、4 条分别回答了类型划分与依赖方向。
+
+> 来源：[Jira link types](https://support.atlassian.com/jira-software-cloud/docs/link-issues/) ｜ [GitHub issue dependencies](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies) ｜ [GitHub sub-issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues) ｜ [Linear parent & sub-issues](https://linear.app/docs/parent-and-sub-issues) ｜ [Azure Boards link types](https://learn.microsoft.com/en-gb/azure/devops/boards/queries/link-type-reference) ｜ [Redmine issues](https://www.redmine.org/projects/redmine/wiki/RedmineIssues/) ｜ [YouTrack link types](https://www.jetbrains.com/help/youtrack/server/link-types.html) ｜ [PMI Scheduling 101](https://www.pmi.org/learning/library/schedule-101-basic-best-practices-6701) ｜ [ISO 21511 (WBS)](https://www.iso.org/obp/ui/#iso:std:iso:21511:ed-1:v1:en) ｜ [BPMN Appendix C (AND-join)](https://www.omg.org/bpmn/Documents/BPMN_Appendix_C.pdf) ｜ [MS Project subtasks & summary tasks](https://support.microsoft.com/en-us/office/create-and-work-with-subtasks-and-summary-tasks-in-project-desktop-b3ff64ce-b121-42cc-905b-cb9b8ce0255f) ｜ [Asana dependency types](https://help.asana.com/s/article/dependency-types) ｜ [arXiv 2102.08485](https://arxiv.org/abs/2102.08485)
+
 ## 待探讨
 
 1. **"引发"与"分解"要不要分成两个类型？** 还是合并进 `derived-from`、再加一个 and/or 标记？
