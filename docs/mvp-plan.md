@@ -270,7 +270,6 @@ kiln/
 ## 10. 后续迭代（MVP 之后）
 
 - `kiln rename`：重命名 issue 并改写全部相关 trailer
-- `kiln help` 的命令列对齐：中文全角字符宽度导致列对不齐，改为按显示宽度（east-asian width）而非字符数补齐
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论

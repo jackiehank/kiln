@@ -15,17 +15,12 @@ import (
 	"kiln/internal/trailer"
 )
 
-const usage = `kiln — git-trailer 驱动的问题追踪与路径重建
+const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 用法:
-  kiln do <issue> <action> [object] [flags]     生成规范提交信息（不写文件）
-  kiln commit <issue> <action> [object] [flags] 用规范信息直接提交
-  kiln path <issue>                             重建问题的研究路径
-  kiln status                                     全库概览
-  kiln check [--verbose]                          语义完整性校验
-  kiln list [--domain=] [--tag=] [--action=]      按条件过滤问题
-  kiln graph [--format=ascii]                     问题关系图
+`
 
+const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
 （可用当前目录的 .kiln.json 覆盖，见 docs/mvp-plan.md §2.3）
 
@@ -33,6 +28,88 @@ do/commit 的 flags:
   --title  --object  --refs  --target  --scope  --domain  --tag
   --derived-from  --spawns  --relates-to  --blocks  --supersedes
 `
+
+// usageCommands is the command surface rendered by usageText.
+var usageCommands = [][2]string{
+	{"kiln do <issue> <action> [object] [flags]", "生成规范提交信息（不写文件）"},
+	{"kiln commit <issue> <action> [object] [flags]", "用规范信息直接提交"},
+	{"kiln path <issue>", "重建问题的研究路径"},
+	{"kiln status", "全库概览"},
+	{"kiln check [--verbose]", "语义完整性校验"},
+	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
+	{"kiln graph [--format=ascii]", "问题关系图"},
+}
+
+// usageText renders the help text, aligning descriptions by terminal display
+// width so full-width CJK text does not skew the columns.
+func usageText() string {
+	width := 0
+	for _, c := range usageCommands {
+		if w := displayWidth(c[0]); w > width {
+			width = w
+		}
+	}
+	var b strings.Builder
+	b.WriteString(usageHeader)
+	for _, c := range usageCommands {
+		b.WriteString("  " + pad(c[0], width) + "  " + c[1] + "\n")
+	}
+	b.WriteString(usageFooter)
+	return b.String()
+}
+
+// pad right-pads s with spaces until it spans at least width display columns.
+func pad(s string, width int) string {
+	if d := width - displayWidth(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
+}
+
+// displayWidth returns the number of terminal columns s occupies, counting East
+// Asian wide characters as two (a practical subset of UAX #11).
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if isWide(r) {
+			w += 2
+		} else {
+			w++
+		}
+	}
+	return w
+}
+
+// isWide reports whether r spans two columns in the common CJK ranges.
+func isWide(r rune) bool {
+	switch {
+	case r >= 0x1100 && r <= 0x115F: // Hangul Jamo
+		return true
+	case r >= 0x2E80 && r <= 0x303E: // CJK radicals / Kangxi / CJK symbols
+		return true
+	case r >= 0x3041 && r <= 0x33FF: // kana, CJK compatibility
+		return true
+	case r >= 0x3400 && r <= 0x4DBF: // CJK extension A
+		return true
+	case r >= 0x4E00 && r <= 0x9FFF: // CJK unified ideographs
+		return true
+	case r >= 0xA000 && r <= 0xA4CF: // Yi
+		return true
+	case r >= 0xAC00 && r <= 0xD7A3: // Hangul syllables
+		return true
+	case r >= 0xF900 && r <= 0xFAFF: // CJK compatibility ideographs
+		return true
+	case r >= 0xFE10 && r <= 0xFE19: // vertical forms
+		return true
+	case r >= 0xFE30 && r <= 0xFE6F: // CJK compatibility forms
+		return true
+	case r >= 0xFF00 && r <= 0xFF60: // fullwidth forms
+		return true
+	case r >= 0xFFE0 && r <= 0xFFE6: // fullwidth signs
+		return true
+	}
+	return false
+}
 
 // env carries the resolved action vocabulary and the output streams.
 type env struct {
@@ -44,18 +121,18 @@ type env struct {
 // Run executes one command and returns the process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		fmt.Fprint(stderr, usageText())
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usage)
+		fmt.Fprint(stdout, usageText())
 		return 0
 	case "do", "commit", "path", "status", "check", "list", "graph":
 		// handled below, once the vocabulary is loaded
 	default:
-		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usage)
+		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
 		return 2
 	}
 
@@ -186,7 +263,7 @@ func (e *env) path(args []string) int {
 	}
 	fmt.Fprintf(e.out, "%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p))
 	for i, a := range p.Actions {
-		fmt.Fprintf(e.out, "  %d. %-12s %-6s %-8s %s\n", i+1, a.Kind, a.Object, shortHash(a.Hash), a.Subject)
+		fmt.Fprintf(e.out, "  %d. %s %s %s %s\n", i+1, pad(a.Kind, 12), pad(a.Object, 6), pad(shortHash(a.Hash), 8), a.Subject)
 	}
 	if rel := relationSummary(p); rel != "" {
 		fmt.Fprintf(e.out, "  关系: %s\n", rel)
@@ -212,7 +289,7 @@ func (e *env) status(args []string) int {
 		if last, ok := p.Last(); ok && e.actions.IsTerminal(last.Kind) {
 			mark = "✓"
 		}
-		fmt.Fprintf(e.out, "  %s %-30s %s\n", mark, p.ID, stateWord(p))
+		fmt.Fprintf(e.out, "  %s %s %s\n", mark, pad(p.ID, 30), stateWord(p))
 	}
 	return 0
 }
@@ -230,14 +307,14 @@ func (e *env) check(args []string) int {
 	}
 	failed := false
 	for _, d := range engine.Check(repo, e.actions) {
-		fmt.Fprintf(e.out, "%s %-30s %s\n", d.Symbol(), d.Issue, d.Message)
+		fmt.Fprintf(e.out, "%s %s %s\n", d.Symbol(), pad(d.Issue, 30), d.Message)
 		if d.Level == engine.LevelErr {
 			failed = true
 		}
 		if verbose {
 			if p, ok := repo.Issues[d.Issue]; ok {
 				for _, a := range p.Actions {
-					fmt.Fprintf(e.out, "      %-12s %-6s %s\n", a.Kind, a.Object, shortHash(a.Hash))
+					fmt.Fprintf(e.out, "      %s %s %s\n", pad(a.Kind, 12), pad(a.Object, 6), shortHash(a.Hash))
 				}
 			}
 		}
@@ -261,7 +338,7 @@ func (e *env) list(args []string) int {
 	})
 	for _, id := range ids {
 		p := repo.Issues[id]
-		fmt.Fprintf(e.out, "%-30s %-12s %s\n", p.ID, stateWord(p), tagsSuffix(p))
+		fmt.Fprintf(e.out, "%s %s %s\n", pad(p.ID, 30), pad(stateWord(p), 12), tagsSuffix(p))
 	}
 	return 0
 }
