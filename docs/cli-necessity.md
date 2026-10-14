@@ -457,6 +457,56 @@ jj 的 **operation log** 能告诉你"**历史被改写过**"。→ kiln 将来�
 - kiln 的**读视图**在冲突 / 并行下都**不受影响**；风险全在**写侧**。
 - **并行 agent 的正确姿势**：**一 agent 一 workspace**（jj）/ 一 worktree（git）。否则——如 A 节实测——"动作 = 提交"会把**别人的改动算进你的动作**，动作归属被静默打乱。
 
+## hypothesize：让 agent 一键拿到隔离区，并让"污染"可校验
+
+### 0. 要解决的具体伤害（实测）
+
+同工作区里 A 的 `kiln commit` 把 B 的未提交文件**一起提交** → **动作归属被静默打乱**。目标两条：**① 让隔离成为默认好走的路；② 万一没隔离，污染要能被发现。**
+
+### 1. 先划边界：谁编排、谁提供原语
+
+- **编排**（起几个 agent、谁做什么）= **外部**（harness / 人）。kiln 不该管。
+- **原语**（"给我一个隔离的工作区"）= VCS 的事，但**后端不同、命令不同**（jj `workspace add` vs git `worktree add -b <branch>`）→ **kiln 的 backend 抽象正好该吞掉这个差异**。
+
+### 2. 候选
+
+| 方案 | 形态 | 代价 |
+| --- | --- | --- |
+| **A** 只立约定 | 文档写明"一 agent 一 workspace"，命令用原生 | 零；但 agent 会忘 → **静默污染** |
+| **B** 薄封装 | `kiln workspace new / list`（后端中立） | 小；从"只读 + 呈现"扩到"轻写" |
+| **C** B + issue 绑定 + `check` 规则 | workspace 绑定 issue；`commit` / `check` 能发现"串档" | 更强；更"管"；要设计绑定落点 |
+| **D** kiln 自己编排 agent | — | **越界，否** |
+
+> 倾向：**B 起步、C 为增强**。
+
+### 3. 具体形态（B：后端中立的原语）
+
+- 扩 `vcs.Repo`：`NewWorkspace(name) (path, error)` / `ListWorkspaces()`。
+  - git → `git worktree add <path> -b <name>`；jj → `jj workspace add <path>`。
+- 命令：`kiln workspace new [--for <issue>]` → 建隔离区、打印路径、提示 `cd` 过去；`kiln workspace list`。
+- **标签按 issue 绑，而非按 agent 身份**——避免重开 `author-attribution`（那题已判"不做"）。
+
+### 4. 增强（C）：把隔离变成**可校验**
+
+- 在 workspace 内写绑定（如该 workspace 的 `.kiln.json` 记 `issue: <x>`，或仓库外的索引）。
+- 于是：
+  - `kiln commit` 在**绑定** workspace 里：若 action 的 `issue:` ≠ 绑定 issue → **warn**；若改动触及**不属于该 issue 的文件** → **warn**（正对"被吞并"那类实测伤害）。
+  - `kiln check` 增规则：**同一 workspace 出现多个 issue 的动作** = 可疑（污染信号）。
+- 效果：把"污染"从**静默**变**可见**。
+
+### 5. 为什么这仍符合 kiln 的取向
+
+- workspace 是**底座**（同提交层），**不是**耐久层；kiln 只做**薄封装 + 校验**，**不做编排**。
+- 从"只读 + 呈现"扩到"**轻写**"（建隔离区）——与 `do` / `commit` 同类，不越界。
+- 与 `vcs.Repo` 抽象一脉相承：**后端可换，隔离方式跟着换**。
+
+### 6. 待定 / 非目标
+
+- **绑定落点**：workspace 内配置 vs 仓库外索引？
+- **命名映射**：git worktree 的分支名、jj workspace 的路径如何与 issue 名对齐？
+- **是否强制**（"没有隔离区就不许 commit"）？——倾向**只 warn、不强制**。
+- **非目标**：本轮不改代码；**不重开 author-attribution**。
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。
