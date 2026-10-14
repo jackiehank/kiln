@@ -267,7 +267,7 @@ kiln/
 
 - `kiln rename`：重命名 issue 并改写全部相关 trailer
 - issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
-- 动作的**作者归属**：在每个 kiln 提交上标明动作由谁产生——人（如 `human/jackie`）、本 Agent、或将来接入的其他 Agent。两条路要先比较：① 直接用 git 自带的 author（`%an` / `%ae`，零新增 trailer，但要求每个 Agent 用独立 git 身份提交；现状是所有提交都共用同一个身份，信息量低）；② 新增 `author:`（或 `by:` / `agent:`）trailer，语义显式，代价是与 git 已有的 author 字段重复
+- 动作的**作者归属**：**已定"不做"**——现状 1 人 + 1 agent 共用同一 git 身份，且无消费场景；重启触发条件与理由见 [docs/author-attribution.md](author-attribution.md)
 - 动作粒度：实现一个 issue 时，中间动作（`hypothesize` / `test` / …）要不要分阶段提交——见 [docs/action-granularity.md](action-granularity.md)
 - 关系类型落地：新增 `part-of`（分解）；**取消反向名**（词表共 5 个名字），方向由**箭头**渲染——规格见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
 - 关系词表规格：5 个名字、方向渲染、命名原则——见 [docs/relation-vocabulary.md](relation-vocabulary.md) 的结论
