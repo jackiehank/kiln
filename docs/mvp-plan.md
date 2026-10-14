@@ -270,6 +270,7 @@ kiln/
 ## 10. 后续迭代（MVP 之后）
 
 - `kiln rename`：重命名 issue 并改写全部相关 trailer
+- issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - `kiln check --format=json`：CI 集成与 PR 评论
