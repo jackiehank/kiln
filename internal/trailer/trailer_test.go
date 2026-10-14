@@ -93,3 +93,21 @@ func TestFormatRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected canonical output:\n%s", msg)
 	}
 }
+
+func TestFormatSkipsBlankListItems(t *testing.T) {
+	cases := []struct {
+		name string
+		refs []string
+		want string
+	}{
+		{"only empty item", []string{""}, "issue: x\naction: ask"},
+		{"item that is blank", []string{"a", "  "}, "issue: x\naction: ask\nrefs: a"},
+		{"normal items", []string{"a", "b"}, "issue: x\naction: ask\nrefs: a, b"},
+	}
+	for _, c := range cases {
+		got := Format(Fields{Issue: "x", Action: "ask", Refs: c.refs})
+		if got != c.want {
+			t.Errorf("%s: Format(Refs=%+v) =\n%q\nwant:\n%q", c.name, c.refs, got, c.want)
+		}
+	}
+}

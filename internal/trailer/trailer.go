@@ -161,8 +161,14 @@ func writeScalar(b *strings.Builder, key, val string) {
 }
 
 func writeList(b *strings.Builder, key string, vals []string) {
-	if len(vals) == 0 {
+	items := make([]string, 0, len(vals))
+	for _, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			items = append(items, v)
+		}
+	}
+	if len(items) == 0 {
 		return
 	}
-	b.WriteString(key + ": " + strings.Join(vals, ", ") + "\n")
+	b.WriteString(key + ": " + strings.Join(items, ", ") + "\n")
 }
