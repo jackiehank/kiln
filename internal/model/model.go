@@ -108,7 +108,7 @@ func (s *ActionSet) IsTerminal(name string) bool { return s.terminal[name] }
 
 // Action is a single git commit recognised as a kiln action.
 type Action struct {
-	Hash    string
+	ID      string
 	Subject string
 	Date    time.Time
 

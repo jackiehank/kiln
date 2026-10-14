@@ -7,14 +7,14 @@ import (
 	"sort"
 	"strings"
 
-	"kiln/internal/git"
 	"kiln/internal/model"
 	"kiln/internal/trailer"
+	"kiln/internal/vcs"
 )
 
 // ActionsFromCommits keeps only the kiln commits and returns them in
 // chronological order (git log hands them to us newest-first).
-func ActionsFromCommits(commits []git.Commit) []model.Action {
+func ActionsFromCommits(commits []vcs.Commit) []model.Action {
 	var out []model.Action
 	for i := len(commits) - 1; i >= 0; i-- {
 		c := commits[i]
@@ -23,7 +23,7 @@ func ActionsFromCommits(commits []git.Commit) []model.Action {
 			continue
 		}
 		out = append(out, model.Action{
-			Hash:        c.Hash,
+			ID:          c.ID,
 			Subject:     subject(c.Message),
 			Date:        c.Date,
 			Issue:       f.Issue,

@@ -328,6 +328,36 @@ jj 的 **operation log** 能告诉你"**历史被改写过**"。→ kiln 将来�
 
 > 来源：[jj：Git compatibility（colocated）](https://docs.jj-vcs.dev/latest/git-compatibility/) ｜ [jj FAQ：Should I colocate my repository?](https://docs.jj-vcs.dev/latest/faq/) ｜ [jj CLI：`--colocate`](https://docs.jj-vcs.dev/v0.29.0/cli-reference/)
 
+## test：落地 VCS adapter，接入 jj（colocated）并验证
+
+### 落地内容
+
+- 新增 **`internal/vcs`**：后端中立抽象——`Commit{ID,Date,Message}` + `Repo{Log, Show, ShowStat, Action}` + `Detect(dir, prefer)`（auto 下 **`.jj` 优先于 `.git`**）。
+- **`internal/git` → `internal/vcs/git`**：`Runner` 接口换成 `vcs.Repo`，`Commit()` 改名 `Action()`；行为不变（仍委托 `git show [--stat|--shortstat] [--format=]`）。
+- 新增 **`internal/vcs/jj`**：`jj log --no-graph -r 'all() ~ root() ~ @' -T '<id/时间/描述>'` 取历史；`jj show -r`、`jj diff -r --stat`（末行当 shortstat）、`jj commit --message`。
+- `env` 改为持有 `vcs.Repo`（**惰性打开**，故 `do` 在仓外仍可用）；`config` 增 `VCS(dir)` 读 `.kiln.json` 的 `"vcs"`（默认 `auto`）。
+- 顺带把 `model.Action.Hash` 改名 `ID`（中性）。
+
+### 验证
+
+- `gofmt -l` 干净；`go vet` 通过；`go test ./...` **全绿**（新增 `vcs.Detect` 5 例 + jj 解析 3 例 + `config.VCS` 2 例）。
+- **真机 jj 0.45.1**，临时 **colocated** 仓（`.jj` + `.git` 并存）：
+  - **auto 探测 → jj**（`.jj` 优先）；`status` / `path` / `path --stat` / `--shortstat` / `show` / `check` 全部正常。
+  - **两后端对比**（同一仓、同一提交）：
+    - `path --stat`：git → `1 file changed, 1 insertion(+)`；jj → `…, 0 deletions(-)`。
+    - `show`：git → `commit/Author/Date` + `diff --git`；jj → `Commit ID/Change ID/Bookmarks/…` + jj 自有 diff 格式。
+    - 各自后端**原样渲染**，kiln 只负责编排——正是"渲染委托后端"的预期。
+  - **Action 在 jj 上可用**：`kiln commit`（→ `jj commit --message`）产出真实 git 提交 `3a6a9ba`，`git log` 可见；`path` 随即显示 `ask → collect` 两步；jj 的**新工作区提交 `@` 被正确忽略**。
+- **真仓回归**：本仓无 `.jj` → auto 仍走 git，`path` / `status` / `check` 行为不变，exit=0。
+
+### 发现 / 对假设的修正
+
+1. **colocated 探测必须 `.jj` 优先**——已证实，否则会静默读成 git 视图；`TestDetectAutoPrefersJJ` 锁定该点。
+2. **jj 的工作区提交 `@` 是"额外动作"风险**（jj 与 git 的关键语义差）：用 revset `~ @` 排除，使"只算已提交动作"与 git 对齐——**这是本次最重要的一处适配**。
+3. **jj 没有 `--shortstat`**：用 `diff --stat` 的末行近似，输出形态略异（多 `, 0 deletions(-)`）。
+4. **造提交差异被证实**：git 只提交**已暂存**内容；jj 终结**整个**工作区变更（契约差异见上段 hypothesize §4.1）。
+5. **colocated 下 git 适配器本可直接用**：印证了假设"§3.1"——纯 colocated 其实不"必须" jj 适配器；jj 适配器的净收益是**非 colocated 仓 + 原生渲染**（本次为验证而实现）。
+
 ## 非目标
 
 - 本轮不改代码、不新增 / 删除命令。

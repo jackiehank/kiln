@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"kiln/internal/engine"
-	"kiln/internal/git"
 	"kiln/internal/model"
+	"kiln/internal/vcs"
 )
 
 func TestDoPrintsCanonicalMessage(t *testing.T) {
@@ -180,31 +180,31 @@ func TestUsageTextAlignsDescriptions(t *testing.T) {
 // fakeRunner supplies hand-built history and stat/show output so the CLI tests
 // never touch a real repository.
 type fakeRunner struct {
-	commits []git.Commit
+	commits []vcs.Commit
 	show    map[string]string
 	stat    map[string]string
 	short   map[string]string
 }
 
-func (f fakeRunner) Log() ([]git.Commit, error) { return f.commits, nil }
-func (f fakeRunner) Commit(string) error        { return nil }
-func (f fakeRunner) Show(hash string) (string, error) {
-	return f.show[hash], nil
+func (f fakeRunner) Log() ([]vcs.Commit, error) { return f.commits, nil }
+func (f fakeRunner) Action(string) error        { return nil }
+func (f fakeRunner) Show(id string) (string, error) {
+	return f.show[id], nil
 }
-func (f fakeRunner) ShowStat(hash string, short bool) (string, error) {
+func (f fakeRunner) ShowStat(id string, short bool) (string, error) {
 	if short {
-		return f.short[hash], nil
+		return f.short[id], nil
 	}
-	return f.stat[hash], nil
+	return f.stat[id], nil
 }
 
 // demoRunner models a two-action issue (ask then collect) with per-action stats.
 func demoRunner() fakeRunner {
 	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	return fakeRunner{
-		commits: []git.Commit{
-			{Hash: "aaaaaaa1", Date: base, Message: "起点\n\nissue: demo\naction: ask\ntitle: 起点"},
-			{Hash: "bbbbbbb2", Date: base.Add(time.Hour), Message: "调研\n\nissue: demo\naction: collect\ntitle: 调研"},
+		commits: []vcs.Commit{
+			{ID: "aaaaaaa1", Date: base, Message: "起点\n\nissue: demo\naction: ask\ntitle: 起点"},
+			{ID: "bbbbbbb2", Date: base.Add(time.Hour), Message: "调研\n\nissue: demo\naction: collect\ntitle: 调研"},
 		},
 		stat: map[string]string{
 			"aaaaaaa1": " docs/a.md | 2 ++\n 1 file changed, 2 insertions(+)\n",
@@ -222,7 +222,7 @@ func demoRunner() fakeRunner {
 }
 
 func newDemoEnv(out, errw *bytes.Buffer) *env {
-	return &env{actions: model.DefaultActionSet(), git: demoRunner(), out: out, errw: errw}
+	return &env{actions: model.DefaultActionSet(), repo: demoRunner(), out: out, errw: errw}
 }
 
 // `path --stat` keeps the action list and nests git's diffstat block under each

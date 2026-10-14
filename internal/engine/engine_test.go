@@ -6,21 +6,21 @@ import (
 	"testing"
 	"time"
 
-	"kiln/internal/git"
 	"kiln/internal/model"
+	"kiln/internal/vcs"
 )
 
-func mkCommit(hash, msg string, day int) git.Commit {
-	return git.Commit{
-		Hash:    hash,
+func mkCommit(hash, msg string, day int) vcs.Commit {
+	return vcs.Commit{
+		ID:      hash,
 		Date:    time.Date(2026, 1, day, 0, 0, 0, 0, time.UTC),
 		Message: msg,
 	}
 }
 
 // newest first, mirroring `git log`
-func sampleCommits() []git.Commit {
-	return []git.Commit{
+func sampleCommits() []vcs.Commit {
+	return []vcs.Commit{
 		mkCommit("c3", "得出结论\nissue: auth/session-expiry\naction: conclude", 3),
 		mkCommit("c2", "验证假设\nissue: auth/session-expiry\naction: test", 2),
 		mkCommit("c1", "提出问题\nissue: auth/session-expiry\naction: ask\nobject: q1", 1),
@@ -66,7 +66,7 @@ func TestCheckCompleteIssueIsOK(t *testing.T) {
 }
 
 func TestCheckRules(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("d3", "没有 ask，也没闭环\nissue: sub/no-ask\naction: test", 4),
 		mkCommit("d2", "父不存在\nissue: sub/bad-parent\naction: ask\nderived-from: missing/parent", 3),
 		mkCommit("d1", "子不存在\nissue: sub/bad-child\naction: ask\nspawns: missing/child", 2),
@@ -92,7 +92,7 @@ func TestCheckRules(t *testing.T) {
 // ask -> test -> collect -> conclude, which is not the "canonical" order, and
 // must still count as complete.
 func TestCheckDoesNotEnforceOrder(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("h4", "结论\nissue: o/r\naction: conclude", 4),
 		mkCommit("h3", "采集\nissue: o/r\naction: collect", 3),
 		mkCommit("h2", "验证\nissue: o/r\naction: test", 2),
@@ -106,7 +106,7 @@ func TestCheckDoesNotEnforceOrder(t *testing.T) {
 }
 
 func TestCheckHonoursCustomVocabulary(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("g2", "收尾\nissue: x/y\naction: done", 2),
 		mkCommit("g1", "开始\nissue: x/y\naction: begin", 1),
 	}
@@ -122,7 +122,7 @@ func TestCheckHonoursCustomVocabulary(t *testing.T) {
 }
 
 func TestFilter(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("f1", "问题一\nissue: auth/token\naction: conclude\ndomain: auth\ntags: [security]", 3),
 		mkCommit("f2", "问题二\nissue: perf/slow\naction: ask\ndomain: perf\ntags: [performance]", 2),
 	}
@@ -151,7 +151,7 @@ func TestSummarize(t *testing.T) {
 
 // A cross-domain child is relocated under its parent and leaves its own block.
 func TestGroupByDomainRelocatesCrossDomainChild(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("k3", "子\nissue: child\naction: ask\ndomain: cli\nderived-from: parent", 3),
 		mkCommit("k2", "父\nissue: parent\naction: conclude\ndomain: design", 2),
 	}
@@ -170,7 +170,7 @@ func TestGroupByDomainRelocatesCrossDomainChild(t *testing.T) {
 
 // Relations between issues of the same domain must not nest.
 func TestGroupByDomainKeepsSameDomainFlat(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("m2", "二\nissue: second\naction: ask\ndomain: design\nspawns: first", 2),
 		mkCommit("m1", "一\nissue: first\naction: ask\ndomain: design", 1),
 	}
@@ -186,7 +186,7 @@ func TestGroupByDomainKeepsSameDomainFlat(t *testing.T) {
 }
 
 func TestGroupByDomainOrdersAndBucketsUndomained(t *testing.T) {
-	commits := []git.Commit{
+	commits := []vcs.Commit{
 		mkCommit("n3", "无域\nissue: zeta\naction: ask", 3),
 		mkCommit("n2", "域二\nissue: beta\naction: ask\ndomain: zzz", 2),
 		mkCommit("n1", "域一\nissue: alpha\naction: ask\ndomain: aaa", 1),

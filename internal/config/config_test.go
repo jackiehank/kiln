@@ -68,3 +68,19 @@ func TestLoadRejectsMalformedJSON(t *testing.T) {
 		t.Fatal("expected an error for malformed JSON")
 	}
 }
+
+func TestVCSDefaultsToAuto(t *testing.T) {
+	v, err := VCS(t.TempDir())
+	if err != nil || v != "auto" {
+		t.Fatalf("VCS = %q, %v; want auto", v, err)
+	}
+}
+
+func TestVCSReadsConfig(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, `{"vcs":"jj"}`)
+	v, err := VCS(dir)
+	if err != nil || v != "jj" {
+		t.Fatalf("VCS = %q, %v; want jj", v, err)
+	}
+}

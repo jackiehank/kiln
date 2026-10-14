@@ -11,9 +11,11 @@ import (
 
 	"kiln/internal/config"
 	"kiln/internal/engine"
-	"kiln/internal/git"
 	"kiln/internal/model"
 	"kiln/internal/trailer"
+	"kiln/internal/vcs"
+	"kiln/internal/vcs/git"
+	"kiln/internal/vcs/jj"
 )
 
 const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
@@ -116,14 +118,48 @@ func isWide(r rune) bool {
 	return false
 }
 
-// env carries the resolved action vocabulary, the git access and the output
-// streams. git is an interface so tests can substitute a fake instead of
-// touching a real repository.
+// env carries the resolved action vocabulary, the repository backend and the
+// output streams. The backend is an interface so tests can substitute a fake
+// instead of touching a real repository; it is opened lazily, so commands that
+// need no repo (do) still work outside one.
 type env struct {
 	actions *model.ActionSet
-	git     git.Runner
+	dir     string
+	vcsPref string
+	repo    vcs.Repo
 	out     io.Writer
 	errw    io.Writer
+}
+
+// backend returns the repository backend, opening it from dir/config on first
+// use and caching it. Tests inject one via repo.
+func (e *env) backend() (vcs.Repo, error) {
+	if e.repo != nil {
+		return e.repo, nil
+	}
+	r, err := openRepo(e.dir, e.vcsPref)
+	if err != nil {
+		return nil, err
+	}
+	e.repo = r
+	return r, nil
+}
+
+// openRepo picks a backend for dir. In auto mode jj wins over git: a colocated
+// workspace contains both .jj and .git, so reading through git would silently
+// miss jj's view.
+func openRepo(dir, prefer string) (vcs.Repo, error) {
+	kind, err := vcs.Detect(dir, prefer)
+	if err != nil {
+		return nil, err
+	}
+	switch kind {
+	case vcs.Git:
+		return git.ExecRunner{Dir: dir}, nil
+	case vcs.JJ:
+		return jj.ExecRunner{Dir: dir}, nil
+	}
+	return nil, fmt.Errorf("未知后端: %s", kind)
 }
 
 // Run executes one command and returns the process exit code.
@@ -149,7 +185,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "配置错误: %v\n", err)
 		return 1
 	}
-	e := &env{actions: actions, git: git.ExecRunner{Dir: "."}, out: stdout, errw: stderr}
+	pref, err := config.VCS(".")
+	if err != nil {
+		fmt.Fprintf(stderr, "配置错误: %v\n", err)
+		return 1
+	}
+	e := &env{actions: actions, dir: ".", vcsPref: pref, out: stdout, errw: stderr}
 	switch cmd {
 	case "do":
 		return e.write(rest, false)
@@ -264,7 +305,12 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprintln(e.out, msg)
 		return 0
 	}
-	if err := e.git.Commit(msg); err != nil {
+	backend, err := e.backend()
+	if err != nil {
+		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		return 1
+	}
+	if err := backend.Action(msg); err != nil {
 		fmt.Fprintf(e.errw, "提交失败: %v\n", err)
 		return 1
 	}
@@ -287,12 +333,17 @@ func (e *env) path(args []string) int {
 		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
 		return 1
 	}
+	backend, err := e.backend()
+	if err != nil {
+		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		return 1
+	}
 	mode := statMode(f)
 	fmt.Fprintf(e.out, "%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p))
 	for i, a := range p.Actions {
-		line := fmt.Sprintf("  %d. %s %s %s", i+1, pad(a.Kind, 12), pad(shortHash(a.Hash), 8), a.Subject)
+		line := fmt.Sprintf("  %d. %s %s %s", i+1, pad(a.Kind, 12), pad(shortID(a.ID), 8), a.Subject)
 		if mode == statShort {
-			stat, err := e.git.ShowStat(a.Hash, true)
+			stat, err := backend.ShowStat(a.ID, true)
 			if err != nil {
 				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
 				return 1
@@ -303,7 +354,7 @@ func (e *env) path(args []string) int {
 		}
 		fmt.Fprintln(e.out, line)
 		if mode == statBlock {
-			stat, err := e.git.ShowStat(a.Hash, false)
+			stat, err := backend.ShowStat(a.ID, false)
 			if err != nil {
 				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
 				return 1
@@ -351,16 +402,18 @@ func (e *env) show(args []string) int {
 	}
 	a := p.Actions[ordinal-1]
 	fmt.Fprintf(e.out, "%s · %d/%d %s · %s · %s\n\n",
-		p.ID, ordinal, len(p.Actions), a.Kind, shortHash(a.Hash), a.Subject)
+		p.ID, ordinal, len(p.Actions), a.Kind, shortID(a.ID), a.Subject)
 
-	var (
-		body string
-		err  error
-	)
+	backend, err := e.backend()
+	if err != nil {
+		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		return 1
+	}
+	var body string
 	if f.has("stat") {
-		body, err = e.git.ShowStat(a.Hash, false)
+		body, err = backend.ShowStat(a.ID, false)
 	} else {
-		body, err = e.git.Show(a.Hash)
+		body, err = backend.Show(a.ID)
 	}
 	if err != nil {
 		fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
@@ -536,7 +589,7 @@ func (e *env) check(args []string) int {
 		if verbose {
 			if p, ok := repo.Issues[d.Issue]; ok {
 				for _, a := range p.Actions {
-					fmt.Fprintf(e.out, "      %s %s\n", pad(a.Kind, 12), shortHash(a.Hash))
+					fmt.Fprintf(e.out, "      %s %s\n", pad(a.Kind, 12), shortID(a.ID))
 				}
 			}
 		}
@@ -589,9 +642,14 @@ func (e *env) graph(args []string) int {
 
 // loadRepo reads history and aggregates it; returns (nil, exitCode) on failure.
 func (e *env) loadRepo() (*model.Repo, int) {
-	commits, err := e.git.Log()
+	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "读取 git 历史失败: %v\n", err)
+		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		return nil, 1
+	}
+	commits, err := backend.Log()
+	if err != nil {
+		fmt.Fprintf(e.errw, "读取历史失败: %v\n", err)
 		return nil, 1
 	}
 	return engine.Build(engine.ActionsFromCommits(commits)), 0
@@ -644,9 +702,9 @@ func tagsSuffix(p *model.Issue) string {
 	return strings.Join(parts, " ")
 }
 
-func shortHash(h string) string {
-	if len(h) > 7 {
-		return h[:7]
+func shortID(id string) string {
+	if len(id) > 7 {
+		return id[:7]
 	}
-	return h
+	return id
 }
