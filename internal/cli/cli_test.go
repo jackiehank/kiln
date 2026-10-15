@@ -430,7 +430,7 @@ func TestWorkspaceNewReportsPath(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	got := out.String()
-	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity", "一次检出"} {
+	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity", "worktree 是一次性检出"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("workspace new missing %q:\n%s", want, got)
 		}

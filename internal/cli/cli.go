@@ -432,8 +432,9 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
 	// Project-neutral: an area is a bare checkout, whatever the project builds
 	// with. Making it usable is the project's own business, so the hint names no
-	// language, no path and no tool.
-	fmt.Fprintln(e.out, "提示: 区是一次检出——被忽略的构建产物与依赖不在其中，请自行 build / 装依赖")
+	// language, no path and no tool — and it uses the user-facing noun (worktree),
+	// not the internal shorthand.
+	fmt.Fprintln(e.out, "提示: worktree 是一次性检出——被忽略的构建产物与依赖不在其中，请自行 build / 装依赖")
 	if cfgPath, created, err := config.Ensure(e.dir); err != nil {
 		fmt.Fprintf(e.errw, "提示: 未能写入默认配置: %v\n", err)
 	} else if created {
