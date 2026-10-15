@@ -107,13 +107,43 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 	return parseWorktrees(out), nil
 }
 
+// AreaState reports what the linked worktree still holds. Both halves mirror
+// what RemoveWorkspace refuses on, so a listing and a removal can never disagree
+// about whether an area is safe to let go. The main checkout carries no issue's
+// work and a detached worktree names no branch, so both report nothing.
+func (r ExecRunner) AreaState(area vcs.WorkspaceInfo) (vcs.AreaState, error) {
+	if area.Main || area.Issue == "" {
+		return vcs.AreaState{}, nil
+	}
+	dirty, err := r.dirty(area.Path)
+	if err != nil {
+		return vcs.AreaState{}, err
+	}
+	merged, err := r.branchMerged(vcs.BranchPrefix + area.Issue)
+	if err != nil {
+		return vcs.AreaState{}, err
+	}
+	return vcs.AreaState{Dirty: dirty, Unmerged: !merged}, nil
+}
+
+// dirty reports whether the worktree at root still holds uncommitted or
+// untracked changes — the reading behind git's own refusal to drop a dirty
+// worktree.
+func (r ExecRunner) dirty(root string) (bool, error) {
+	out, err := r.runIn(root, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
 // RemoveWorkspace deletes the linked worktree bound to issue and the branch that
 // carried it. Both halves matter: a worktree removed while its kiln/<issue>
 // branch survives makes the next NewWorkspace trip over `-b`. "Still holds work"
-// has two halves too, and each is checked before anything is deleted — git
-// refuses a worktree with uncommitted changes on its own, and an unmerged branch
-// is refused here, because dropping the worktree first would strand it. force
-// loses both.
+// is read from AreaState — the same answer `worktree list` shows — and the check
+// comes before anything is deleted, because dropping the worktree first would
+// strand an unmerged branch. force loses both, and git's own dirty-worktree
+// refusal stays on as a backstop.
 func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	areas, err := r.ListWorkspaces()
 	if err != nil {
@@ -125,11 +155,14 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	}
 	branch := vcs.BranchPrefix + issue
 	if !force {
-		merged, err := r.branchMerged(branch)
+		state, err := r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: issue})
 		if err != nil {
 			return err
 		}
-		if !merged {
+		if state.Dirty {
+			return fmt.Errorf("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
+		}
+		if state.Unmerged {
 			return fmt.Errorf("分支 %s 还有未合并的提交（要丢弃请加 --force）", branch)
 		}
 	}
@@ -198,11 +231,14 @@ func parseWorktrees(out string) []vcs.WorkspaceInfo {
 	return areas
 }
 
-// run executes git with args and returns stdout; on failure the error carries
+// run executes git in the runner's own directory.
+func (r ExecRunner) run(args ...string) (string, error) { return r.runIn(r.Dir, args...) }
+
+// runIn executes git in dir and returns stdout; on failure the error carries
 // git's stderr so the caller can surface a useful message.
-func (r ExecRunner) run(args ...string) (string, error) {
+func (r ExecRunner) runIn(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
-	cmd.Dir = r.Dir
+	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

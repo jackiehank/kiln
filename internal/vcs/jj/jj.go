@@ -134,10 +134,26 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 	return areas, nil
 }
 
+// AreaState reports what the workspace still holds. Only the uncommitted half
+// exists on this backend: `workspace forget` asks no questions and loses no
+// commits — the workspace's commit stays in the repository — so there is no
+// unmerged-branch ground to refuse on. The main workspace reports nothing.
+func (r ExecRunner) AreaState(area vcs.WorkspaceInfo) (vcs.AreaState, error) {
+	if area.Main {
+		return vcs.AreaState{}, nil
+	}
+	dirty, err := r.hasChanges(area.Path)
+	if err != nil {
+		return vcs.AreaState{}, err
+	}
+	return vcs.AreaState{Dirty: dirty}, nil
+}
+
 // RemoveWorkspace forgets the workspace bound to issue and deletes its
 // directory. jj's `workspace forget` only unregisters the workspace — the files
 // stay on disk — and it asks no questions about them, so an area that still
-// holds changes is refused here and the directory is removed explicitly.
+// holds changes is refused here, on the ground AreaState already reports, and
+// the directory is removed explicitly.
 func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	areas, err := r.ListWorkspaces()
 	if err != nil {
@@ -148,11 +164,11 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 		return fmt.Errorf("没有 issue 为 %q 的 worktree", issue)
 	}
 	if !force {
-		changed, err := r.hasChanges(path)
+		state, err := r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: issue})
 		if err != nil {
 			return err
 		}
-		if changed {
+		if state.Dirty {
 			return fmt.Errorf("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
 		}
 	}

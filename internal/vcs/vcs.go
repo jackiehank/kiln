@@ -69,6 +69,14 @@ type WorkspaceInfo struct {
 	Main  bool   // the main checkout, which kiln keeps read/merge-only
 }
 
+// AreaState is what an area still holds: the two reasons a backend refuses to
+// drop it without force, and nothing else. A listing and a removal read this one
+// answer, so they can never disagree about whether an area is safe to let go.
+type AreaState struct {
+	Dirty    bool // the area holds uncommitted or untracked changes
+	Unmerged bool // its commits are not reachable from the main checkout
+}
+
 // Workspace is the working-area surface, implemented by backends that can
 // isolate one area per issue. It is separate from Repo so a backend may serve
 // reads and writes without offering isolation.
@@ -81,9 +89,14 @@ type Workspace interface {
 	NewWorkspace(issue string) (string, error)
 	// ListWorkspaces lists every known area, the main checkout first.
 	ListWorkspaces() ([]WorkspaceInfo, error)
+	// AreaState reports what an area still holds, in exactly the terms
+	// RemoveWorkspace refuses on. main is not a dedicated area and holds no
+	// issue's work, so it reports the zero value.
+	AreaState(area WorkspaceInfo) (AreaState, error)
 	// RemoveWorkspace deletes the dedicated area bound to issue. force lets an
 	// area that still holds work go — uncommitted changes, or a branch that was
-	// never merged; without it a backend refuses rather than losing work.
+	// never merged; without it a backend refuses rather than losing work, on the
+	// grounds AreaState already reports.
 	RemoveWorkspace(issue string, force bool) error
 }
 

@@ -1,6 +1,53 @@
 package git
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"kiln/internal/vcs"
+)
+
+// gitRun runs git in dir and fails the test with its combined output on error.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// commit records a commit in dir under a throwaway identity.
+func commit(t *testing.T, dir, msg string) {
+	t.Helper()
+	gitRun(t, dir, "-c", "user.name=kiln", "-c", "user.email=kiln@example.com", "commit", "-qm", msg)
+}
+
+// write puts body at root/rel, creating parent directories first.
+func write(t *testing.T, root, rel, body string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newRepo makes a repository with one commit, so a worktree has something to
+// branch from, and returns its root.
+func newRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	gitRun(t, root, "init", "-q")
+	write(t, root, "a.txt", "a")
+	gitRun(t, root, "add", "a.txt")
+	commit(t, root, "init")
+	return root
+}
 
 // `git worktree list --porcelain` records are blank-line separated; the first
 // one is the main checkout, and only a kiln/<issue> branch carries an issue.
@@ -26,5 +73,72 @@ func TestParseWorktreesReadsAreas(t *testing.T) {
 func TestParseWorktreesIgnoresEmptyOutput(t *testing.T) {
 	if got := parseWorktrees("\n\n"); len(got) != 0 {
 		t.Fatalf("got %d areas, want 0", len(got))
+	}
+}
+
+// `AreaState` and `RemoveWorkspace` answer the same question — is this area safe
+// to drop? — so a listing can never call an area safe while the removal refuses
+// it. One area per ground: nothing held, uncommitted work, work main never took.
+func TestAreaStateMatchesWhyRemoveRefuses(t *testing.T) {
+	r := ExecRunner{Dir: newRepo(t)}
+
+	// Nothing held: the state is empty, and the removal goes through.
+	path, err := r.NewWorkspace("clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: "clean"}); err != nil || got != (vcs.AreaState{}) {
+		t.Fatalf("clean area state = %+v, %v; want the zero value", got, err)
+	}
+	if err := r.RemoveWorkspace("clean", false); err != nil {
+		t.Fatalf("a clean, merged area must be removable: %v", err)
+	}
+
+	// Uncommitted work is one ground: remove refuses, --force loses it.
+	path, err = r.NewWorkspace("dirty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, "b.txt", "b")
+	got, err := r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: "dirty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Dirty || got.Unmerged {
+		t.Fatalf("dirty area state = %+v; want Dirty alone", got)
+	}
+	if err := r.RemoveWorkspace("dirty", false); err == nil {
+		t.Fatal("remove must refuse an area that still holds uncommitted changes")
+	}
+	if err := r.RemoveWorkspace("dirty", true); err != nil {
+		t.Fatalf("--force must drop it: %v", err)
+	}
+
+	// A commit main never took is the other ground, and it stands alone: the area
+	// itself is clean, so only the branch can refuse.
+	path, err = r.NewWorkspace("unmerged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, "c.txt", "c")
+	gitRun(t, path, "add", "c.txt")
+	commit(t, path, "work")
+	got, err = r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: "unmerged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Dirty || !got.Unmerged {
+		t.Fatalf("unmerged area state = %+v; want Unmerged alone", got)
+	}
+	if err := r.RemoveWorkspace("unmerged", false); err == nil {
+		t.Fatal("remove must refuse a branch that was never merged")
+	}
+	if err := r.RemoveWorkspace("unmerged", true); err != nil {
+		t.Fatalf("--force must drop it: %v", err)
+	}
+
+	// The main checkout holds no issue's work, so it reports nothing.
+	if got, err := r.AreaState(vcs.WorkspaceInfo{Main: true}); err != nil || got != (vcs.AreaState{}) {
+		t.Fatalf("main state = %+v, %v; want the zero value", got, err)
 	}
 }

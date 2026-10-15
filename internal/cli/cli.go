@@ -53,7 +53,7 @@ var usageCommands = [][2]string{
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii]", "问题关系图"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
-	{"kiln worktree list", "列出全部 worktree（含 main）"},
+	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 }
@@ -501,23 +501,59 @@ func (e *env) config(args []string) int {
 	return 0
 }
 
-// workspaceList prints every working area, main first, aligned by path width.
+// workspaceList prints every working area, main first, aligned by path and role
+// width, each row ending in what that area still holds. The state is asked of
+// the backend for every area: the column exists to be trusted, so it is never
+// left to a flag the caller might forget.
 func (e *env) workspaceList(ws vcs.Workspace) int {
 	areas, err := ws.ListWorkspaces()
 	if err != nil {
 		fmt.Fprintf(e.errw, "读取 worktree 失败: %v\n", err)
 		return 1
 	}
-	width := 0
+	states := make([]vcs.AreaState, len(areas))
+	for i, a := range areas {
+		state, err := ws.AreaState(a)
+		if err != nil {
+			fmt.Fprintf(e.errw, "读取 worktree 状态失败: %v\n", err)
+			return 1
+		}
+		states[i] = state
+	}
+	pathWidth, roleWidth := 0, 0
 	for _, a := range areas {
-		if w := displayWidth(a.Path); w > width {
-			width = w
+		if w := displayWidth(a.Path); w > pathWidth {
+			pathWidth = w
+		}
+		if w := displayWidth(areaRole(a)); w > roleWidth {
+			roleWidth = w
 		}
 	}
-	for _, a := range areas {
-		fmt.Fprintf(e.out, "%s  %s\n", pad(a.Path, width), areaRole(a))
+	for i, a := range areas {
+		fmt.Fprintf(e.out, "%s  %s  %s\n",
+			pad(a.Path, pathWidth), pad(areaRole(a), roleWidth), areaStateWord(a, states[i]))
 	}
 	return 0
+}
+
+// areaStateWord renders what an area still holds, in the words `remove` refuses
+// in. main is not a dedicated area, so it reports nothing: it shows a dash
+// rather than claiming to be clean.
+func areaStateWord(a vcs.WorkspaceInfo, s vcs.AreaState) string {
+	if a.Main {
+		return "—"
+	}
+	var parts []string
+	if s.Dirty {
+		parts = append(parts, "有改动")
+	}
+	if s.Unmerged {
+		parts = append(parts, "未合并")
+	}
+	if len(parts) == 0 {
+		return "干净"
+	}
+	return strings.Join(parts, "，")
 }
 
 // workspaceRemove deletes the dedicated area bound to an issue. The name is the

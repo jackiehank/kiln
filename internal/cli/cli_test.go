@@ -338,6 +338,7 @@ type workspaceRunner struct {
 	fakeRunner
 	dedicated bool
 	areas     []vcs.WorkspaceInfo
+	state     vcs.AreaState // what every dedicated area still holds
 }
 
 func (w workspaceRunner) IsDedicated() (bool, error) { return w.dedicated, nil }
@@ -345,7 +346,13 @@ func (w workspaceRunner) NewWorkspace(issue string) (string, error) {
 	return "/ws/repo--" + issue, nil
 }
 func (w workspaceRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) { return w.areas, nil }
-func (w workspaceRunner) RemoveWorkspace(string, bool) error           { return nil }
+func (w workspaceRunner) AreaState(area vcs.WorkspaceInfo) (vcs.AreaState, error) {
+	if area.Main {
+		return vcs.AreaState{}, nil
+	}
+	return w.state, nil
+}
+func (w workspaceRunner) RemoveWorkspace(string, bool) error { return nil }
 
 // newWorkspaceEnv builds an env whose backend reports the given layout.
 func newWorkspaceEnv(out, errw *bytes.Buffer, dedicated bool) *env {
@@ -419,6 +426,97 @@ func TestWorkspaceListLabelsAreas(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("workspace list missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// `worktree list` ends every row with what that area still holds — the same
+// judgment `remove` refuses on, so the column and the refusal can never differ.
+func TestWorktreeListShowsAreaState(t *testing.T) {
+	cases := []struct {
+		name  string
+		state vcs.AreaState
+		want  string
+	}{
+		{"clean", vcs.AreaState{}, "干净"},
+		{"dirty", vcs.AreaState{Dirty: true}, "有改动"},
+		{"unmerged", vcs.AreaState{Unmerged: true}, "未合并"},
+		{"dirty and unmerged", vcs.AreaState{Dirty: true, Unmerged: true}, "有改动，未合并"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			e := &env{
+				actions: model.DefaultActionSet(),
+				repo: workspaceRunner{state: tc.state, areas: []vcs.WorkspaceInfo{
+					{Path: "C:/w/kiln", Main: true},
+					{Path: "C:/w/kiln--t1", Issue: "t1"},
+				}},
+				out: &out, errw: &errb,
+			}
+			if code := e.workspace([]string{"list"}); code != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("worktree list missing %q:\n%s", tc.want, out.String())
+			}
+		})
+	}
+}
+
+// main is not a dedicated area, so its row reports nothing rather than claiming
+// to be clean — the column only ever speaks about an issue's work.
+func TestWorktreeListLeavesMainUnjudged(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: workspaceRunner{areas: []vcs.WorkspaceInfo{
+			{Path: "C:/w/kiln", Main: true},
+			{Path: "C:/w/kiln--t1", Issue: "t1"},
+		}},
+		out: &out, errw: &errb,
+	}
+	if code := e.workspace([]string{"list"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.Contains(line, "main（只读/只合并）") {
+			continue
+		}
+		if !strings.HasSuffix(line, "—") {
+			t.Fatalf("the main row must report no state: %q", line)
+		}
+		if strings.Contains(line, "干净") {
+			t.Fatalf("main must not be called clean: %q", line)
+		}
+		return
+	}
+	t.Fatalf("no main row in:\n%s", out.String())
+}
+
+// brokenStateRunner cannot answer "what does this area hold".
+type brokenStateRunner struct{ workspaceRunner }
+
+func (brokenStateRunner) AreaState(vcs.WorkspaceInfo) (vcs.AreaState, error) {
+	return vcs.AreaState{}, fmt.Errorf("读取失败")
+}
+
+// A backend that cannot answer must fail the command: a silently missing state
+// would be read as "safe to drop".
+func TestWorktreeListFailsWhenStateIsUnknown(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: brokenStateRunner{workspaceRunner{areas: []vcs.WorkspaceInfo{
+			{Path: "C:/w/kiln", Main: true},
+			{Path: "C:/w/kiln--t1", Issue: "t1"},
+		}}},
+		out: &out, errw: &errb,
+	}
+	if code := e.workspace([]string{"list"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr = %q)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "状态") {
+		t.Fatalf("stderr = %q, want it to name the failed state read", errb.String())
 	}
 }
 
