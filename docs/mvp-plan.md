@@ -311,6 +311,7 @@ kiln/
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - 机器可读输出**已落地（三个命令）**：`status` / `list` / `check` 的 `--json` —— 顶层一个对象、`status` 平铺成一层行、`check` 用 `rule` 码说话且 `ok` 与退出码同义；`path` / `show` / `worktree list` 与 `--toon` 仍待定（原「`kiln check --format=json`：CI 集成与 PR 评论」并入此问）——见 [docs/machine-readable-output.md](machine-readable-output.md)
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
+- 帮助文本必须**自足**：`kiln -h` 现有两处"见某文档"——配置行引 `docs/mvp-plan.md §2.3`、`--json` 行引 `docs/machine-readable-output.md`。**kiln 要作为独立工具分发**，帮助离开本仓库也得读得懂，所以不该出现仓库内的文档路径；清掉后加测试锁住（`-h` 里不许再出现 `docs/` 或 `.md`）
 - 封装为 MCP server：把结构化工具暴露给 Agent，彻底避免其拼 CLI
 - 标量 flag 的值**以 `--` 开头时被静默吞掉**：[parse](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L263-L283) 只在下一个 token **不以** `--` 开头时才把它当值，于是 `--scope "--json 布尔 flag（…）"` 取到空值、那个值本身又被当成新 flag 再解析一遍（`--key=value` 是当前唯一可行的写法）。后果分三级：标量 trailer 空值被 [writeScalar](file:///c:/Users/jacki/kiln/internal/trailer/trailer.go#L151-L156) 跳过——**连报错都没有**；`--title` 若被吞，`Format` 连头行都不写，提交的第一行会变成 `issue: …`（`git log --oneline` 与 PR 标题跟着错）；列表 flag 被吞则叠加 `refs-empty-value` 的"空值跳过"，损失从"看着难看"变成**静默**。待定：`--scope` 缺值就**显式报错**（别猜），还是把下一个 token **无条件当值**（那就得放弃用空格分隔多个 flag 的写法）
 
