@@ -31,3 +31,15 @@ kiln 的开发**基本完善**，也已经**不再是 MVP 阶段**：命令面�
 - **不把 `mvp-plan.md` 搬进 README**（规格仍是唯一权威）。
 - **不做变更日志 / 路线图**（那是 `docs/` 里 issue 的事）。
 - **不改代码、不改命令面**——纯文档。
+
+## apply：落地
+
+- **[README.md](../README.md) 写出来了**（13 节 / 233 行）：定位 → 安装 → 五分钟上手 → 命令一览 → 动作词表 → trailer 规范 → 配置 → 工作区模式 → 后端差异 → `check` → 与 agent 协作 → 它不做什么 → 已知边界 → 延伸阅读。
+- **只写当前态**：命令面照**今天的** `kiln -h` 写（`worktree new|list|remove`、`config path`、`show`、`worktree list` 的状态列），不带历史命令名与"待办"语气。
+- **如实标边界**（「已知边界」一节）：`graph` 未渲染 `blocks` / `supersedes`、`part-of` 未落地、`remove` 清不掉"目录已删"的区、`--adopt` 未做——各给出处（如 [docs/relation-rendering.md](relation-rendering.md)）。使用手册不替未落地的事背书。
+- **分工照旧**：README = 使用手册（**怎么做**）；`mvp-plan.md` = 规格（**约定与理由**）；`docs/<issue>.md` = 设计记录（**为什么长成这样**）。
+- **顺带把一条说法变成了实测**：本轮开题提交里那个 `docs/readme.md` **没有 `git add`**，jj 后端把它整个工作副本固定进了提交（`git show --stat` 里是 `docs/readme.md | 33 +`）。README「后端」一节里"jj 不需要暂存"由此不是转述。
+
+### 非目标（重申）
+
+- 不搬 `mvp-plan.md` 进 README；**不做英文版**（要则另开 issue）。
