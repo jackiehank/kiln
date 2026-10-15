@@ -1,6 +1,6 @@
 # issue: worktree-mode — 要不要把「开不开工作区（worktree）模式」做成配置项
 
-- **状态**：test（进行中）
+- **状态**：已完成（conclude）
 - **domain**：design
 
 ## 背景
@@ -437,3 +437,51 @@ $ kiln worktree remove t1
 
 - **`main` 而非「主干」**：与 `worktree` 同源的英文术语，且 `git worktree list` 的第一行就是主检出；中文散文里继续可用"主干"。
 - **别名一并消失**：`workspace`（命令）已硬切，`专用区` / `主干` 这两个**中文别名**也在用户可见面消失——**一个概念，一个词**。
+
+## 结论（已定）
+
+**定了：加顶层 `worktree` 开关（字符串 `"on" | "off"`，缺省 `"on"`）；命令面统一为 `kiln worktree`（`new` / `list` / `remove`）；`--force` 定义为一次性豁免。关闭后 main 可直接提交，不拒绝、也不提示。**
+
+### 1. 逐条裁定
+
+| 问题 | 结论 | 依据 |
+| --- | --- | --- |
+| **要不要做** | **做**（否 A「恒开」）；形态取**两态** | 主流已把「隔离默认开 + 显式可关」做进项目设置（Claude Code `worktree.bgIsolation`）；A 不是行业共识，且让"就在 main 干"的仓库每次手记 `--force` |
+| **语义强度** | 关闭 = **允许在 main 提交**；**不打提示** | 用户定两态；collect 里的 `warn` 档（ESLint / rustc）**明确不采纳**（见遗留 6） |
+| **键名 / 位置** | **顶层 `worktree`（P）**，与 `vcs` 平级 | 键名有直接先例（`worktree.*`）；先平铺单键，将来长出 `worktree.baseRef` 一类子项再收成组（collect 的 R 留作扩展点） |
+| **取值** | **字符串 `"on" \| "off"`**，缺省 `"on"` | 对齐 `vcs` 的字符串风格；**不用布尔**——将来加档不必改类型（破坏性） |
+| **与 `--force` 的关系** | **互补**：配置管默认强度、`--force` 管当次豁免 | 两者从不互相改写状态；`"off"` 时 `--force` 仍接受、无副作用（幂等） |
+| **默认值** | **`"on"`（隔离默认开）** | 与 `bgIsolation: "worktree"` 一致；拦的是「污染 / 归属错乱」这类**静默正确性故障**——正是"默认安全"该开的地方，行业"宽松默认"的惯例在此不适用 |
+| **作用域** | 只管 **`commit` 的护栏** | `worktree new` 能力**保留**（想隔离的人仍可隔离，只是不再强制）；播种与 `status` 呈现不受影响 |
+| **后端一致** | git 与 jj **同语义**（`on` 即拒 main 提交），**判定各写各的** | 判定机制本就不同（`.git` 是文件否 vs jj 非 `default` 工作区）；语义对齐由配置层收口 |
+| **旧命令名** | **硬切、不留别名**（`workspace` → 未知命令 exit 2） | 与 `.kiln.json` → `.kilnconfig.jsonc` 的硬切取向一致，避免两套语汇长期并存 |
+| **命令集** | `new` / `list` / **`remove`** 三件套 | 收尾不再退回后端方言（`git worktree remove` + `branch -d` / `jj workspace forget` + 删目录） |
+
+### 2. 留下的不变式
+
+**`worktree` 是这个仓的「默认护栏强度」，`--force` 是它的「当次出口」——一条管默认、一条管例外，谁也不改写谁。**
+
+推论有三：① `"off"` 只是"允许"，不是"取消隔离能力"——建区命令照旧；② 护栏强度**随仓库、随版本**（写在 `.kilnconfig.jsonc`），不是命令行开关；③ kiln 拦的是**静默正确性故障**，故"默认开"站得住。
+
+### 3. 落地物
+
+- **配置**：[internal/config](../internal/config/)——顶层 `worktree`（`file.Worktree` / `Config.Worktree`）；归一化容忍空白与大小写并**严格校验**（非法值报错）；`Config.Isolated()` 取「非 `off` 即隔离」（零值 = 默认开）；`defaultFile` 播种内容把 `actions` / `vcs` / `worktree` **全部列出**（声明式：读一眼即知配置状态）。
+- **CLI**：[internal/cli/cli.go](../internal/cli/cli.go)——`refuseInMain` 先看 `e.isolated()`，`"off"` 直接放行；`--force` 仍是当次豁免；命令面 `workspace` → `worktree`（`new` / `list` / `remove`、用法、拒绝文案、旧名引导一律改口）；`-h` 增 `worktree 默认: on（强制 worktree）| off（允许在 main 提交）`。
+- **后端**：[internal/vcs](../internal/vcs/)——`vcs.Workspace` 增 `RemoveWorkspace(issue, force)`：git = `worktree remove` **且** `branch -d / -D kiln/<issue>`（未合并检查**前置**，避免把未合并分支搁浅）；jj = `workspace forget` **且** `os.RemoveAll`（实测 `forget` 只注销、不删目录）并查 `jj -R <区> diff --summary` 判脏。
+- **仓库自己**：`.kilnconfig.jsonc` 显式写 `"worktree": "on"`；`.gitattributes`（`* text=auto eol=lf`）让新区检出直接是 LF，免去每轮行尾归一化。
+- **文档**：本文件；[docs/mvp-plan.md](mvp-plan.md) §2.3 配置示例与 §10「已落地」条目。
+- **测试**：`config` 新键的解析 / 缺省 / 非法值 + 播种含键；`cli` 的 `worktree ∈ {on, off}` × `--force ∈ {有, 无}`、用法只提 `worktree`、旧名 exit 2、`worktree remove` 三例。`gofmt -l` 空、`go vet` / `go test ./...` 全绿。
+
+### 4. 本次一并裁定的两处留白
+
+1. **`worktree new` 的提示不指向 `.worktreeinclude`**（用户裁定）。理由：那句话管**层②③**（依赖 / 构建产物，"请自行 build / 装依赖"），清单管**层①**（被忽略的本地小文件，已由播种自动处理）——并进一句会糊掉 `worktree-include` 立的分层；且清单不存在时指向一个不存在的文件是噪音（清单存在时，播种行已自报文件名）。**重启条件**：若清单成为普遍必读项（如将来默认生成一份），再考虑指向。
+2. **历史文档里的旧命令名不改写**：`cli-necessity` / `config-home` / `worktree-include` 等文档里的 `kiln workspace …` 是**当时的真实记录**，保留原样；**living spec（`docs/mvp-plan.md`）已更新为新名**。代价是读者可能在旧文里撞见已废弃的命令名——由 `retiredCommands` 的旧名引导（`未知命令: workspace（已改名为 worktree）`）在**运行期**兜住。
+
+### 5. 遗留（未做；若要做，另开 issue，不拖住本结论）
+
+1. **`kiln worktree land <issue>`**——在 main 一步收尾（干净检查 → `merge` → `remove`），消掉收尾的**顺序敏感**（顺序反了会搁浅未合并分支）。
+2. **`worktree list` 增状态列**（干净 / 有改动 / 分支未合并）——现在"哪个区能安全删"只在 `remove` 被拒时才暴露。
+3. **`kiln commit` 在 git 后端先检查暂存并明说**（或加 `--all`）——git 提交前必须 `git add -A`（jj 不需要），忘了就 "nothing to commit"。
+4. **`kiln commit --in <area>`**（免 `cd`）——治跨目录 `cwd` 管理。
+5. **`worktree new --adopt`**（搬未提交改动）——`cli-necessity` 提过、一直未落地，是**独立缺口**（与 `.worktreeinclude` 的层①严格两件事）。
+6. **`warn` 中间档**——重启条件：出现"只想提示、不想拦截"的真实需求时再议；届时取值是可扩展的字符串，不必改类型。
