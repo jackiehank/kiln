@@ -133,3 +133,44 @@ jj 把"未提交改动"就当成**一条提交**（工作副本 `@`），于是�
 > **厂商文档**：[git-worktree（REFS：`refs/` 跨 worktree 共享）](https://git-scm.com/docs/git-worktree) ｜ [git-stash（`-u` / `-a`）](https://git-scm.com/docs/git-stash) ｜ [Claude Code：worktrees](https://code.claude.com/docs/en/worktrees) ｜ [JetBrains：Use Git worktrees](https://www.jetbrains.com/help/idea/use-git-worktrees.html)。
 > **第三方（已逐源核对）**：[gwt（`switch --carry` 的源码与实现）](https://raw.githubusercontent.com/omerhadari/gwt/main/gwt)。
 > **二手 / 未逐字复核**（标注类型）：VS Code"worktree 不含未提交改动"那句话的原文（[delegate-two-tasks](https://code.visualstudio.com/docs/agents/guides/delegate-two-tasks)）、Codex 侧"not found"——均由调研代理报告。
+
+## 结论（已定）
+
+**定了：不做（方案 A）。`--adopt` 不做——真正的痛点是「agent 得知约束的时机太晚」，不是「改动搬不动」。接力的是只给提示与配方、零机制的方案 C，落在新 issue `worktree-hint`。**
+
+### 1. 逐条裁定（对 ask 的 7 个问题）
+
+| # | 问题 | 结论 |
+| --- | --- | --- |
+| **1** | **有没有必要做**（唯一前置） | **不做**。理由见 §2：三条零机制出路够用，且 collect 证明**厂商没把这个做成功能**（唯一一例是第三方 `gwt switch --carry`） |
+| 2–7 | 搬什么 / 方向与前提 / 冲突 / 两后端 / 形态 / 回滚 | **随问题 1 一并作废**——不做，就不必定这些。但 §3 把实测结论留档，因为它们**直接变成"配方"** |
+
+### 2. 为什么不做（用户重新框定 + collect 材料）
+
+**痛点的根因是"发现时机"，不是"搬运机制"**：
+
+> 用户：*"这个问题的起因是用户设置了 worktree 为 on 时，agent 不开 worktree 直接编辑，提交时才发现。"*
+
+- 即：**agent 动手前不知道约束**（或不知道），等到 `kiln commit` 被护栏拒绝，工作**已经做在 main 上**了。
+- "把改动搬进区"只是**事后补救**的一种，而它要引一整套**迁移 + 冲突 + 回滚**语义（问题 2–7）——**为一个"本不该发生"的场景加机制**。
+- 对照之下，**三条零机制出路**已在：① 当次 `--force`；② 手工 `stash` 两步；③ 改得少就重做。加之 collect 的结论：**主流工具一律不代管未提交状态**——"做"没有行业先例可当理由。
+- → 值得做的是**把约束提前说清**（提示 / 配方），而不是代跑迁移。
+
+### 3. 留档：实测出来的两条"配方"
+
+不做 `--adopt` ≠ 这些白测了——它们正是"提示"要说清的东西：
+
+| 后端 | 把 main 的未提交改动搬到新区 | **要避开的错法** |
+| --- | --- | --- |
+| **git** | `git stash -u`（未跟踪也要）→ `kiln worktree new <issue>` → 进区 `git stash pop` | **先建区再想搬**——新区是**干净检出**，改动会**晾在 main**；而 stash 一旦 pop 出去就**不可逆** |
+| **jj** | `kiln worktree new <issue>`（底层 `-r @`）→ 主干 `jj edit @-` | **`jj restore`**：会改写 main 的 `@` → **级联 rebase 把新区连坐**，而且现场用 **stale 的假象**骗你（磁盘上看着还在，`update-stale` 之后已没了） |
+
+两条都是**后端级**配方（不是项目级做法），与 `worktree-mode` test（三续）立的「工具中立」不冲突。
+
+### 4. 接力：新 issue `worktree-hint`
+
+"提示 / 配方"交给 [docs/worktree-hint.md](worktree-hint.md)（`derived-from worktree-adopt`）：**第一问就是这句提示落在哪个调用点**，并带上四条硬约束（只进 stderr / exit code 不变 / 按后端分派 / 诚实标注边界）。
+
+### 5. README 同步
+
+`README.md`「已知边界」那条原写作「新区的未提交改动**不会**被搬过去（`--adopt` 未做）」——**读起来像 TODO**。已改成"**刻意为之，不是待办**"，并给出两条手工出路。
