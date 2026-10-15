@@ -30,16 +30,6 @@ func TestParseLogSkipsEmptyRecords(t *testing.T) {
 	}
 }
 
-func TestLastLine(t *testing.T) {
-	in := "a.md | 1 +\n1 file changed, 1 insertion(+), 0 deletions(-)\n"
-	if got := lastLine(in); got != "1 file changed, 1 insertion(+), 0 deletions(-)" {
-		t.Fatalf("lastLine = %q", got)
-	}
-	if got := lastLine("\n\n"); got != "" {
-		t.Fatalf("lastLine of blanks = %q", got)
-	}
-}
-
 // `jj workspace list -T` yields name/root records. The "default" workspace is
 // the main checkout; every other one is dedicated and named after its issue.
 func TestParseWorkspacesReadsNameAndRoot(t *testing.T) {

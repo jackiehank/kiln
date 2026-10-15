@@ -265,7 +265,8 @@ func parseWorktrees(out string) []vcs.WorkspaceInfo {
 func (r ExecRunner) run(args ...string) (string, error) { return r.runIn(r.Dir, args...) }
 
 // runIn executes git in dir and returns stdout; on failure the error carries
-// git's stderr so the caller can surface a useful message.
+// git's own explanation: stderr when it wrote one, else the last line of stdout
+// (some failures, "nothing staged" above all, are advice printed there).
 func (r ExecRunner) runIn(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -274,6 +275,9 @@ func (r ExecRunner) runIn(dir string, args ...string) (string, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = vcs.LastNonEmptyLine(stdout.String())
+		}
 		if msg == "" {
 			msg = err.Error()
 		}

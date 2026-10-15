@@ -4,10 +4,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"kiln/internal/vcs"
 )
+
+// A failed commit must report *why*, and git puts several reasons on stdout
+// ("nothing staged" above all). Reporting the first line would answer "On branch
+// master" to the question "why did this fail?" — so the contract is the last
+// line, which is where git puts the conclusion and the hint.
+func TestActionReportsGitsReason(t *testing.T) {
+	dir := newRepo(t) // clean tree: nothing staged
+	_, err := ExecRunner{Dir: dir}.Action("issue: x\naction: ask")
+	if err == nil {
+		t.Fatal("committing with nothing staged must fail")
+	}
+	if !strings.Contains(err.Error(), "nothing to commit") {
+		t.Fatalf("error must carry git's reason, got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "On branch") {
+		t.Fatalf("error must not report the context line, got %q", err.Error())
+	}
+}
 
 // gitRun runs git in dir and fails the test with its combined output on error.
 func gitRun(t *testing.T, dir string, args ...string) {

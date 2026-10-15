@@ -16,6 +16,21 @@ func mkdir(t *testing.T, dir, name string) {
 	}
 }
 
+// A failed command's output becomes the error text; the line that answers "why"
+// is the last non-blank one, because tools print context first and conclusion
+// last ("On branch master" … "no changes added to commit").
+func TestLastNonEmptyLineTakesTheConclusion(t *testing.T) {
+	out := "On branch master\nChanges not staged for commit:\n  (use \"git add <file>...\")\n\nno changes added to commit (use \"git add\")\n\n"
+	if got := LastNonEmptyLine(out); got != `no changes added to commit (use "git add")` {
+		t.Fatalf("LastNonEmptyLine = %q", got)
+	}
+	for _, empty := range []string{"", "\n", "   \n\t\n"} {
+		if got := LastNonEmptyLine(empty); got != "" {
+			t.Fatalf("LastNonEmptyLine(%q) = %q, want empty", empty, got)
+		}
+	}
+}
+
 // In a colocated jj workspace both markers exist; jj must win, or kiln would
 // silently read git's view and miss jj.
 func TestDetectAutoPrefersJJ(t *testing.T) {

@@ -29,6 +29,24 @@ type Commit struct {
 	Message string
 }
 
+// LastNonEmptyLine returns the last line of out that is not blank.
+//
+// It exists for one job: turning a failed command's output into a one-line error.
+// A backend writes the *reason* for a failure to stderr, but several failures
+// ("nothing staged" above all) are advice on stdout — and that advice is shaped
+// context-first, conclusion-last, so the line worth reporting is the final one
+// (`no changes added to commit (use "git add" ...)`) rather than the opening
+// (`On branch master`).
+func LastNonEmptyLine(out string) string {
+	lines := strings.Split(strings.TrimRight(out, "\r\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(lines[i]); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // Repo is the version-control-agnostic surface kiln needs. Implementations
 // shell out to a specific tool; the engine never touches exec.
 type Repo interface {

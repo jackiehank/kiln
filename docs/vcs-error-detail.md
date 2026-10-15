@@ -49,3 +49,60 @@ Changes not staged for commit:
 ## 验证方式（待 `test`）
 
 一条真仓测试：干净仓库里 `commit` 且无暂存 → 错误串里应当出现 git 的解释（如 `not staged`），而不只是 `exit status 1`。
+
+## test：先按 A 的字面版跑了真沙盒——**首行被输出否决，改用末行**
+
+> 用户要求：先按 A 方案（三级兜底 + 取**首行**非空）跑一次，看它会输出什么。
+
+### 1. A 的字面版：输出是残废的
+
+沙盒（`/tmp/kiln-sandbox`，改了 `demo.md` 但没 `git add`）：
+
+```
+$ kiln commit demo test --title "没暂存"
+提交失败: git commit: On branch master        ← 给了上下文，没给原因
+```
+
+对照 git 自己的完整说明（它在 **stdout**）：
+
+```
+On branch master
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  ...
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+→ **git 的建议是“上下文在前、结论在后”**，首行恰好是最没用的一行。 这就是“先跑一次看输出”的价值：纯靠推理会把 A 当成对的。
+
+### 2. 定稿规则（A′：只把“首行”改成“末行”）
+
+- `stderr` 有内容 → 照旧用整段（常见路径；`fatal:` 一类错误通常就一行）；
+- `stderr` 为空 → 退到 stdout 的**最后一个非空行**；
+- 两者皆空 → `err.Error()`。
+
+同场景输出：
+
+```
+$ kiln commit demo test --title "没暂存"
+提交失败: git commit: no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+一行里同时给了**原因**与**修法**。
+
+### 3. 实现时发现的重复，并已收拢
+
+写这个兜底时发现 [`jj`](../internal/vcs/jj/jj.go) **早就有**一个一模一样的 `lastLine`（给 `ShowStat` 取单行 stat 用）。于是没有新增两份，而是：
+
+- 新增 [`vcs.LastNonEmptyLine`](../internal/vcs/vcs.go) 作为**唯一实现**，两个适配器都用它；
+- jj 侧删掉本地 `lastLine`（`ShowStat` 改调共用版），并删掉它的 `TestLastLine`——覆盖范围已由 `vcs_test.go` 的新测试接手（同一场景 + 空输入）。
+
+### 4. 验证
+
+- 新增单测：`TestLastNonEmptyLineTakesTheConclusion`（vcs：取末行 + 空/空白输入）与 `TestActionReportsGitsReason`（真仓：干净仓 `commit` 无暂存 → 错误串含 `nothing to commit`，且**不含** `On branch`）。
+- `gofmt -l` 空、`go vet ./...` 空、`go test ./...` **全绿**。
+- 真机输出：上文两条（字面版 vs 末行版）。
+
+### 5. 候选 B / C 为何不需要
+
+末行已经能一行说清“原因 + 修法”，所以 **B（带全文）**的多行污染不需要付；**C（按命令名特判）**的脆性也不需要（兜底逻辑与命令无关）。

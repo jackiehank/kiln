@@ -71,7 +71,7 @@ func (r ExecRunner) ShowStat(id string, short bool) (string, error) {
 		return "", err
 	}
 	if short {
-		return lastLine(out), nil
+		return vcs.LastNonEmptyLine(out), nil
 	}
 	return out, nil
 }
@@ -239,6 +239,8 @@ func parseWorkspaces(out string) []vcs.WorkspaceInfo {
 
 // run executes jj with args and returns stdout; on failure the error carries
 // jj's stderr so the caller can surface a useful message.
+// run executes jj in Dir; on failure the error carries jj's own explanation:
+// stderr when it wrote one, else the last line of stdout.
 func (r ExecRunner) run(args ...string) (string, error) {
 	cmd := exec.Command("jj", args...)
 	cmd.Dir = r.Dir
@@ -247,6 +249,9 @@ func (r ExecRunner) run(args ...string) (string, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = vcs.LastNonEmptyLine(stdout.String())
+		}
 		if msg == "" {
 			msg = err.Error()
 		}
@@ -279,16 +284,6 @@ func parseLog(out string) []vcs.Commit {
 		})
 	}
 	return commits
-}
-
-func lastLine(s string) string {
-	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if t := strings.TrimSpace(lines[i]); t != "" {
-			return t
-		}
-	}
-	return ""
 }
 
 // parseTime parses jj's `author.timestamp()` rendering, e.g.
