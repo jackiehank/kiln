@@ -78,6 +78,8 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 ### 2. `kiln status --json`
 
+> **修订（本轮）**：本节的 `groups[] → entries[] → children[]` 三层嵌套**已被用户反馈推翻**——改为顶层扁平 `issues[]` + 可选 `parent`，见下方「hypothesize（续）」。下面的示例与字段表**原样保留作过程记录**；现行 schema 以（续）为准。
+
 ```json
 {
   "summary": { "total": 29, "complete": 21, "in-progress": 8, "actions": 107, "domains": 2 },
@@ -183,7 +185,7 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 1. **顶层永远是对象，不放裸数组**——将来加字段（计数、过滤器、schema 版本）不破坏已有消费方；裸数组一加字段就得改类型。
 2. **key 复用 trailer / 已有词**：`domain` / `tags` / `derived-from` / `spawns` / `action`；多词坚持 **kebab-case**（与 trailer 逐字同形），**一个概念一个词**，不给机器再学一套拼写。
 3. **机器视图不出 prose**：JSON 里没有一句"给人读的话"——`提示:` / legend / `(未分类)` / `未知` / 中文判据一律不进。要 prose 就用默认文本视图。
-4. **缺省即省略**（`omitempty`），**不用 `null` 占位**：省略 = "没有"。规则唯一且好记，也省得消费方判两种空。
+4. **缺省即省略**（`omitempty`），**不用 `null` 占位**：省略 = "没有"。规则唯一且好记，也省得消费方判两种空。**修订：布尔除外**——`done` / `has-worktree` **恒显**，`false` 是**判定结果**而不是"没有"（见 hypothesize（续）§5）。
 5. **枚举用字符串**：`"ok" / "warn" / "error"`、`"on" / "off"`。数字序号是内部实现（`Level` 的 iota），不该成为契约。
 6. **schema 与 flag 无关**：同一命令的 JSON 形状**不随 flag 变**——`check --json --verbose` 与 `check --json` 字段集相同。否则消费方要为每个 flag 组合写一套解码器，flag 越多越碎。
 7. **排序与文本视图同源**：domain 按名、未分类最后、issue 按 ID、诊断按 issue 顺序。→ 同一仓库状态**逐字节可复现**，可做 golden 测试，也可 diff。
@@ -204,5 +206,61 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
   - `--toon`；
   - 紧凑输出 / `--compact`；
   - **错误路径的结构化**：`打开仓库失败` 这类仍走 stderr prose，本轮不动（要动则全命令一起改）；
-  - `status` 嵌套是否改为**平铺 + `parent`**；
+  - ~~`status` 嵌套是否改为**平铺 + `parent`**~~ ——**已销**：用户反馈直接定案平铺，见 hypothesize（续）；
   - `check` 结果里是否带**提交 id**（现只给动作类型；要追溯交给 `path`）。
+
+## hypothesize（续）：按用户反馈定稿平铺——`status` 去掉三层嵌套
+
+> 用户反馈：**"status --json 的输出嵌套太多，能不能简单点"**。
+> 结论：**顶层直接给一个扁平 `issues[]`**，跨域落位只留一个可选字段 `parent`；§2 的 `groups[] → entries[] → children[]` **整体撤掉**。
+> 这一改**预先回答了 §7 那条遗留**（"嵌套是否改为平铺 + `parent`"）——不是留待将来，而是现在就定案。
+
+### 1. 新形状
+
+```json
+{
+  "summary": { "total": 30, "complete": 21, "in-progress": 9, "actions": 109, "domains": 2 },
+  "worktree": { "mode": "off", "open": 0 },
+  "issues": [
+    { "id": "action-diff", "domain": "cli", "action": "conclude", "done": true, "has-worktree": false },
+    { "id": "target-honesty", "domain": "design", "action": "ask", "done": false, "has-worktree": false, "parent": "action-diff" }
+  ]
+}
+```
+
+**三层 → 一层**：`summary` 与 `worktree` **原样保留**（它们本来就只有一层，不是抱怨点）；递归的 `groups[].entries[].children[]` 换成平铺的 `issues[]`。
+
+| 字段 | 说明 |
+| --- | --- |
+| `issues[].id` / `domain` / `action` / `done` | 同 §2，职责不变（`done` **恒显**） |
+| `issues[].has-worktree` | 同 §2（`status` 独有） |
+| `issues[].parent` | **只出现在**被跨域归位的 issue 上；**省略 = 本块的顶层项** |
+
+顺带少了一条判定：原来 `groups[].domain` 省略还要单独解释成"未分类块"，现在只剩行级一条——**`domain` 省略 = 没声明 domain**。
+
+### 2. `parent` 是什么——一个"落位"词，不是关系词
+
+- 它的值由 `GroupByDomain` 算出的**规范化落位**给出，量的是**`status` 这个视图怎么摆**，**不是 `derived-from` 关系本身**。
+- 证据：那条边**可能来自两个不同的 trailer**——子上的 `derived-from`，或父上的 `spawns`（[GroupByDomain](file:///c:/Users/jacki/kiln/internal/engine/engine.go#L324-L353) 把两者并成候选，取排序后第一个**跨域**的）。且**只有跨域**才落位，同域关系不嵌。
+- 所以**不能叫 `derived-from`**：那等于声称一个它并不承载的关系。与 §5 第 2 条的分工划清：**复用 trailer 词，用于"就是那个东西"**（`domain` / `tags`）；**视图自己的概念另立其词**（`parent` / `has-worktree`）。两个词都只描述摆法。
+
+### 3. 原来的反对理由为什么不成立了
+
+§2 记下过："平铺 + `parent` 能表达同样的边，但要消费方再算一次'谁是本块的顶层项'"。回头看，这条**反了**：
+
+- **嵌套里的"顶层项"是隐式的**，且消费方仍要按 `children` **递归**才能枚举全部 issue——并**没有更省**；
+- 平铺里"谁是顶层项" ⟺ **`parent` 缺失**：判一个字段的空，比递归更省。
+
+### 4. 行序：与文本视图**逐行同源**
+
+`issues[]` 的次序 = 文本视图的行序（**pre-order**：本块的顶层项按 ID，紧接其子树，再到下一块；domain 块按名、未分类最后）。否则同一份信息两个视图各排各的，golden 测试就得写两套。
+
+### 5. 对 §5 的修订
+
+九条约定**照旧**，只有第 4 条补一个例外（已就地注在 §5）：**布尔恒显**——`done` / `has-worktree` 的 `false` **是判定结果**，不是"没有"；省掉它反而要消费方把"缺席"当 `false`，而这正是 `done` 存在的理由（省得消费方去懂可配的终点词表）。
+
+### 6. 连带
+
+- **§7 的遗留"嵌套 vs 平铺"已销**（已就地标注）。
+- 这条取舍对 `path` / `show` 同样成立：**数据层一律平铺，视图（缩进 / 树线 / 分组标题）归视图**——将来给它们加 `--json` 时不必再议同一个问题。
+- `status` 与 `list` 的行 schema 从"重叠"变成**同一份契约**：共享 `id` / `domain` / `action` / `done`；`status` 多 `has-worktree` 与 `parent`，`list` 多 `tags`。一份解码器覆盖两个命令。
