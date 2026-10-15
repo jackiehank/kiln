@@ -312,6 +312,7 @@ kiln/
 - 机器可读输出：读命令（`status` / `list` / `path` / `check` / `graph` / `worktree list`）的 `--json` / `--toon` 结构化输出，面向 agent 与脚本（原「`kiln check --format=json`：CI 集成与 PR 评论」并入此问）——见 [docs/machine-readable-output.md](machine-readable-output.md)
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
 - 封装为 MCP server：把结构化工具暴露给 Agent，彻底避免其拼 CLI
+- 标量 flag 的值**以 `--` 开头时被静默吞掉**：[parse](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L263-L283) 只在下一个 token **不以** `--` 开头时才把它当值，于是 `--scope "--json 布尔 flag（…）"` 取到空值、那个值本身又被当成新 flag 再解析一遍（`--key=value` 是当前唯一可行的写法）。后果分三级：标量 trailer 空值被 [writeScalar](file:///c:/Users/jacki/kiln/internal/trailer/trailer.go#L151-L156) 跳过——**连报错都没有**；`--title` 若被吞，`Format` 连头行都不写，提交的第一行会变成 `issue: …`（`git log --oneline` 与 PR 标题跟着错）；列表 flag 被吞则叠加 `refs-empty-value` 的"空值跳过"，损失从"看着难看"变成**静默**。待定：`--scope` 缺值就**显式报错**（别猜），还是把下一个 token **无条件当值**（那就得放弃用空格分隔多个 flag 的写法）
 
 ## 11. `kiln status`：按 domain 分组的目录视图
 
