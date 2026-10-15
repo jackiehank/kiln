@@ -87,12 +87,72 @@
 
 > 来源：[git-config（多层配置与语法）](https://git-scm.com/docs/git-config) ｜ [jj Settings（三层配置）](https://docs.jj-vcs.dev/v0.36.0/config/) ｜ [jj CLI reference（`jj config path`）](https://docs.jj-vcs.dev/v0.36.0/cli-reference/) ｜ [JSONC 规格（微软为 VS Code 引入）](https://jsonc.org/) ｜ [TypeScript 1.8：Allow comments in tsconfig](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-1-8.html) ｜ [为什么 tsconfig 能注释而 package.json 不能](https://zeroutil.com/blog/tsconfig-json-comments-jsonc/) ｜ [TOML 官网（以人为先）](https://toml.io/cn/) ｜ [TOML vs YAML vs JSON 对比](https://codeutil.dev/blog/toml-vs-yaml-vs-json-config-formats) ｜ [golangci-lint：配置文件（多格式 + JSON Schema）](https://golangci-lint.run/docs/configuration/file/) ｜ [golangci-lint：迁移指南（先备份）](https://golangci-lint.run/product/migration-guide/)
 
+## hypothesize：位置、格式与分组（按用户决策定稿）
+
+### 已定的三条（用户）
+
+1. **词表算「项目共享」**——每个项目的 action 可以不同，这正是自定义的价值 → 配置**必须随版本**（提交进仓库）。
+2. **格式用 JSONC**——为了能在配置里写"为什么"。
+3. **先分组**——action 只是配置的一部分，以后还会长出别的配置 → 把 action 收成一组。
+
+### 由这三条推出的子决策（需确认）
+
+#### a. 位置与忽略：从「`/*` 自忽略」改成「只忽略区」
+
+- 文件：**`.kiln/config.jsonc`**（唯一配置文件；`.jsonc` 扩展名让编辑器按"JSON with comments"处理）。
+- 既然要随版本，就**不能再待在自忽略的状态根里**（collect §1 留的前置问题现在有答案了）→ 忽略规则改**单点**：`.kiln/.gitignore` = **`/ws`**。
+- 语义随之清爽：**`.kiln/` 下 `ws/` 是本地状态（忽略），其余是项目共享（随版本）**。
+- **这是对上一轮布局决策（cli-necessity）的部分修订**：当时选"自我忽略 `/*`"，理由是"零改动受控文件"；决策 1 把这个理由推翻了。值得记一笔。
+- 代价：`.kiln/.gitignore` 从"自我隐藏"变成**需提交的受控文件**；而主干不能提交（U 布局的护栏），所以它得在**专用区里提交一次**（一次性的引导动作）。
+- 备选 **R**（`/*` + `!config.jsonc`）被弃：每长出一个配置文件就要加一条例外，与决策 3 冲突。
+
+#### b. JSONC 只支持注释
+
+- 支持 `//` 行注释与 `/* */` 块注释，**字符串感知**（不误剥 `"a//b"`、不误伤转义引号）。
+- **不引入尾逗号**（那是 JSON5 的另一套扩展）：除注释外仍是严格 JSON，错误可以定位。
+- 实现：`internal/config` 内约 30 行的 `stripComments`，**仍然零依赖**（stdlib）。
+
+#### c. 分组形态
+
+```jsonc
+{
+  // 词表：每个项目可以不同——这是 kiln 的自定义点
+  "actions": {
+    "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+    "start": "ask",
+    "terminal": ["conclude", "apply"]
+  },
+  "vcs": "auto"
+}
+```
+
+- 旧扁平键 → 新分组键：`actions`（数组）变 `actions.names`，`start` / `terminal` 移入 `actions` 组。
+- **只认一种形态**（不做"扁平与分组都认"）——避免 schema 分叉；迁移靠改名，不靠兼容层。
+- 宽松规则保留：`start` 缺省取 `names` 首项、`terminal` 缺省取末项、`names` 为空则整体回落内置默认。
+- `vcs` 暂留顶层（单键不值得再开一组）；将来多了再收。
+
+#### d. 读的锚点：锚定仓库根（向上搜索）
+
+- 现在跟**当前目录**（子目录里跑 kiln 会**静默回落默认值**）——与"项目共享"的定位不符。
+- 新规则：从 cwd **向上**找 `.kiln/config.jsonc`（找不到再找旧的根 `.kiln.json`），命中的即**仓库根的配置**。
+- 好处：`do` 在仓外仍可用；在子目录里跑 kiln 读到的是同一份。
+
+#### e. 迁移：兼容旧 `.kiln.json` + 一行提示
+
+- 优先 `.kiln/config.jsonc`；不存在而目录里还有 `.kiln.json` → 读它，并向 stderr 打一行"配置已迁移到 .kiln/config.jsonc"。
+- **不做硬切**（会让现有仓库突然失配），也**不长期双读**（留一个明确窗口，写进文档）。
+
+### 影响面（留给 test 落地）
+
+- `internal/config`：注释剥离 + 新路径/分组解析 + 旧路径 fallback；
+- `vcs.PrepareAreas`：`.kiln/.gitignore` 内容 `/*` → `/ws`（仍不覆盖已存在）；
+- 本仓自身：`.kiln/.gitignore` 从 `/*` 改成 `/ws` 并**提交**（引导动作需在专用区做）；
+- 成文规格与帮助文本同步：`docs/mvp-plan.md` §2.3、`kiln -h` 里"可用 `.kiln.json` 覆盖"那句。
+
 ## 待定
 
-- **前置问题（collect 催生）**：action 词表算"项目**共享**"（随版本）还是"工具本地偏好"？——它决定位置那题怎么答。
-- 新旧路径的优先级与弃用时间窗。
-- 是否需要"仓库根 vs 当前目录"的显式开关（不引入开关更简，但会改变既有行为）。
-- 注释性配置是否值得——若选 A/E，就默认放弃在配置里写"为什么"。
+- 旧 `.kiln.json` 兼容的**移除时间点**（当前留一行提示过渡）。
+- 是否随 test 一起补 **`kiln config path`**（collect 的建议：自述配置路径，对齐 `jj config path`）。
 
 ## 非目标
 
