@@ -1,7 +1,7 @@
 # issue: qualified-issue-id — 命令输入要不要接受 domain/id 限定名（变相引入命名空间，可减少重名）
 
 - **domain**：cli
-- **关联**：relates-to `issue-uniqueness`
+- **关联**：relates-to `issue-uniqueness` / `status-by-domain`
 
 ## 背景
 
@@ -28,6 +28,76 @@ cli/action-diff                 ✓ conclude
 4. **唯一性边界**：加 domain 是"**减少**重名"还是"**让重名无害**"？`kiln check` 的查重范围随之怎么变？
 5. **视图与输入要不要强制一致**：`status` 打出来的名字必须能粘回命令吗？
 6. **与 `issue-uniqueness` 的分工**：那条问"唯一性怎么保证"，本条问"输入侧要不要用限定名"，互为前提。
+
+## hypothesize：这是 `status` 的**显示**问题——domain 由分组头显示一次，行内只留裸 id
+
+> 方向定稿：**不引入命名空间**（`issue:` trailer 不动、输入解析不动），只改**显示**。理由与代价见下；三件必须一起定的事见 §3。
+
+### 1. 方向
+
+`status` 从「每行自带 `domain/id` 前缀」改成「**块头写一次 domain，行内只写裸 id**」：
+
+```
+cli
+  action-diff                        ✓ conclude
+  └── target-honesty  (design)         ask
+  qualified-issue-id                   ask
+
+design
+  action-config                      ✓ apply
+```
+
+（缩进与树形符号的具体画法留给 `test`；本轮的取舍只有一条：**domain 一块出现一次**。）
+
+### 2. 为什么这个方向赢
+
+1. **根治原始误解**：显示出来的名字**就是**能粘回命令的名字（裸 id）——`path` / `show` / `worktree new` 直接吃。不再有「看得见、粘不回」的名字，这正是本条 issue 的开题动因。
+2. **不引入命名空间**：`issue:` trailer 仍是单段 slug，`engine` 的键空间、`check` 的唯一性检测、`--domain` 筛选全都不动。`issue-uniqueness` 的结论不再被本条绑架——两者的关系从「互为前提」降级为**背景相关**（trailer 保持 `relates-to`，但不再是前置依赖）。
+3. **顺手消掉两个隐性陷阱**：① domain 是「最后一个非空 `domain:` 胜出」的**可选** trailer，把它当前缀等于让**地址随动作变化**，而没声明 domain 的 issue **没有前缀**（同一视图两套写法）；② 跨域嵌套行会让**同一个块里出现两个不同的 domain 前缀**（本仓：`cli/action-diff` 下挂 `design/target-honesty`），读者得额外学一条「前缀是行自己的、块是别人的」的规则。
+
+### 3. 必须一起定的三件事（本轮的增量）
+
+#### 3.1 跨域嵌套行——现设计的**理由句**被抽掉了
+
+[mvp-plan](mvp-plan.md) §11 现在写的是：
+
+> 每行写作 `<domain>/<issue-id>`；**不设目录标题行**，块之间用空行分隔——**域名由每行的前缀携带，所以跨域嵌套行的域名依然一眼可见**。
+
+加了块头之后，这个理由就不成立了：`cli` 块下挂着的 `design/target-honesty` 会被读成 cli 的 issue。候选：
+
+| | 做法 | 代价 |
+| --- | --- | --- |
+| **A** | 跨域行带**例外标记**（如行尾 `(design)`），其余行纯裸 id | 仍有一个非裸名，但只在例外行出现 |
+| **B** | 接受丢失：跨域行也只写裸 id，域去看 `status --json` / `list` | 视图里丢掉一个现在有的事实 |
+| **C** | **不再跨域嵌套**：跨域子留在自己的 domain 块，跨域关系交给 `graph` | 显示层不再有「外来的行」→ 前缀彻底不需要；代价是推翻 §11.1 的落地，丢掉状态视图里唯一的跨域线索 |
+
+#### 3.2 「JSON 行 = 文本行」的不变量：**顺序**一致，不是**行号**相等
+
+- 硬事实：[cli_test.go](../internal/cli/cli_test.go) 的注释把它定义为「`status --json` 是**一层平铺行**（没有分组、没有子），**其顺序就是文本视图打印的顺序**」——**顺序**不变量。所以**加块头行不会破这个测试**。
+- 但 [README](../README.md) 的措辞更强：「行序与文本视图**逐行一致**：第 N 行就是同一个 issue」——加块头后这句必须改写成「**issue 行的相对顺序**一致（块头行不参与）」，并明说**块头不入 JSON**（`domain` 仍是每行的独立字段，JSON 侧零信息损失）。
+- 待定：`status --json` 要不要给每行加分组标识（如 `"block": 0`）？倾向**不加**——`domain` 已能重建分组，加了就是第二个真相。
+
+#### 3.3 对齐与空行
+
+- 现状：列宽 = **全部行**显示宽度的最大值（跨块统一对齐）；块之间打**一个空行**（`renderStatus` 的 `r.block`）。
+- 要定：① 块头行是否参与列宽计算——**倾向不参与**（否则一个长域名把全表推宽）；② 块界表达是「块头 + 空行」（两行开销）还是**只用块头**（省一行/块，方向与 `issue-list-scaling` 同向）——**倾向只用块头**。
+
+### 4. 非目标
+
+- **不引入限定名输入**：`kiln path cli/x` 依然报错——本方向认为「让显示名能粘回去」比「让两种写法都能输入」更便宜（则 `hypothesize` 的候选 C「`issue:` trailer 也带前缀」**出局**）。
+- 不动 `issue:` trailer / `engine` 键空间 / `check` / `list --domain=` / `--json` 的字段集合。
+- 不动跨域**归属**的判定（`GroupByDomain` 的落位规则不变），只动「怎么写出来」。
+- **不关闭**未来「限定名输入」的可能性：那条若还要做，属于 `issue-uniqueness` 一侧，不该由 `status` 的显示来夹带。
+
+### 5. 落地时要一起改的地方（现状盘点）
+
+| 位置 | 现状 | 要动什么 |
+| --- | --- | --- |
+| [`issueLabel`](../internal/cli/cli.go) | `p.Domain + "/" + p.ID`，全仓唯一调用点是 `statusLabel` | 拆成「块头」+「裸 id」两条渲染路径 |
+| [mvp-plan](mvp-plan.md) §11 | 「不设目录标题行……域名由每行的前缀携带」 | 改成「块头携带域名」，并回答 §3.1 |
+| [domain-status.md](domain-status.md) | 7 行示例，含跨域嵌套行 | 示例按新画法重画 |
+| [README](../README.md) 机器可读输出 | 「行序与文本视图逐行一致：第 N 行就是同一个 issue」 | 改成「issue 行的相对顺序一致」 |
+| [`cli_test.go`](../internal/cli/cli_test.go) | `TestStatusRendersDomainBlocks` 断言 `<domain>/<id>` 行 | 断言改为新画法；JSON 的顺序测试**不受影响** |
 
 ## collect：业内怎么编号，怎么处理重名
 
