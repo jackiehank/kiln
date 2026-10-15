@@ -62,3 +62,147 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - 由 `cli-necessity` 派生：其 §启示 5 已把"结构化输出"列为 agent 场景下**优先级高于"命令重叠"**的短板；本 issue 是那一条的**落地评估**。
 - 与既有条目合并：mvp-plan §10 的 `kiln check --format=json`（CI 集成与 PR 评论）并入本问——命令面从一个扩到一族。
 - 若落地，README §与 agent 协作 里"结构化输出……agent 不必解析自由格式"那句要重写：**"稳定文本"与"机器可读格式"是两回事**，不能继续拿前者当后者卖。
+
+## hypothesize：`status` / `list` / `check` 的 `--json` schema
+
+> 结论先行：本轮只做**三个命令 + 一种格式**——`--json` 布尔 flag，`status` / `list` / `check` 各返回**一个顶层对象**（绝不放裸数组）。
+> 三条命令的 schema 都由**同一套约定**生成：**key 复用 trailer 词**、**枚举用字符串**、**缺省即省略**、**机器视图不出 prose**、**排序与文本视图同源**。
+> **JSON 是渲染层的事**：DTO 写在 `internal/cli`，不反射 `model.Issue`；唯一要动 `engine` 的是给 `Diagnostic` 补一个 **rule 码**（现在只有中文 prose）。
+> 落点仅此三命令；`path` / `show` / `worktree list` 与 `--toon` 明确**留到下一轮**。
+
+### 1. flag 形态：只加 `--json`
+
+- **只加 `--json`**（布尔，`f.has("json")`），**不加** `--format=json|toon|text`：一个格式时，枚举只是把"有没有"包装成"选哪个"，是**为尚不存在的第二种格式付的复杂度**。
+- 但**语义上记一笔**：`--json` ≡ `--format=json`。将来真上 `--toon` 时再加 `--format=`，`--json` **保留为别名**——已写下的调用不被破坏。
+- 默认（不加 `--json`）**输出完全不变**：人读文本是默认视图，机器可读是**旁路**。
+
+### 2. `kiln status --json`
+
+```json
+{
+  "summary": { "total": 29, "complete": 21, "in-progress": 8, "actions": 107, "domains": 2 },
+  "worktree": { "mode": "off", "open": 0 },
+  "groups": [
+    {
+      "domain": "cli",
+      "entries": [
+        {
+          "id": "action-diff",
+          "domain": "cli",
+          "action": "conclude",
+          "done": true,
+          "has-worktree": false,
+          "children": [
+            { "id": "target-honesty", "domain": "design", "action": "ask", "done": false, "has-worktree": false }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+| 字段 | 来源 | 说明 |
+| --- | --- | --- |
+| `summary.total` / `complete` / `in-progress` / `actions` | `engine.Summarize` | 对应文本头两行的四个计数 |
+| `summary.domains` | `engine.CountDomains` | **不含**未分类块，与文本"domain 2 个"一致 |
+| `worktree.mode` | 配置 + `worktreeSegment` | 报**生效值** `on` / `off`（`""` 即 `on`），不报"未设" |
+| `worktree.open` | `areasOpen` | 专用区数量，**main 不计**（与文本"已开 N 个"一致） |
+| `worktree.current` | `vcs.AreaAt(areas, ".")` | 当前站在哪个区；不在区内**省略** |
+| `groups[].domain` | `engine.GroupByDomain` | **省略 = 未分类块**——`(未分类)` 是人读标记，不进 schema |
+| `groups[].entries[]` → `children[]` | `engine.Entry` | **递归**嵌套；用**数组嵌套**表达深度，**不序列化** `├──` 字形 |
+| `entries[].id` / `domain` | `model.Issue` | issue 行的**域内全名**由 `domain` + `id` 拼出，不存 `cli/action-diff` 这种合体串 |
+| `entries[].action` / `done` | `p.State()` + `IsTerminal` | `action` = **最后一个动作的类型**；`done` 是视图**自己的判定**（终点集可配），消费方不必懂词表 |
+| `entries[].has-worktree` | `▲■` 那一列 | 谓词式命名，专指"这个 issue 有开着的区" |
+
+要点：
+
+- **文本里的 `state` 列在 JSON 里叫 `action`**：同一个值，就是"最后一个动作的类型"。文本的 `✓`/`未知` 是**渲染态**，不进 schema（`未知` 实际也到不了——issue 必然由动作产生）。
+- **`status` 只给行，不给动作明细**：动作清单是 `path` 的活。这样 `status --json` 的大小是 O(issue)，不是 O(commit)——**索引与明细分层**正是 `path`/`show` 已定的那条分工。
+- **嵌套保留**：跨域派生被嵌到父下，是 `status` 唯一视图的**信息**，不是排版。平铺 + `parent` 字段能表达同样的边，但要消费方再算一次"谁是本块的顶层项"——留给下一轮评估（见 §7）。
+
+### 3. `kiln list --json`
+
+```json
+{
+  "filter": { "domain": "design", "action": "ask" },
+  "count": 7,
+  "issues": [
+    { "id": "action-granularity", "domain": "design", "action": "ask", "done": false },
+    { "id": "common-origin", "domain": "design", "action": "ask", "done": false }
+  ]
+}
+```
+
+| 字段 | 来源 | 说明 |
+| --- | --- | --- |
+| `filter.*` | 命令行 `--domain/--tag/--action` | **原样回显**已给的条件（给 CI 日志定位用）；未给则**省略该键**——省略即"没按这条过滤" |
+| `count` | `len(ids)` | 命中数；与 `issues` 长度恒等，但省得消费方自己数 |
+| `issues[].id` / `domain` / `action` / `done` | 同 §2 的 issue 行 | **与 `status` 共用同一个行 schema**（`children` / `has-worktree` 除外） |
+| `issues[].tags` | `model.Issue.Tags` | 空则省略（文本只在非空时打 `tags=`） |
+
+要点：
+
+- **`list` 不报 `worktree`**：`■` 与 worktree 段**只在 `status` 出现**，这是 `worktree-hint` 已定的"读命令不加 worktree 噪声"；为它给 `list` 多起一次后端查询不值得。
+- **行 schema 与 `status` 的重叠部分是契约**（`id` / `domain` / `action` / `done`）：同一套字段名，消费方一份解码器覆盖两个命令。
+
+### 4. `kiln check --json`
+
+```json
+{
+  "ok": true,
+  "summary": { "ok": 21, "warn": 7, "error": 0 },
+  "results": [
+    { "issue": "action-granularity", "level": "warn", "rule": "terminal-action", "action": "ask" },
+    { "issue": "action-config", "level": "ok", "rule": "complete", "actions": ["ask", "apply"] }
+  ]
+}
+```
+
+出错时（示例）：`{ "issue": "broken-ref", "level": "error", "rule": "derived-from", "ref": "missing-parent" }`
+
+| 字段 | 来源 | 说明 |
+| --- | --- | --- |
+| `ok` | 无 `level == "error"` | **与退出码同义**：`ok=false` ⟺ exit 1。CI 判据一眼可见 |
+| `summary.ok/warn/error` | `engine.Check` 结果计数 | **计的是"条目数"不是"issue 数"**（一个 issue 可同时缺起点与父） |
+| `results[].level` | `engine.Level` | **字符串枚举** `ok` / `warn` / `error`——不吐内部的 0/1/2 序号 |
+| `results[].rule` | **新增**（见 §6） | 机器码：`start-action` / `terminal-action` / `derived-from` / `spawns` / `complete` |
+| `results[].action` | `p.Last()` | 仅 `terminal-action` 用：当前停在哪个动作 |
+| `results[].ref` | 关系目标 | 仅 `derived-from` / `spawns` 用：指向了谁 |
+| `results[].actions` | `kinds(p)` | 路径里全部动作类型，**按序**；每一条结果都带 |
+| 标题 `actions` | | 恒在，**与 `--verbose` 无关**（见 §5 第 6 条） |
+
+要点：
+
+- **不给 `message`**：`check` 的中文判据（"缺少 ask：问题没有起点动作"）是**文本视图的文案**。机器视图给 `rule` + `ref` / `action`，消费方按码分支，**不解析中文**——这正是把它做成 JSON 的全部理由。
+- **空仓**：文本打一句提示并 exit 0；JSON 给 `{ "ok": true, "summary": 全零, "results": [] }`，**不出提示句**（prose 不进 schema）。
+- **stdlib 编码**：`encoding/json` 默认转义 `<` `>` `&`；issue ID 与关系名都是 kebab-slug，不受影响，不必设 `SetEscapeHTML(false)`。
+
+### 5. 统一约定（三个命令共用，也是将来扩命令的模板）
+
+1. **顶层永远是对象，不放裸数组**——将来加字段（计数、过滤器、schema 版本）不破坏已有消费方；裸数组一加字段就得改类型。
+2. **key 复用 trailer / 已有词**：`domain` / `tags` / `derived-from` / `spawns` / `action`；多词坚持 **kebab-case**（与 trailer 逐字同形），**一个概念一个词**，不给机器再学一套拼写。
+3. **机器视图不出 prose**：JSON 里没有一句"给人读的话"——`提示:` / legend / `(未分类)` / `未知` / 中文判据一律不进。要 prose 就用默认文本视图。
+4. **缺省即省略**（`omitempty`），**不用 `null` 占位**：省略 = "没有"。规则唯一且好记，也省得消费方判两种空。
+5. **枚举用字符串**：`"ok" / "warn" / "error"`、`"on" / "off"`。数字序号是内部实现（`Level` 的 iota），不该成为契约。
+6. **schema 与 flag 无关**：同一命令的 JSON 形状**不随 flag 变**——`check --json --verbose` 与 `check --json` 字段集相同。否则消费方要为每个 flag 组合写一套解码器，flag 越多越碎。
+7. **排序与文本视图同源**：domain 按名、未分类最后、issue 按 ID、诊断按 issue 顺序。→ 同一仓库状态**逐字节可复现**，可做 golden 测试，也可 diff。
+8. **stdout 只放一个 JSON 文档**：提示 / legend / 报错全部留在 **stderr**（现状已如此，本轮把它**写成契约**）；退出码不变（`status`/`list` 0；`check` 0/1 且与 `ok` 同义）。
+9. **缩进 2 空格**，不做紧凑变体：JSON 选它图的是**先验与生态**，省 token 是 TOON 的活，别在这里混。
+
+### 6. 落点与测试
+
+- **`internal/cli`**：新增三个 DTO（带 `json` tag）+ 三个命令的 `--json` 分支；解析复用现有 `parse`。**不反射 `model.Issue`**——领域类型不带 json tag，输出契约不该长在领域模型上；DTO 的另一半好处是"**默认只出想要的字段**"（`status` 不要 `Actions` 明细，靠 DTO 天然拿不到）。
+- **`internal/engine`（唯一的改动）**：[Diagnostic](file:///c:/Users/jacki/kiln/internal/engine/engine.go#L132-L136) 现在只有 `Level + Issue + Message`（中文 prose）。JSON 要 `rule` 码与结构化字段 → 补 `Rule` / `Ref` / `Action`。**`Message` 原样保留**给文本视图，`check` 的文本输出与退出码**一字不变**。
+- **测试**：三个命令各一组 golden（用 [engine_test](file:///c:/Users/jacki/kiln/internal/engine/engine_test.go) 那类假提交集构造 repo，比对 JSON 字节）；再在真仓跑一遍与文本视图对齐。
+
+### 7. 与候选表的映射 / 遗留
+
+- **落 C 的一个子集**（`status` / `list` / `check`）+ **只用 JSON**；**B** 被 C 覆盖（`check` 在其中）；**D**（双格式）与 **E**（`--format=`）**推迟到真有第二种格式时**再评估。
+- 遗留（明确不在本轮）：
+  - `path` / `show` / `worktree list` 的 JSON——`path`/`show` 含**委托 git 的原文块**（patch / stat），口径要单设计（贴原文？还是给文件清单？）；
+  - `--toon`；
+  - 紧凑输出 / `--compact`；
+  - **错误路径的结构化**：`打开仓库失败` 这类仍走 stderr prose，本轮不动（要动则全命令一起改）；
+  - `status` 嵌套是否改为**平铺 + `parent`**；
+  - `check` 结果里是否带**提交 id**（现只给动作类型；要追溯交给 `path`）。
