@@ -351,6 +351,11 @@ func (e *env) write(args []string, commit bool) int {
 // The refusal branches on whether main still holds uncommitted work, because in
 // that case "先建区" on its own is wrong advice: a new area is a clean checkout,
 // so the work would be left behind.
+//
+// It never suggests turning isolation off in the config: a runtime message that an
+// agent reads while working must not invite editing the repository's shared
+// settings — that decision belongs to whoever owns the repository, and the config
+// file documents the option itself.
 func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 	if !e.isolated() {
 		return 0 // worktree: "off" — the repository opted out of isolation
@@ -378,11 +383,11 @@ func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 		// move anything, so it is offered as a condition you have to *want* —
 		// otherwise an agent optimizing for "make the command succeed" takes the
 		// one flag and leaves the work sitting in main.
-		fmt.Fprintln(e.errw, "（--force 只放行护栏、不把改动搬进区——只有你确实要把它留在 main 时才用；想长期允许 main 提交，把 worktree 设为 off。）")
+		fmt.Fprintln(e.errw, "（--force 只放行护栏、不把改动搬进区——只有你确实要把它留在 main 时才用。）")
 		return 1
 	}
 	fmt.Fprintf(e.errw, "先 `kiln worktree new %s`，再 cd 到 worktree 提交。\n", issue)
-	fmt.Fprintln(e.errw, "确要在 main 提交时加 --force（一次性豁免）；（想长期允许 main 提交，把配置里的 worktree 设为 off。）")
+	fmt.Fprintln(e.errw, "确要在 main 提交时加 --force（一次性豁免）。")
 	return 1
 }
 

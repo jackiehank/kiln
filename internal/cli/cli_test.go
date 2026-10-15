@@ -487,6 +487,9 @@ func TestCommitRefusalCarriesTheRecipeWhenMainIsDirty(t *testing.T) {
 	if !strings.Contains(got, "只放行护栏、不把改动搬进区") {
 		t.Fatalf("the caveat must say what --force does not do:\n%s", got)
 	}
+	if strings.Contains(got, "设为 off") {
+		t.Fatalf("a runtime message must not invite editing the repo config:\n%s", got)
+	}
 }
 
 // A clean main needs no recipe: "先建区" is exactly right there.
@@ -501,6 +504,9 @@ func TestCommitRefusalPointsAtAnAreaWhenMainIsClean(t *testing.T) {
 	}
 	if strings.Contains(got, "你已有未提交改动") {
 		t.Fatalf("nothing is dirty, so no warning belongs here:\n%s", got)
+	}
+	if strings.Contains(got, "设为 off") {
+		t.Fatalf("a runtime message must not invite editing the repo config:\n%s", got)
 	}
 }
 
