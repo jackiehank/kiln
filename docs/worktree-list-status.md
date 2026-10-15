@@ -133,7 +133,7 @@ $ kiln worktree remove a1                                                  exit 
 1. **`remove` 的"脏区"拒绝语换了主人**：以前 git 侧那句是 git 自己的英文（`contains modified or untracked files, use --force to delete it`），现在由 kiln 先判先拒，两后端**同一句话**。git 自带的拒绝**保留为兜底**——先行检查遗漏的边角仍会被它拦住。
 2. **判据只剩一条**：`AreaState` 是 `list` 与 `remove` 的唯一来源，问题 2 担心的"`list` 说干净、`remove` 却拒"从结构上不可能出现。
 3. **`list` 现在真的在读盘**：从"读注册表"变成"N 个区各跑 1~2 条后端命令"（git：`status --porcelain` + `merge-base`；jj：`diff --summary`）。X 是用户点的，这笔代价是明账。
-4. **main 工作树的行尾仍是历史遗留**：`.gitattributes`（`* text=auto eol=lf`）只保证**新检出的区**是 LF；main 里早年检出的文件（`internal/vcs/vcs.go`、`git_test.go`、`vcs_test.go`、`config_test.go`、`include.go`、`jj_test.go`）在**工作树里仍是 CRLF**，于是 `gofmt -l` 在 main 会误报这几只——本轮改动的提交内容仍被 git 归一为 LF，**不影响仓库**。要不要一次性重检出把工作树刷成 LF，留给 conclude（或另开 issue）。
+4. **main 工作树的行尾仍是历史遗留**：`.gitattributes`（`* text=auto eol=lf`）只保证**新检出的区**是 LF；main 里早年检出的文件（`internal/vcs/vcs.go`、`git_test.go`、`vcs_test.go`、`config_test.go`、`include.go`、`jj_test.go` 等，共 13 只）在**工作树里仍是 CRLF**，于是 `gofmt -l` 在 main 会误报这几只——本轮改动的提交内容仍被 git 归一为 LF，**不影响仓库**。（→ 已在 test（再续）收口。）
 5. **main 一行的 `—` 是刻意的**：不写就等于"干净"，而 main 根本不在"能不能删"的讨论里。
 
 ### 6. 未做 / 待定（留给 conclude）
@@ -142,7 +142,7 @@ $ kiln worktree remove a1                                                  exit 
 - **与 `kiln status`（全库概览）联动**：未做。
 - **`jj` 的"未合回 main"若要再补一档**：需先有"jj 侧丢不丢"的正例，现在没有。
 - **状态列的颜色 / 记号**（候选 Q 的紧凑记号）未做。
-- **main 工作树的行尾刷不刷**（见取舍 4）——需 conclude 定。
+- ~~**main 工作树的行尾刷不刷**~~ → **已刷新为 LF**，见 test（再续）。
 
 ## test（续）：目录被删的区（prunable）——补第四档「目录已删」
 
@@ -213,3 +213,36 @@ $ kiln worktree list                    # 不再整条挂掉
 
 - **`remove` 清不掉这种区**：目录已删的区要清掉，得先 `git worktree prune`（我们目前只"按 issue 找区 → `worktree remove`"，对 prunable 直接报错）。要不要让 `remove` 顺手 prune，留给 conclude。
 - **`.kiln/.gitignore` 被 `-xdf` 删掉后的自愈**（第 2 节）未做验证以外的事——`worktree new` 会重写，够用。
+
+## test（再续）：行尾收口——Windows 例外规则 + 把 main 工作树刷成 LF
+
+> 收掉 test（一）取舍 4 的那笔遗留：13 个文件的**工作树副本**是 CRLF（提交内容本就 LF），`gofmt -l` 在 main 因此误报。
+
+### 1. `.gitattributes` 补齐 Windows 例外（用户定）
+
+```
+* text=auto eol=lf                        # 默认：一律 LF
+*.bat  *.cmd             → text eol=crlf  # label / goto 一类构造在纯 LF 下会出错
+*.ps1  *.psm1  *.psd1    → text eol=crlf  # PowerShell 自己吃得下 LF，但 Windows 工具链普遍只认 CRLF
+```
+
+**后写的规则覆盖先写的**，所以这几行只从上面那条通配里"捞出"脚本后缀。本仓现有 39 个跟踪文件里**没有任何脚本后缀**（只有 `.go` / `.md` / `.jsonc` / `.mod` / 属性文件本身），这几行是**前瞻**——真出现 `.ps1` / `.bat` 时不至于再补一次单独的行尾修正。
+
+`git check-attr -a` 验证：`demo.ps1` / `demo.bat` / `demo.cmd` / `demo.psm1` / `demo.psd1` → `text: set, eol: crlf`；`internal/vcs/vcs.go` / `docs/x.md` → `text: auto, eol: lf`。
+
+### 2. 把 main 工作树刷成 LF
+
+那 13 只（`.gitignore`、`go.mod`、5 个旧 `docs/*.md`、6 个旧 `.go`）是**属性加上之前**检出的，工作树副本才留成 CRLF；索引里的 blob 一直就是 LF。修法是把文件删掉再 `git checkout --` 一次（内容逐字节相同，只差行尾）：
+
+```
+$ git ls-files --eol | grep w/crlf     → （无，全部 w/lf）
+$ git status --short                   → 干净（行尾变化被属性归一，不算改动）
+$ gofmt -l .                           → 空    ← 此前在 main 会误报那几只
+```
+
+**代价**：一次性重写 13 个文件；**不进提交**（提交内容前后一致，故工作区反而是干净）。
+
+### 3. 校验
+
+- `git ls-files --eol` 全 `w/lf`；`git check-attr` 脚本后缀 `eol=crlf`、其余 `eol=lf`。
+- `go vet ./...` / `go test ./...` **全绿**；`gofmt -l` **在 main 直接为空**——此前每轮都得借一只把 CRLF 归一过的 LF 镜像来验格式，现在不必了。

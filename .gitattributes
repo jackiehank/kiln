@@ -1,3 +1,13 @@
 # 检出恒为 LF：新区（worktree）不再拿到 CRLF，gofmt 与其它工具不会因平台
 # 行尾把整棵树误报成"未格式化"。本文件覆盖 core.autocrlf 之类的全局设置。
 * text=auto eol=lf
+
+# Windows 专用脚本是唯一例外，保留 CRLF：.bat / .cmd 的 label、goto 一类构造
+# 在纯 LF 下会出错；.ps1 / .psm1 / .psd1 一并列上——PowerShell 自己吃得下 LF，
+# 但 Windows 上的编辑器与其它工具链普遍只认 CRLF。
+# 规则后写覆盖先写，所以这几行只管住上面通配里的脚本后缀。
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
