@@ -417,8 +417,11 @@ func TestShowTakesTheLastOfRepeatedActions(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "rep · 4/4 test · t4 · 三测") {
 		t.Fatalf("show test must take the last one:\n%s", got)
 	}
-	if !strings.Contains(errb.String(), "有 3 个 test") {
-		t.Fatalf("repeats must be announced: %q", errb.String())
+	if !strings.Contains(errb.String(), "有 3 个 test（序号 2, 3, 4）；已显示 4/4（最后一个）") {
+		t.Fatalf("repeats must be announced with their addresses: %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), "看别的：kiln show rep 2") {
+		t.Fatalf("the hint must carry a paste-ready command: %q", errb.String())
 	}
 }
 

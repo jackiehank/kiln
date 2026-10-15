@@ -180,3 +180,37 @@ $ kiln -h | grep 提交范围
 
 原计划“顺带把 `--force` 写进提交范围那一行”——实际上 `-h` 的 footer **早就有** `commit 额外 flag: --force（一次性豁免：worktree=on 时放行当次在 main 提交）`，所以本轮只需补“提交范围”本身，**不重复**。
 
+### 6. 修订（用户反馈）：同名提示要“写具体”
+
+第一版提示是：
+
+```
+提示: 有 6 个 test，显示最后一个（9/10）；要看别的用序号      ← 被打回
+```
+
+用户意见：**“要看别的用序号”等于把活推回给使用者**（还得自己去 `path` 里数第几个才是 test）。修订为：**列出所有同名序号 + 给一条能直接粘的命令**。
+
+```
+提示: worktree-mode 有 6 个 test（序号 4, 5, 6, 7, 8, 9）；已显示 9/10（最后一个）
+  看别的：kiln show worktree-mode 4
+```
+
+三点信息全在一行里：**匹配了几个 / 它们是哪几个 / 已显示哪个**；第二行是 recipe（缩进行格式沿用 `refuseInMain` 里“提示 + 缩进配方”的写法）。
+
+本仓两个真实例子（序号**不是连着的**才看得出这条提示的价值）：
+
+```
+$ kiln show worktree-mode test
+提示: worktree-mode 有 6 个 test（序号 4, 5, 6, 7, 8, 9）；已显示 9/10（最后一个）
+  看别的：kiln show worktree-mode 4
+
+$ kiln show cli-necessity test
+提示: cli-necessity 有 8 个 test（序号 6, 7, 8, 9, 14, 15, 16, 17）；已显示 17/17（最后一个）
+  看别的：kiln show cli-necessity 6
+```
+
+（`cli-necessity` 的 8 个 test 落在 `6,7,8,9` 与 `14,15,16,17` 两段——光说“有 8 个”使用者猜不出地址，列出来才是可操作的。）
+
+- 实现：新增 `matchingOrdinals(p, kind)`（返回 1-based 位置数组）与 `ordinalNumbers(ns)`（渲染成 `4, 5, 6`）；单测 `TestShowTakesTheLastOfRepeatedActions` 改断言新文案 + 断言 recipe 存在。
+- 唯一匹配仍然**不出声**（`show worktree-adopt collect` → 只有内容，无提示）。
+

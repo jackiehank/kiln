@@ -782,23 +782,20 @@ func (e *env) show(args []string) int {
 			// An action name selects the **last** one of that kind — the same "newest
 			// match" rule git's :/<text> uses — because that is what "show me that
 			// test" means in practice. Repeats are the norm, not a corner case, so
-			// ambiguity is announced rather than turned into an error.
-			last, count := 0, 0
-			for i, a := range p.Actions {
-				if a.Kind == pos[1] {
-					last = i + 1
-					count++
-				}
-			}
-			if count == 0 {
+			// ambiguity is announced with the addresses of every match, plus one
+			// command the caller can paste, rather than "use an ordinal" (which only
+			// sends them back to count lines in `path`).
+			ords := matchingOrdinals(p, pos[1])
+			if len(ords) == 0 {
 				fmt.Fprintf(e.errw, "没有 %q 动作: %s（它的动作: %s）\n", pos[1], p.ID, ordinalList(p))
 				return 1
 			}
-			if count > 1 {
-				fmt.Fprintf(e.errw, "提示: 有 %d 个 %s，显示最后一个（%d/%d）；要看别的用序号\n",
-					count, pos[1], last, len(p.Actions))
+			ordinal = ords[len(ords)-1]
+			if len(ords) > 1 {
+				fmt.Fprintf(e.errw, "提示: %s 有 %d 个 %s（序号 %s）；已显示 %d/%d（最后一个）\n",
+					p.ID, len(ords), pos[1], ordinalNumbers(ords), ordinal, len(p.Actions))
+				fmt.Fprintf(e.errw, "  看别的：kiln show %s %d\n", p.ID, ords[0])
 			}
-			ordinal = last
 		default:
 			fmt.Fprintf(e.errw, "无法识别的选择器: %q（用序号 1..%d，或动作名: %s）\n",
 				pos[1], len(p.Actions), strings.Join(e.actions.Names(), ", "))
@@ -1121,6 +1118,27 @@ func ordinalList(p *model.Issue) string {
 		parts = append(parts, fmt.Sprintf("%d.%s", i+1, a.Kind))
 	}
 	return strings.Join(parts, " ")
+}
+
+// matchingOrdinals lists the 1-based positions of one action kind, in order, so a
+// hint can hand back addresses the caller can use verbatim.
+func matchingOrdinals(p *model.Issue, kind string) []int {
+	var out []int
+	for i, a := range p.Actions {
+		if a.Kind == kind {
+			out = append(out, i+1)
+		}
+	}
+	return out
+}
+
+// ordinalNumbers renders 1-based ordinals as `4, 5, 6`.
+func ordinalNumbers(ns []int) string {
+	parts := make([]string, 0, len(ns))
+	for _, n := range ns {
+		parts = append(parts, strconv.Itoa(n))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (e *env) isDone(p *model.Issue) bool {
