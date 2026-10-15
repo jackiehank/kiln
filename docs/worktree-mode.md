@@ -1,6 +1,6 @@
 # issue: worktree-mode — 要不要把「开不开工作区（worktree）模式」做成配置项
 
-- **状态**：collect（进行中）
+- **状态**：hypothesize（进行中）
 - **domain**：design
 
 ## 背景
@@ -125,3 +125,71 @@ kiln 现在**强制**"**主干只读 / 只合并，动作只在专用区提交**
 | **与 `--force`** | **互补**：配置管默认强度，`--force` 管一次性豁免（保留） | Claude Code 只有设置、无 per-命令豁免；kiln 已有 `--force`，两者不冲突 |
 
 > 来源：[Claude Code：Settings（`worktree.bgIsolation` / `worktree.baseRef`）](https://code.claude.com/docs/en/settings) ｜ [Claude Code：Agent view（How file edits are isolated——关掉 worktree 隔离）](https://code.claude.com/docs/en/agent-view) ｜ [Claude Code：Run parallel sessions with worktrees](https://code.claude.com/docs/en/worktrees) ｜ [ESLint：Configure Rules（规则严重性 off / warn / error）](https://eslint.org/docs/latest/use/configure/rules) ｜ [rustc：Lint Levels（allow…forbid）](https://doc.rust-lang.org/stable/rustc/lints/levels.html) ｜ [Cargo：The Manifest Format（`[lints]` 表）](https://doc.rust-lang.org/cargo/reference/manifest.html) ｜ [Cargo：Configuration（lint 级别）](https://doc.rust-lang.org/stable/cargo/reference/config.html) ｜ [git：git-config（`advice.*` 默认 true）](https://git-scm.com/docs/git-config)
+
+## hypothesize：默认隔离、可关闭；命令统一为 `worktree`；`--force` = 一次性豁免（按用户决策定稿）
+
+> 一句话：**配置里加一个顶层 `worktree` 开关（默认 `"on"`），命令面把 `workspace` 统一改名为 `worktree`，`--force` 明确定义为"一次性豁免"。**
+
+### 已定的三条（用户）
+
+1. **默认隔离，可关闭** —— 隔离模式**默认开**；仓库可在配置里**关掉**它（关掉后主干可直接提交）。
+2. **命令名统一为 `worktree`** —— `kiln workspace` → **`kiln worktree`**，让**命令 / 配置键 / git 的 `worktree` 说法三处统一**。
+3. **`--force` = 一次性豁免** —— 隔离开着时，`--force` 只豁免**当次**命令，不改配置、不留持久状态；与"配置管默认"**互补**。
+
+### 由这三条推出的子决策（需确认）
+
+#### a. 键位与取值：顶层 `worktree`，取值 `"on" | "off"`，缺省 `"on"`
+
+```jsonc
+{
+  "actions": { "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+               "start": "ask", "terminal": ["conclude", "apply"] },
+  "vcs": "auto",
+  "worktree": "on"   // "on"（默认，强制专用区）| "off"（允许在主干提交）
+}
+```
+
+- **键位**：先做**顶层单键**，与 `vcs` 同款；将来若长出 `worktree.baseRef` 一类子项，再收成组（collect 里 `worktree.*` 的成组先例留作扩展点）。
+- **取值**：字符串 `"on" | "off"`（对齐 `vcs` 的字符串风格）；**缺省 `"on"`**。
+- **不用布尔**：① 与 `vcs` 的字符串风格不一致；② 将来若要加 `"warn"` 一档（collect 里有 ESLint / rustc 的先例）就得**改类型**。
+- **严格校验**：非法值 / 拼错的键 → **报错**（沿用 `DisallowUnknownFields` 的严格取向）。
+- **需确认**：取值用 `"on" | "off"`，还是 `"require" | "off"`，或照 Claude Code 的 `"worktree" | "none"`。
+
+#### b. 关掉后的行为：不拒绝、也不提示
+
+- `worktree: "off"` → `commit` 在主干**直接提交**（不再走 `refuseInMain`）。
+- **是否仍打一行提示**：倾向**不打**（"关"就关干净）；"只提示（`warn`）"这一档**不在本轮取值集合内**。
+- **需确认**：关掉后要不要保留一行提示。
+
+#### c. 改名的作用域：只改「用户可见面」，内部标识符与目录名不动
+
+- **改**：命令 `kiln workspace new | list` → `kiln worktree new | list`；帮助文本、`usageCommands`、输出文案与错误提示中的命令名。
+- **不动**：内部标识符（`vcs.Workspace` 接口、`WorkspaceInfo`、`NewWorkspace` / `ListWorkspaces`）、目录 `<repo>/.kiln/ws/<issue>`（`ws` 是**路径长度**考量，见 `cli-necessity`）。
+- 理由：改名的目的是让 **命令 / 配置 / git 三处说法统一**（用户语汇），不是重命名整个代码库。
+- **需确认**：是否连内部符号一起改名（那会牵动 `vcs` / `cli` 的多处命名与文档）。
+
+#### d. `--force` 保留原名，语义写明「一次性豁免」
+
+- 名字**不改**（`--force` 已是 `commit` 的既有 flag；collect 也确认"配置管默认、`--force` 管一次性"）。
+- 语义：**只作用于当次命令**；`worktree: "off"` 时 `--force` **无实际作用**（已放行）但仍**接受且不报错**（幂等）。
+- **需确认**：是否要改成更直白的 `--allow-main` / `--once`。
+
+#### e. `kiln worktree new` 仍可用；播种的默认配置带上新键
+
+- 关掉隔离**不删除**建区能力——"想隔离的人仍可隔离，只是不再强制"（ask 的待定倾向，保留）。
+- `kiln config path` 播种的**默认配置**要含 `worktree` 键（**带注释**），让新仓可见、可发现。
+- 本仓 `.kilnconfig.jsonc` 是否**显式**写上 `worktree: "on"`：**可选**（缺省即 `"on"`）；倾向**写上并加注释**，当作"这就是默认行为"的自述。**需确认**。
+
+#### f. 旧命令名不留别名（硬切）
+
+- 倾向**不留** `workspace` 别名：与 `.kiln.json` → `.kilnconfig.jsonc` 的**硬切**取向一致，避免两套语汇长期并存。
+- **需确认**：是否留一个过渡别名。
+
+### 影响面（留给 test 落地）
+
+- **`internal/config`**：新增顶层 `worktree` 的解析与校验（缺省 `"on"`；非法值报错）；`Ensure` 播种的默认内容加一行注释与键。
+- **`internal/cli`**：`refuseInMain` 改为**读配置**（`"off"` 放行，`--force` 仍豁免当次）；命令面改名 `workspace` → `worktree`（`new` / `list` + 帮助 + 文案）。
+- **`kiln -h`**：命令表与配置说明同步（`worktree` 键 + `worktree new | list`）。
+- **文档**：`docs/mvp-plan.md` §2.3 配置示例加 `worktree` 键、命令面同步；§10 条目在 conclude 时改"已落地"。
+- **历史文档里的 `kiln workspace new`**（`cli-necessity.md` / `worktree-include.md` / `mvp-plan` 等）：改成 `kiln worktree new`，或加一行"旧名 → 新名"的注记。**需确认**改写方式。
+- **单测**：`config` 新键的解析 / 缺省 / 非法值；`cli` 的 `worktree ∈ {on, off}` × `--force ∈ {有, 无}` 四组合 + 命令面改名后的用法与报错。
