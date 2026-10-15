@@ -1,6 +1,5 @@
 # issue: worktree-include — 要不要把「被忽略的本地文件」带进专用区
 
-- **状态**：已完成（conclude）
 - **domain**：design
 
 ## 背景

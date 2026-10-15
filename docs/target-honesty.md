@@ -1,6 +1,5 @@
 # issue: target-honesty — 用 diff 反查 `target:` 声明是否属实
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：derived-from `action-diff`
 

@@ -1,6 +1,5 @@
 # issue: worktree-mode — 要不要把「开不开工作区（worktree）模式」做成配置项
 
-- **状态**：已完成（conclude）
 - **domain**：design
 
 ## 背景

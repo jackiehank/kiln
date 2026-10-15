@@ -1,6 +1,5 @@
 # issue: action-granularity — 动作要不要分阶段提交
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：relates-to `status-by-domain`
 

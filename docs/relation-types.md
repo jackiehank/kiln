@@ -1,6 +1,5 @@
 # issue: relation-types — 关系类型应该有哪些
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：derived-from `object-semantics`
 

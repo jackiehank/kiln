@@ -1,6 +1,5 @@
 # issue: config-home — 配置文件收进 `.kiln/`，并定其格式
 
-- **状态**：已完成（conclude）
 - **domain**：design
 
 ## 背景

@@ -1,6 +1,5 @@
 # issue: evidence-fluidity — 动作「证据」可被改写 / 删除，与 kiln「记录」取向的张力
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：blocks `cli-necessity`
 

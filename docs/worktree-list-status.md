@@ -1,6 +1,5 @@
 # issue: worktree-list-status — `kiln worktree list` 要不要带状态列（哪个区能安全删）
 
-- **状态**：已完成（conclude）
 - **domain**：cli
 - **关联**：derived-from `worktree-mode`
 

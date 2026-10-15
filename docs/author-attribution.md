@@ -1,6 +1,5 @@
 # issue: author-attribution — 在每个 kiln 动作上标明其作者（人 / Agent）
 
-- **状态**：已完成（conclude）
 - **domain**：design
 
 ## 背景

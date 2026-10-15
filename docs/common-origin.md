@@ -1,6 +1,5 @@
 # issue: common-origin — 两个 issue「同源」时该怎么表达
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：derived-from `relation-vocabulary`
 

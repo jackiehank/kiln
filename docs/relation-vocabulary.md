@@ -1,6 +1,5 @@
 # issue: relation-vocabulary — 9 个关系会不会太多、够不够清晰、Agent 好不好读
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：derived-from `relation-types`
 

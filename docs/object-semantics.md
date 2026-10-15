@@ -1,6 +1,5 @@
 # issue: object-semantics — `object:`（q1/h1/t1/c1/a1）到底用来干什么
 
-- **状态**：ask（进行中）
 - **domain**：design
 - **关联**：relates-to `action-granularity`
 

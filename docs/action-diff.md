@@ -1,6 +1,5 @@
 # issue: action-diff — 如何追踪一个 issue 的全过程，并查看每个 action 的变更
 
-- **状态**：ask（进行中）
 - **domain**：cli
 - **关联**：relates-to `status-by-domain`
 

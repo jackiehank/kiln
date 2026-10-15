@@ -1,6 +1,5 @@
 # issue: cli-necessity — agent 手握 git 时，kiln 的 CLI 还有多少必要性
 
-- **状态**：ask（进行中）
 - **domain**：design
 
 ## 背景

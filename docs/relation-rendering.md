@@ -1,6 +1,5 @@
 # issue: relation-rendering — `graph` / `status` 不渲染 `blocks` / `supersedes`，与 `path` 不一致
 
-- **状态**：ask（进行中）
 - **domain**：cli
 - **关联**：relates-to `cli-necessity`
 
