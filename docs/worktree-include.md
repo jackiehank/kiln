@@ -1,6 +1,6 @@
 # issue: worktree-include — 要不要把「被忽略的本地文件」带进专用区
 
-- **状态**：test（进行中）
+- **状态**：已完成（conclude）
 - **domain**：design
 
 ## 背景
@@ -47,9 +47,10 @@
 
 ## 非目标
 
-- 本轮不改代码：只开题、定清问题与候选。
-- 不评估 **C（建区钩子）** 的细节——它与"编排在外"的立场冲突，除非第 1 问翻案。
-- 不评估"让区可用"该不该由**项目自身**（Makefile / 构建脚本）承担——先把 kiln 该不该管这问清楚。
+- **不做 C（建区钩子）**——与"编排在外"的立场冲突（结论已定：不做）。
+- **不评估"让区可用"里的层②依赖 / ③构建产物 / ④运行态资源**——它们分别归"重建 + 共享缓存"与"按区分配"，不是复制清单的领地。
+- **不搬未提交改动**——那是 `--adopt`，与本 issue（被忽略的本地文件）是两件事。
+- **不解决 jj 非 colocated 的枚举**（当前 jj 默认 colocated，够用）。
 
 ## collect：`.worktreeinclude` 的确切语义，与「新工作区可用性」的行业分层
 
@@ -173,4 +174,42 @@ git ls-files --others --ignored --exclude-standard -z -- <清单里的模式…>
 
 - **单测**（[internal/vcs/vcs_test.go](../internal/vcs/vcs_test.go)）：`readInclude` 去注释/空行/缺失即空、`seedable` 挡元数据根、`SeedArea` 端到端（真 git 仓：只带被忽略的、已存在的跳过、被跟踪的不重复、未忽略的不动）、无清单/纯注释清单 no-op、`copyEntry` 跳 symlink 与目录。`gofmt -l` 空、`go vet ./...` 与 `go test ./...` 全绿。
 - **非目标 / 残留**：**jj 非 colocated**（无 `.git`）下枚举不可用——此时 `SeedArea` 返回提示而非失败（当前 jj 仓默认 colocated，够用）；清单模式按 **git pathspec** 解析，与 gitignore 语法**略有差别**（如无前导斜杠的 `.env` 只匹配根级，不匹配任意层级）——够用，未做进一步的逐字对齐。
-- **留给 conclude**：要不要给 **kiln 自己的仓**加一份 `.worktreeinclude`（例如把 `kiln.exe` 列进去，正好治 `cli-necessity` 那次静默失败）——那是**策略**，不是机制；机制已就位。按 collect 的分层，`kiln.exe` 属**层③（构建产物）**，其正解倾向"重建"，故不默认列入，留 conclude 定。
+- **留给 conclude**：要不要给 **kiln 自己的仓**加一份 `.worktreeinclude`（例如把 `kiln.exe` 列进去，正好治 `cli-necessity` 那次静默失败）——那是**策略**，不是机制；机制已就位。按 collect 的分层，`kiln.exe` 属**层③（构建产物）**，其正解倾向"重建"，故不默认列入，留 conclude 定（见文末「结论（已定）」）。
+
+## 结论（已定）
+
+**定了：做 B（复制清单），只用厂商标准的独立文件 `.worktreeinclude`，语义照抄厂商；`kiln workspace new` 建区后播种一次，git 与 jj（colocated）都生效。**
+
+### 五个问题的答案
+
+| 问题 | 结论 |
+| --- | --- |
+| **要不要做** | **做 B**，但**只做层①**（被忽略的本地小文件）；**不做 C**（建区钩子违背"编排在外"）；**否 D**（清单式带上已是编辑器 / agent 层的既定需求）。**层②依赖 / ③构建产物 / ④运行态资源明确不做** |
+| **清单放哪** | **仓库根独立文件 `.worktreeinclude`（P）**——**沿用厂商键名与位置**（Claude Code / Codex / VS Code 同一约定），吃最强 LLM 先验、可与厂商共用同一文件；**Q（配置里一节）次选**、**R（复用 `.gitignore` 反向标记）否** |
+| **键的形态** | **一行一模式**（`#` 注释与空行丢弃）；模式按 **git pathspec** 解析——**纯路径与 glob 都有效** |
+| **复制语义** | 只带"匹配**且**被忽略"的；**已存在跳过、不覆盖**；**单向进区、无回写**；**跳过 symlink**；额外**挡掉 `.git` / `.jj` / `.kiln` 元数据根** |
+| **后端中立** | **枚举交 git**（gitignore 语义本就是 git 的；jj 读同一套 `.gitignore`，默认 colocated 故照跑）；**jj 非 colocated 不支持**（给提示而非失败）；与 `--adopt`（未提交改动）**仍是两件事** |
+
+### 留下的不变式
+
+**播种只搬「层①：被忽略的本地小文件」，且只补不覆盖、只进不回。** 依赖 / 构建产物 / 运行态资源不在此列——它们是"重建 / 共享缓存 / 按区分配"，不是"复制"。
+
+这条同时解释了本 issue 的起因为何**不被播种直接解决**：区里缺的 `kiln.exe` 是**层③构建产物**，其正解是**在区里重新构建**（或按既有约定借用主干二进制），而不是把它复制进去。
+
+### 落地物
+
+- **代码**：[internal/vcs/include.go](../internal/vcs/include.go)（`IncludeFile` / `SeedArea` + `readInclude` / `seedable` / `ignoredMatching` / `copyEntry`）；[cli.go](../internal/cli/cli.go) 的 `workspaceNew` → `seedArea`（**播种失败只提示、不阻断**）。
+- **机制**：一次 `git ls-files --others --ignored --exclude-standard -z -- <模式…>` 同时解出"被忽略"与"匹配"，git 与 jj 共用。
+- **测试**：单测 5 例（[vcs_test.go](../internal/vcs/vcs_test.go)）；真机在 **git worktree** 与 **jj（colocated）** 两个后端各验证（含幂等补播种、元数据不被带入）。
+- **文档**：本文件 collect / test 两节；[docs/mvp-plan.md](mvp-plan.md) §10 的"播种已落地"条目。
+
+### 本仓要不要加一份清单？——**不加**（有据）
+
+实测本仓被忽略的内容只有两类：**`.kiln/`**（kiln 自己的状态根——已由"元数据护栏"挡掉）与 **`kiln.exe`**（**层③构建产物**）——**没有层①**（无 `.env` / 本地覆盖配置）。按上面的不变式，`kiln.exe` 该"重建"而非"复制"，故**不给本仓加 `.worktreeinclude`**。
+**重启条件**：本仓将来出现层①文件（本地覆盖配置 / secrets）时，加一份清单即可——机制已就位。
+
+### 遗留（未做；若要做，另开 issue，不拖住本结论）
+
+1. **glob 语义未与 gitignore 逐字对齐**：现按 **git pathspec** 解析，与 gitignore 略有差别（如无前导斜杠的 `.env` 只匹配根级而非任意层级）。够用。
+2. **jj 非 colocated**（无 `.git`）下枚举不可用——本轮只保证 colocated（默认如此）。
+3. **`--adopt`**（搬未提交改动）仍是独立机制，未在本 issue 落地。
