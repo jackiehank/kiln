@@ -40,11 +40,21 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 	return parseLog(out), nil
 }
 
-// Action records one kiln action. Unlike git there is no staging area: the
-// working-copy change is finalized as a commit carrying the message.
-func (r ExecRunner) Action(message string) error {
-	_, err := r.run("commit", "--message", message)
-	return err
+// Action records one kiln action and returns the new commit's id. Unlike git there
+// is no staging area: the working-copy change is finalized as a commit carrying
+// the message. `jj commit` also starts a fresh working-copy commit, so the action
+// just recorded is `@-` — the commit Log's revset leaves out for that same reason.
+func (r ExecRunner) Action(message string) (string, error) {
+	if _, err := r.run("commit", "--message", message); err != nil {
+		return "", err
+	}
+	// Reading the new id back is a nicety: the action is already recorded, so a
+	// failure here must not turn a successful commit into a reported failure.
+	out, err := r.run("log", "--no-graph", "-r", "@-", "-T", "commit_id")
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // Show returns `jj show <id>` verbatim: the change header, message and diff, as

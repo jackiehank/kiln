@@ -28,6 +28,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
 worktree 默认: on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）| off（允许在 main 提交）
+提交范围: git 后端只提交已暂存的改动（kiln 不碰 index，先 git add）| jj 后端固定整个工作副本（无暂存区，无需 add）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
 
 do/commit 的 flags:
@@ -50,7 +51,7 @@ var usageCommands = [][2]string{
 	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
 	{"kiln commit <issue> <action> [flags]", "用规范信息直接提交"},
 	{"kiln path <issue>", "重建问题的研究路径（可加 --stat / --shortstat）"},
-	{"kiln show <issue> [n]", "展开某个动作的完整变更（可加 --stat）"},
+	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
@@ -342,11 +343,20 @@ func (e *env) write(args []string, commit bool) int {
 			return code
 		}
 	}
-	if err := backend.Action(msg); err != nil {
+	id, err := backend.Action(msg)
+	if err != nil {
 		fmt.Fprintf(e.errw, "提交失败: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(e.out, msg)
+	// The confirmation names what was just written. Without it the caller only sees
+	// the text it already had from `do`, and has to run a second command to learn
+	// whether anything landed — which is exactly the round trip this line saves.
+	if id == "" {
+		fmt.Fprintf(e.out, "\n已提交 · %s · %s\n", action, issue)
+	} else {
+		fmt.Fprintf(e.out, "\n已提交 %s · %s · %s\n", shortID(id), action, issue)
+	}
 	return 0
 }
 
@@ -762,11 +772,38 @@ func (e *env) show(args []string) int {
 	ordinal := len(p.Actions)
 	if len(pos) >= 2 {
 		n, err := strconv.Atoi(pos[1])
-		if err != nil || n < 1 || n > len(p.Actions) {
+		switch {
+		case err == nil && n >= 1 && n <= len(p.Actions):
+			ordinal = n
+		case err == nil:
 			fmt.Fprintf(e.errw, "动作序号超出范围: %q（可选 1..%d）\n", pos[1], len(p.Actions))
 			return 2
+		case e.actions.IsValid(pos[1]):
+			// An action name selects the **last** one of that kind — the same "newest
+			// match" rule git's :/<text> uses — because that is what "show me that
+			// test" means in practice. Repeats are the norm, not a corner case, so
+			// ambiguity is announced rather than turned into an error.
+			last, count := 0, 0
+			for i, a := range p.Actions {
+				if a.Kind == pos[1] {
+					last = i + 1
+					count++
+				}
+			}
+			if count == 0 {
+				fmt.Fprintf(e.errw, "没有 %q 动作: %s（它的动作: %s）\n", pos[1], p.ID, ordinalList(p))
+				return 1
+			}
+			if count > 1 {
+				fmt.Fprintf(e.errw, "提示: 有 %d 个 %s，显示最后一个（%d/%d）；要看别的用序号\n",
+					count, pos[1], last, len(p.Actions))
+			}
+			ordinal = last
+		default:
+			fmt.Fprintf(e.errw, "无法识别的选择器: %q（用序号 1..%d，或动作名: %s）\n",
+				pos[1], len(p.Actions), strings.Join(e.actions.Names(), ", "))
+			return 2
 		}
-		ordinal = n
 	}
 	a := p.Actions[ordinal-1]
 	fmt.Fprintf(e.out, "%s · %d/%d %s · %s · %s\n\n",
@@ -1073,6 +1110,17 @@ func (e *env) findIssue(issue string) (*model.Issue, bool) {
 	}
 	p, ok := engine.Build(engine.ActionsFromCommits(commits)).Issues[issue]
 	return p, ok
+}
+
+// ordinalList renders an issue's actions the way a caller would address them:
+// `1.ask 2.collect …`. It is what a failed lookup offers instead of a bare
+// "not found", so the next attempt needs no second command.
+func ordinalList(p *model.Issue) string {
+	parts := make([]string, 0, len(p.Actions))
+	for i, a := range p.Actions {
+		parts = append(parts, fmt.Sprintf("%d.%s", i+1, a.Kind))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (e *env) isDone(p *model.Issue) bool {

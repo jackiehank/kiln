@@ -372,8 +372,94 @@ type fakeRunner struct {
 	short   map[string]string
 }
 
-func (f fakeRunner) Log() ([]vcs.Commit, error) { return f.commits, nil }
-func (f fakeRunner) Action(string) error        { return nil }
+func (f fakeRunner) Log() ([]vcs.Commit, error)    { return f.commits, nil }
+func (f fakeRunner) Action(string) (string, error) { return fakeCommitID, nil }
+
+// fakeCommitID is what the fake backends report as the commit they just wrote; it
+// is long enough to exercise the short form the confirmation prints.
+const fakeCommitID = "abc123def4567890"
+
+// A commit says what it wrote: the message alone is what `do` already printed, so
+// without the confirmation the caller has to run a second command to learn whether
+// anything landed.
+func TestCommitConfirmsWhatItWrote(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect", "--title", "调研"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "已提交 abc123d · collect · demo") {
+		t.Fatalf("stdout must name the commit it wrote:\n%s", out.String())
+	}
+}
+
+// An action name selects the last one of that kind — the same "newest match" rule
+// git's :/<text> uses. Repeats are the norm here, so when there is a choice the
+// hint says how many matched instead of silently picking one.
+func TestShowSelectsByActionName(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "collect"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if got := out.String(); !strings.Contains(got, "demo · 2/2 collect · bbbbbbb · 调研") {
+		t.Fatalf("show collect header wrong:\n%s", got)
+	}
+	if strings.Contains(errb.String(), "提示") {
+		t.Fatalf("a unique match needs no hint: %q", errb.String())
+	}
+}
+
+func TestShowTakesTheLastOfRepeatedActions(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: repeatedRunner(), out: &out, errw: &errb}
+	if code := e.show([]string{"rep", "test"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if got := out.String(); !strings.Contains(got, "rep · 4/4 test · t4 · 三测") {
+		t.Fatalf("show test must take the last one:\n%s", got)
+	}
+	if !strings.Contains(errb.String(), "有 3 个 test") {
+		t.Fatalf("repeats must be announced: %q", errb.String())
+	}
+}
+
+// A name that matches nothing is an answer, not a dead end: the error carries the
+// actions this issue actually has, addressed the way the caller would use them.
+func TestShowListsActionsWhenTheNameMatchesNone(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "test"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	for _, want := range []string{`没有 "test" 动作`, "1.ask 2.collect"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, errb.String())
+		}
+	}
+}
+
+func TestShowRejectsAnUnknownSelector(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "nope"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "无法识别的选择器") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// repeatedRunner models what a real issue looks like after a few rounds: the same
+// action several times, so "show me that test" has to mean something.
+func repeatedRunner() fakeRunner {
+	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{
+		commits: []vcs.Commit{
+			{ID: "t1", Date: base, Message: "起点\n\nissue: rep\naction: ask\ntitle: 起点"},
+			{ID: "t2", Date: base.Add(time.Hour), Message: "一测\n\nissue: rep\naction: test\ntitle: 一测"},
+			{ID: "t3", Date: base.Add(2 * time.Hour), Message: "二测\n\nissue: rep\naction: test\ntitle: 二测"},
+			{ID: "t4", Date: base.Add(3 * time.Hour), Message: "三测\n\nissue: rep\naction: test\ntitle: 三测"},
+		},
+		show: map[string]string{"t4": "+third line\n"},
+	}
+}
 func (f fakeRunner) Show(id string) (string, error) {
 	return f.show[id], nil
 }

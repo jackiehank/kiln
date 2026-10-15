@@ -40,7 +40,10 @@ type Repo interface {
 	// summary form.
 	ShowStat(id string, short bool) (string, error)
 	// Action records one kiln action carrying the given commit message.
-	Action(message string) error
+	// Action records one action as a commit carrying message, and returns the new
+	// commit's id in the same shape Log reports — so a caller can name what it just
+	// wrote instead of sending the reader off to look it up.
+	Action(message string) (string, error)
 }
 
 // BranchPrefix namespaces the branches of kiln's dedicated areas in git.

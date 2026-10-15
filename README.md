@@ -60,9 +60,9 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | 命令 | 作用 |
 | --- | --- |
 | `kiln do <issue> <action> [flags]` | 生成规范提交信息（**只打印，不提交**） |
-| `kiln commit <issue> <action> [flags]` | 用规范信息直接提交 |
+| `kiln commit <issue> <action> [flags]` | 用规范信息直接提交，并在末尾报一行 `已提交 <hash> · <action> · <issue>` |
 | `kiln path <issue>` | 重建该 issue 的研究路径；`--stat` 逐动作附文件统计、`--shortstat` 每动作一行总计 |
-| `kiln show <issue> [n]` | 展开某个动作的完整变更（默认最后一个；`n` 即 `path` 里的序号）；`--stat` 只给文件统计 |
+| `kiln show <issue> [n\|action]` | 展开某个动作的完整变更（默认最后一个；`n` 是 `path` 里的序号，**也可给动作名**——取该动作**最后一次**，有多个会在 stderr 提示，没有则列出可控序号）；`--stat` 只给文件统计 |
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
 | `kiln list [--domain=] [--tag=] [--action=] [--json]` | 按条件过滤 issue |

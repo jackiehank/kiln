@@ -130,3 +130,53 @@
 | 测试 | 确认行；`-h` 新段（不破两个既有 usage 测试）；`show` 的四种情形（唯一 / 多 / 无 / 序号仍准） |
 
 > 验证方式：单测 + 真仓跑 `show worktree-mode test`（该 issue 有 6 个 `test`，正好压测“取最近一次 + 提示候选数”）与 `show cli-necessity test`（8 个同名）。
+
+## test：落地——确认行带 hash、`show` 按动作名、`-h` 补提交范围
+
+### 1. 代码
+
+| 位置 | 改动 |
+| --- | --- |
+| [`vcs.Repo.Action`](../internal/vcs/vcs.go) | `Action(message) error` → `Action(message) (string, error)`：回传新提交 id，形状与 `Log` 一致 |
+| [`git`](../internal/vcs/git/git.go) / [`jj`](../internal/vcs/jj/jj.go) 适配器 | git＝提交后 `rev-parse HEAD`；jj＝`@-` 的 `commit_id`（`jj commit` 会把工作副提交定型并开一个新的 `@`，所以刚落的动作就是 `@-`——与 `Log` 的 revset 排除 `@` 同源） |
+| `cli.write` | 提交成功后追加一行确认（stdout） |
+| `cli.show` | 选择器三分支：纯数字＝序号（行为不变）、词表成员＝按名取**最后一次**（多个→stderr 提示）、其余→报错；**无匹配→exit 1 并列出该 issue 的动作**（`ordinalList`） |
+| `usageFooter` / `usageCommands` | 新增「提交范围」段；`show` 行改为 `[n\|action]` |
+
+### 2. 一个实现时冒出来的风险（并已堵上）
+
+“读回新提交 id”是**附赠**动作，而提交已经落下。如果读 id 失败就返回错误，调用方会看到 `提交失败` 但历史里已经多了一条提交——**把成功报成失败**。所以两个后端都改成：**读不到 id 就返回空字符串、不报错**，确认行降级为不带 hash（`已提交 · test · issue`）。
+
+### 3. 真机行为（`show` 与 `-h`）
+
+```
+$ kiln show worktree-mode test
+提示: 有 6 个 test，显示最后一个（9/10）；要看别的用序号
+worktree-mode · 9/10 test · f57c709 · 术语统一：用户可见名词全部改为 worktree / main
+
+$ kiln show cli-necessity test        # 8 个同名
+提示: 有 8 个 test，显示最后一个（17/17）；要看别的用序号
+cli-necessity · 17/17 test · 69d7ec1 · …
+
+$ kiln show worktree-adopt test       # 这个 action 不存在 → exit 1
+没有 "test" 动作: worktree-adopt（它的动作: 1.ask 2.collect 3.conclude）
+
+$ kiln show issue-uniqueness nope     # 既不是序号也不是动作名 → exit 2
+无法识别的选择器: "nope"（用序号 1..5，或动作名: ask, hypothesize, collect, test, conclude, apply）
+
+$ kiln -h | grep 提交范围
+提交范围: git 后端只提交已暂存的改动（kiln 不碰 index，先 git add）| jj 后端固定整个工作副本（无暂存区，无需 add）
+```
+
+`commit` 的确认行由**本次 `test` 提交自身**验证：形态为 `已提交 <hash> · <action> · <issue>`，<hash> 是 7 字符短号（与 `path` 里显示的一致）。
+
+### 4. 验证
+
+- `gofmt -l internal/` → 空；`go vet ./...` → 空；`go test ./...` → **全绿**。
+- 新增单测 5 个：`TestCommitConfirmsWhatItWrote`；`TestShowSelectsByActionName`（唯一匹配**不**出声）；`TestShowTakesTheLastOfRepeatedActions`（3 个 test → `4/4 test` + 提示 `有 3 个 test`）；`TestShowListsActionsWhenTheNameMatchesNone`（exit 1 + `1.ask 2.collect`）；`TestShowRejectsAnUnknownSelector`（exit 2）。既有 `TestShowDefaultsToLastAction` / `TestShowSelectsOrdinal` / `TestShowRejectsOutOfRangeOrdinal` **行为未变**。
+- 两条 usage 测试（列宽对齐、**不得引用 `docs/` 或 `.md`**）继续通过：所以新增段只写语义、不指文档。
+
+### 5. 被现实修正的一条 hypothesize 假设
+
+原计划“顺带把 `--force` 写进提交范围那一行”——实际上 `-h` 的 footer **早就有** `commit 额外 flag: --force（一次性豁免：worktree=on 时放行当次在 main 提交）`，所以本轮只需补“提交范围”本身，**不重复**。
+

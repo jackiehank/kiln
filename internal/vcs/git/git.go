@@ -33,11 +33,20 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 	return parseLog(out), nil
 }
 
-// Action records one action. The caller is expected to have staged the changes;
-// message is passed as a single argv element so newlines are safe.
-func (r ExecRunner) Action(message string) error {
-	_, err := r.run("commit", "-m", message)
-	return err
+// Action records one action and returns the new commit's id. The caller is
+// expected to have staged the changes; message is passed as a single argv element
+// so newlines are safe.
+func (r ExecRunner) Action(message string) (string, error) {
+	if _, err := r.run("commit", "-m", message); err != nil {
+		return "", err
+	}
+	// Reading the new id back is a nicety: the action is already recorded, so a
+	// failure here must not turn a successful commit into a reported failure.
+	out, err := r.run("rev-parse", "HEAD")
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // Show returns `git show <id>` verbatim: the commit header (author, date,
