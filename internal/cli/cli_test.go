@@ -503,3 +503,41 @@ func TestConfigUnknownSubcommand(t *testing.T) {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 }
+
+// A repository that turned isolation off records an action in the main area
+// without any guard — no --force needed.
+func TestCommitInMainAllowedWhenWorktreeOff(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, false)
+	e.worktree = config.WorktreeOff
+	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: demo") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+// The command surface speaks one word for isolation: worktree.
+func TestUsageNamesTheWorktreeCommand(t *testing.T) {
+	text := usageText()
+	for _, want := range []string{"kiln worktree new", "kiln worktree list"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("usage must name %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "kiln workspace") {
+		t.Fatalf("the retired command name must be gone from usage:\n%s", text)
+	}
+}
+
+// The rename is a hard cut: the old command name is rejected, not aliased.
+func TestRetiredWorkspaceCommandIsRejected(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := Run([]string{"workspace", "list"}, &out, &errb); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "未知命令") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}

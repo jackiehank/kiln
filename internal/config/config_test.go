@@ -66,8 +66,8 @@ func TestReadFallsBackToDefaultsOutsideRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Path != "" || cfg.VCS != "auto" {
-		t.Fatalf("cfg = %+v, want no path and auto", cfg)
+	if cfg.Path != "" || cfg.VCS != "auto" || cfg.Worktree != WorktreeOn {
+		t.Fatalf("cfg = %+v, want no path, auto, and isolation on", cfg)
 	}
 	if cfg.Actions.Start() != "ask" || !cfg.Actions.IsTerminal("apply") {
 		t.Fatalf("unexpected defaults: %v", cfg.Actions.Names())
@@ -182,6 +182,11 @@ func TestEnsureWritesCommentedDefaults(t *testing.T) {
 	if cfg.VCS != "auto" {
 		t.Fatalf("seeded VCS = %q, want auto", cfg.VCS)
 	}
+	// Every configurable setting is spelled out, so the seeded file is a complete
+	// declaration of the repository's configuration rather than a partial one.
+	if !strings.Contains(string(body), `"worktree"`) || cfg.Worktree != WorktreeOn || !cfg.Isolated() {
+		t.Fatalf("seeded config must declare worktree=on :\n%s", body)
+	}
 }
 
 func TestEnsureKeepsAnExistingFile(t *testing.T) {
@@ -203,5 +208,42 @@ func TestEnsureKeepsAnExistingFile(t *testing.T) {
 func TestEnsureOutsideRepoFails(t *testing.T) {
 	if _, _, err := Ensure(t.TempDir()); err == nil {
 		t.Fatal("expected an error when there is no repository root to write to")
+	}
+}
+
+// The isolation mode is a two-state knob: on when unset (the safe default), and
+// a repository can turn it off by name; case and spacing are tolerated.
+func TestReadParsesWorktreeMode(t *testing.T) {
+	cases := []struct {
+		body string
+		want string
+	}{
+		{`{"worktree": "off"}`, WorktreeOff},
+		{`{"worktree": "on"}`, WorktreeOn},
+		{`{"worktree": " OFF "}`, WorktreeOff},
+		{`{}`, WorktreeOn},
+	}
+	for _, tc := range cases {
+		root := mkRepo(t)
+		writeConfig(t, root, tc.body)
+		cfg, err := Read(root)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.body, err)
+		}
+		if cfg.Worktree != tc.want {
+			t.Fatalf("%s: Worktree = %q, want %q", tc.body, cfg.Worktree, tc.want)
+		}
+		if got := cfg.Isolated(); got != (tc.want == WorktreeOn) {
+			t.Fatalf("%s: Isolated = %v", tc.body, got)
+		}
+	}
+}
+
+// An unknown mode is an error rather than a silent fallback to the safe default.
+func TestReadRejectsUnknownWorktreeMode(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"worktree": "sometimes"}`)
+	if _, err := Read(root); err == nil {
+		t.Fatal("expected an error for an unknown worktree mode")
 	}
 }

@@ -85,7 +85,8 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
     "start": "ask",
     "terminal": ["conclude", "apply"]
   },
-  "vcs": "auto"   // auto（.jj 优先，否则 .git）/ git / jj
+  "vcs": "auto",    // auto（.jj 优先，否则 .git）/ git / jj
+  "worktree": "on"  // 工作区模式：on（默认，动作只在专用区提交）| off（允许在主干提交）
 }
 ```
 
@@ -96,6 +97,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 - `actions.terminal`：关闭 issue 的动作集合，缺省取 `names` 末项
 - `start` / `terminal` 不在 `names` 中，或词表为空/有重名 → 启动时报错；**键拼错也报错**（不静默忽略）
 - `vcs`：后端偏好，缺省 `auto`
+- `worktree`：工作区模式，缺省 `on`——`on` 时主干只读、动作只在专用区提交（`--force` 可一次性豁免）；`off` 时允许在主干提交
 
 最小配置只需列出词表，例如 `{"actions": {"names": ["ask", "probe", "done"]}}` → `start=ask`、`terminal=done`。
 
@@ -277,8 +279,8 @@ kiln/
 - `kiln rename`：重命名 issue 并改写全部相关 trailer
 - issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
 - **kiln CLI 的存在必要性**：agent 手握 `git` + 约定文档时，哪些命令是"git 做不到的"（`check` 不变量 / `status`·`graph` 综合 / `path` 重建）、哪些只是方便包装——见 [docs/cli-necessity.md](cli-necessity.md)
-- 专用区**播种已落地**：`kiln workspace new` 读仓库根的 `.worktreeinclude`（沿用厂商标准键名与语义），把**被忽略的本地小文件**带进新区；git 与 jj（colocated）均生效，只带"匹配且被忽略"、已存在跳过、单向进区——见 [docs/worktree-include.md](worktree-include.md)
-- **工作区模式可配**：要不要把"主干只读 / 动作只在专用区"这条护栏从**恒开**变成**配置项**（键名 / 取值 / 与 `--force` 的关系待定）——见 [docs/worktree-mode.md](worktree-mode.md)
+- 专用区**播种已落地**：`kiln worktree new` 读仓库根的 `.worktreeinclude`（沿用厂商标准键名与语义），把**被忽略的本地小文件**带进新区；git 与 jj（colocated）均生效，只带"匹配且被忽略"、已存在跳过、单向进区——见 [docs/worktree-include.md](worktree-include.md)
+- 工作区模式**可配已落地**：顶层 `worktree`（默认 `on`：主干只读、动作只在专用区；`off`：允许在主干提交），命令统一为 `kiln worktree`，`--force` = 一次性豁免——见 [docs/worktree-mode.md](worktree-mode.md)
 - 动作「证据」可被改写 / 删除（jj 的流体历史）与「记录」取向的张力：**阻塞 cli-necessity**——见 [docs/evidence-fluidity.md](evidence-fluidity.md)
 - 关系渲染不一致：`graph` / `status` 未渲染 `blocks` / `supersedes`（而 `path` 有）——见 [docs/relation-rendering.md](relation-rendering.md)
 - 动作的**作者归属**：**已定"不做"**——现状 1 人 + 1 agent 共用同一 git 身份，且无消费场景；重启触发条件与理由见 [docs/author-attribution.md](author-attribution.md)

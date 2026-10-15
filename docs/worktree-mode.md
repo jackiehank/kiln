@@ -1,6 +1,6 @@
 # issue: worktree-mode — 要不要把「开不开工作区（worktree）模式」做成配置项
 
-- **状态**：hypothesize（进行中）
+- **状态**：test（进行中）
 - **domain**：design
 
 ## 背景
@@ -193,3 +193,53 @@ kiln 现在**强制**"**主干只读 / 只合并，动作只在专用区提交**
 - **文档**：`docs/mvp-plan.md` §2.3 配置示例加 `worktree` 键、命令面同步；§10 条目在 conclude 时改"已落地"。
 - **历史文档里的 `kiln workspace new`**（`cli-necessity.md` / `worktree-include.md` / `mvp-plan` 等）：改成 `kiln worktree new`，或加一行"旧名 → 新名"的注记。**需确认**改写方式。
 - **单测**：`config` 新键的解析 / 缺省 / 非法值；`cli` 的 `worktree ∈ {on, off}` × `--force ∈ {有, 无}` 四组合 + 命令面改名后的用法与报错。
+
+## test：落地——`worktree` 配置键 + 命令统一为 `worktree` + `--force` 一次性豁免
+
+> 本轮把 hypothesize 的定稿（用户确认 a–e）**落成代码并真机验证**。
+
+### 1. 用户已确认的子决策（a–e；f 按倾向）
+
+| # | 决定 |
+| --- | --- |
+| **a** | 顶层 `worktree`，取值 `"on" \| "off"`，缺省 `"on"` |
+| **b** | 关闭后**不拒绝、也不提示** |
+| **c** | **只改用户可见面**；内部标识符（`vcs.Workspace` 等）与目录 `.kiln/ws/<issue>` 不动 |
+| **d** | **保留 `--force`** 原名，语义写明"一次性豁免" |
+| **e** | `kiln worktree new` 仍可用；**播种的默认配置列出全部可配置项**（声明式，一眼看清配置状态） |
+| **f** | （未点名）按倾向：**不留旧名别名**（硬切） |
+
+### 2. 落地内容
+
+- **`internal/config`**：新增顶层 `worktree`（`file.Worktree` / `Config.Worktree`）；`worktreeMode()` 归一化（容忍大小写与空白）并**严格校验**（非法值报错）；`Config.Isolated()` 以"非 `off` 即隔离"（零值 = 默认开）；`defaultFile` 播种内容**补齐 `worktree` 键**——默认配置现在把 `actions` / `vcs` / `worktree` **全部列出**。
+- **`internal/cli`**：`refuseInMain` 先看 `e.isolated()`，`worktree=off` 直接放行；`--force` 仍是"跳过护栏"的一次性豁免；命令面 **`workspace` → `worktree`**（允许列表 / 分发 / `usageCommands` / 用法与拒绝文案）；`-h` 增 `worktree 默认: on | off` 一行。
+- **本仓**：`.kilnconfig.jsonc` 显式写上 `"worktree": "on"`。
+
+### 3. 真机验证（临时 git 仓，新二进制）
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 1 | 无 `worktree` 键 → 主干 `kiln commit` | **拒绝**（exit 1）；提示改为"先 `kiln worktree new <issue>` … 加 `--force`（一次性豁免）" |
+| 2 | 同上 + `--force` | **放行**（exit 0）——一次性豁免生效 |
+| 3 | 配置 `worktree: "off"` → 主干 `kiln commit` | **放行**（exit 0），**无需 `--force`** |
+| 4 | 配置 `worktree: "sometimes"` | `配置错误: ... 非法 worktree: "sometimes"（可选 on / off）`，exit 1 |
+| 5 | `kiln worktree new t9` / `kiln worktree list` | 建区成功；list 显示主干 + `专用 t9` |
+| 6 | 旧名 `kiln workspace list` | **`未知命令: workspace`**，exit **2** |
+| 7 | `kiln help` | 命令表为 `kiln worktree new / list`；含 `worktree 默认: on \| off` 一行 |
+
+### 4. 测试
+
+- **单测**：`config` 新增 2 例（`TestReadParsesWorktreeMode`：`off` / `on` / 带空白大小写的 ` OFF ` / 缺省 on；`TestReadRejectsUnknownWorktreeMode`），并在 `TestEnsureWritesCommentedDefaults` 断言播种含 `worktree` 且读回为 on、`TestReadFallsBackToDefaultsOutsideRepo` 断言缺省 on。`cli` 新增 3 例（`worktree=off` 时主干提交放行；usage 只提 `worktree`、不提 `workspace`；旧名 `workspace` 报未知命令 exit 2）。`gofmt -l` 空、`go vet` / `go test ./...` **全绿**。
+
+### 5. 发现 / 取舍
+
+1. **`--force` 与配置互补落地**：护栏的两条出路各司其职——配置管**默认**（`off` 长期放行）、`--force` 管**当次**（`on` 时的一次性豁免）；`off` 下 `--force` 依然接受且无副作用。
+2. **"声明式配置"按用户要求做足**：播种的默认配置现在**列出每个可配置项**（`actions` / `vcs` / `worktree`），读一眼即知仓库配置状态；本仓也照此显式写了 `worktree: "on"`。
+3. **改名落点在用户可见面**：内部 `vcs.Workspace` / `WorkspaceInfo` / `.kiln/ws/<issue>` **一律未动**——改名目标是"命令 / 配置 / git 三处说法统一"，不是重命名代码库。**代价**：源码里 `e.workspace*` 方法名仍叫 workspace（用户不可见，可接受）。
+4. **历史文档不改写**：本 issue 之前各文档（`cli-necessity` / `config-home` / `worktree-include` 等）里的 `kiln workspace …` 是**当时的真实记录**，保留原样；**living spec（`docs/mvp-plan.md`）已更新为新名**。→ 换言之，**`kiln workspace` 现在是旧名**，会报未知命令。
+5. **硬切、无别名**：`workspace` 不再被识别（exit 2），与 `.kiln.json` → `.kilnconfig.jsonc` 的硬切一致。
+
+### 未做 / 待定
+
+- **`warn` 中间档未采纳**（collect 里的 ESLint / rustc 先例）——用户定的是两态"可关闭"。
+- **历史文档里的旧命令名未改写**（见取舍 4）；若要统一，可在 conclude 决定。

@@ -25,6 +25,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
+worktree 默认: on（强制专用区）| off（允许在主干提交）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
 
 do/commit 的 flags:
@@ -33,7 +34,7 @@ do/commit 的 flags:
 
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
-commit 额外 flag:  --force（在主干提交的显式豁免；默认主干只读/只合并）
+commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在主干提交）
 `
 
 // usageCommands is the command surface rendered by usageText.
@@ -46,8 +47,8 @@ var usageCommands = [][2]string{
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii]", "问题关系图"},
-	{"kiln workspace new <issue>", "建专用工作区（主干只读，动作只在专用区提交）"},
-	{"kiln workspace list", "列出全部工作区（主干 + 专用）"},
+	{"kiln worktree new <issue>", "建专用工作区（主干只读，动作只在专用区提交）"},
+	{"kiln worktree list", "列出全部工作区（主干 + 专用）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 }
 
@@ -127,12 +128,13 @@ func isWide(r rune) bool {
 // instead of touching a real repository; it is opened lazily, so commands that
 // need no repo (do) still work outside one.
 type env struct {
-	actions *model.ActionSet
-	dir     string
-	vcsPref string
-	repo    vcs.Repo
-	out     io.Writer
-	errw    io.Writer
+	actions  *model.ActionSet
+	dir      string
+	vcsPref  string
+	worktree string
+	repo     vcs.Repo
+	out      io.Writer
+	errw     io.Writer
 }
 
 // backend returns the repository backend, opening it from dir/config on first
@@ -177,7 +179,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText())
 		return 0
-	case "do", "commit", "path", "status", "check", "list", "graph", "show", "workspace", "config":
+	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config":
 		// handled below, once the vocabulary is loaded
 	default:
 		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
@@ -189,7 +191,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "配置错误: %v\n", err)
 		return 1
 	}
-	e := &env{actions: cfg.Actions, dir: ".", vcsPref: cfg.VCS, out: stdout, errw: stderr}
+	e := &env{actions: cfg.Actions, dir: ".", vcsPref: cfg.VCS, worktree: cfg.Worktree, out: stdout, errw: stderr}
 	switch cmd {
 	case "do":
 		return e.write(rest, false)
@@ -207,7 +209,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.list(rest)
 	case "graph":
 		return e.graph(rest)
-	case "workspace":
+	case "worktree":
 		return e.workspace(rest)
 	case "config":
 		return e.config(rest)
@@ -331,6 +333,9 @@ func (e *env) write(args []string, commit bool) int {
 // structural, so it needs no concurrency knowledge. Backends without workspace
 // support are left unchecked; --force bypasses the guard.
 func (e *env) refuseInMain(backend vcs.Repo) int {
+	if !e.isolated() {
+		return 0 // worktree: "off" — the repository opted out of isolation
+	}
 	ws, ok := backend.(vcs.Workspace)
 	if !ok {
 		return 0
@@ -344,11 +349,17 @@ func (e *env) refuseInMain(backend vcs.Repo) int {
 		return 0
 	}
 	fmt.Fprintln(e.errw, "拒绝提交：当前是主干（只读/只合并），动作只在专用工作区提交。")
-	fmt.Fprintln(e.errw, "先 `kiln workspace new <issue>`，再 cd 到专用区提交；确要在主干提交时加 --force。")
+	fmt.Fprintln(e.errw, "先 `kiln worktree new <issue>`，再 cd 到专用区提交；确要在主干提交时加 --force（一次性豁免）。")
+	fmt.Fprintln(e.errw, "（想长期允许主干提交，把配置里的 worktree 设为 off。）")
 	return 1
 }
 
-// workspace implements `kiln workspace new <issue>` and `kiln workspace list`.
+// isolated reports whether the repository still requires a dedicated area for
+// actions. An unset value means on: the guard holds unless a repository turned
+// it off by name.
+func (e *env) isolated() bool { return e.worktree != config.WorktreeOff }
+
+// workspace implements `kiln worktree new <issue>` and `kiln worktree list`.
 func (e *env) workspace(args []string) int {
 	sub := ""
 	rest := args
@@ -365,7 +376,7 @@ func (e *env) workspace(args []string) int {
 	case "list":
 		return e.workspaceList(ws)
 	default:
-		fmt.Fprintln(e.errw, "用法: kiln workspace new <issue> | kiln workspace list")
+		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue> | kiln worktree list")
 		return 2
 	}
 }
@@ -391,7 +402,7 @@ func (e *env) workspaceBackend() (vcs.Workspace, int) {
 func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	pos, _ := parse(args)
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln workspace new <issue>")
+		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue>")
 		return 2
 	}
 	issue := pos[0]

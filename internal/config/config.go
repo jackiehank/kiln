@@ -32,22 +32,36 @@ type file struct {
 		Start    string   `json:"start"`
 		Terminal []string `json:"terminal"`
 	} `json:"actions"`
-	VCS string `json:"vcs"`
+	VCS      string `json:"vcs"`
+	Worktree string `json:"worktree"`
 }
 
 // Config is everything kiln reads from a repository's config file.
 type Config struct {
-	Path    string           // the file kiln used ("" outside a repository)
-	Actions *model.ActionSet // the vocabulary (built-in defaults when unset)
-	VCS     string           // backend preference: auto | git | jj
+	Path     string           // the file kiln used ("" outside a repository)
+	Actions  *model.ActionSet // the vocabulary (built-in defaults when unset)
+	VCS      string           // backend preference: auto | git | jj
+	Worktree string           // isolation mode: on (default) | off
 }
+
+// Worktree modes answer one question: may an action be recorded in the main
+// checkout, or must it go through a dedicated area?
+const (
+	WorktreeOn  = "on"  // default: the main checkout refuses actions
+	WorktreeOff = "off" // the repository explicitly opted out of isolation
+)
+
+// Isolated reports whether actions must go through a dedicated area. The zero
+// value — an unset config — means on, so the guard holds unless a repository
+// turns it off by name.
+func (c Config) Isolated() bool { return c.Worktree != WorktreeOff }
 
 // Read resolves and parses the configuration for startDir. A missing file is not
 // an error: kiln falls back to the built-in vocabulary and "auto". A file that
 // exists but does not parse is an error, so a misspelled key is never silently
 // ignored.
 func Read(startDir string) (Config, error) {
-	cfg := Config{Actions: model.DefaultActionSet(), VCS: "auto"}
+	cfg := Config{Actions: model.DefaultActionSet(), VCS: "auto", Worktree: WorktreeOn}
 	path, ok := Path(startDir)
 	if !ok {
 		return cfg, nil // outside a repository: do still works, on the defaults
@@ -73,6 +87,11 @@ func Read(startDir string) (Config, error) {
 	if v := strings.TrimSpace(f.VCS); v != "" {
 		cfg.VCS = v
 	}
+	wt, err := worktreeMode(f.Worktree)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", path, err)
+	}
+	cfg.Worktree = wt
 	set, err := actionSet(f)
 	if err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
@@ -98,6 +117,19 @@ func actionSet(f file) (*model.ActionSet, error) {
 		terminal = []string{names[len(names)-1]}
 	}
 	return model.NewActionSet(names, start, terminal)
+}
+
+// worktreeMode normalizes the isolation mode, tolerating case and spacing so a
+// hand-edited file reads the same as one kiln wrote. An unknown value is an error
+// rather than a silent fallback to the safe default.
+func worktreeMode(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", WorktreeOn:
+		return WorktreeOn, nil
+	case WorktreeOff:
+		return WorktreeOff, nil
+	}
+	return "", fmt.Errorf("非法 worktree: %q（可选 on / off）", v)
 }
 
 // Path resolves the config file for startDir by walking up from it: the first
@@ -172,7 +204,9 @@ const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享），�
     "terminal": ["conclude", "apply"]
   },
   // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
-  "vcs": "auto"
+  "vcs": "auto",
+  // 工作区模式：on（默认，动作只在专用区提交）| off（允许在主干提交）
+  "worktree": "on"
 }
 `
 
