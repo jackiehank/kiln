@@ -1,7 +1,7 @@
 # issue: qualified-issue-id — 命令输入要不要接受 domain/id 限定名（变相引入命名空间，可减少重名）
 
 - **domain**：cli
-- **关联**：relates-to `issue-uniqueness` / `status-by-domain`
+- **关联**：relates-to `issue-uniqueness` / `status-by-domain` / `relation-rendering`
 
 ## 背景
 
@@ -71,6 +71,8 @@ design
 | **B** | 接受丢失：跨域行也只写裸 id，域去看 `status --json` / `list` | 视图里丢掉一个现在有的事实 |
 | **C** | **不再跨域嵌套**：跨域子留在自己的 domain 块，跨域关系交给 `graph` | 显示层不再有「外来的行」→ 前缀彻底不需要；代价是推翻 §11.1 的落地，丢掉状态视图里唯一的跨域线索 |
 
+> **已被「hypothesize（续）」取代**：裁定为候选 **C**，并且**连树形缩进一起取消**（不只是“跨域不嵌套”，而是 `status` 整个视图不再画树）。§4 的非目标与 §5 的落地清单也一并以那节为准。
+
 #### 3.2 「JSON 行 = 文本行」的不变量：**顺序**一致，不是**行号**相等
 
 - 硬事实：[cli_test.go](../internal/cli/cli_test.go) 的注释把它定义为「`status --json` 是**一层平铺行**（没有分组、没有子），**其顺序就是文本视图打印的顺序**」——**顺序**不变量。所以**加块头行不会破这个测试**。
@@ -98,6 +100,71 @@ design
 | [domain-status.md](domain-status.md) | 7 行示例，含跨域嵌套行 | 示例按新画法重画 |
 | [README](../README.md) 机器可读输出 | 「行序与文本视图逐行一致：第 N 行就是同一个 issue」 | 改成「issue 行的相对顺序一致」 |
 | [`cli_test.go`](../internal/cli/cli_test.go) | `TestStatusRendersDomainBlocks` 断言 `<domain>/<id>` 行 | 断言改为新画法；JSON 的顺序测试**不受影响** |
+
+## hypothesize（续）：去掉嵌套——`status` 只管 domain 目录，关系归 `graph`
+
+> 用户裁定：**显示 domain 分组名，同时去掉嵌套信息**。理由：后续 issue 之间的关系可能变复杂，**`status` 没必要承担这个职责**。
+> → 上节 §3.1 的候选 **C** 胜出，并且**不只是“跨域不嵌套”**：`status` 整个视图不再画树（无缩进、无 `├──`/`└──`）。**本节取代上节的 §3.1 候选表与 §5 落地清单。**
+
+### 1. 效果
+
+```
+问题总数: 33（完成 22 / 进行中 11）｜domain 2 个｜worktree off（已开 0 个）
+kiln 动作数: 116
+
+cli
+  action-diff                    ✓ conclude
+  qualified-issue-id               ask
+
+design
+  action-config                  ✓ apply
+  target-honesty                   ask
+```
+
+两个直接后果：① 行内**全部是裸 id**（包括原先被嵌套的 `target-honesty`）→ 每行都能粘回命令，本 issue 的开题动因彻底消失；② `target-honesty` 回到 `design` 块——**块归属 = issue 自己的 domain**，一个 issue 只出现一次、只在一个块里。
+
+### 2. 顺带的收益：**净删代码**
+
+嵌套不是“少显示一点”，而是一整套为它而存的机制：
+
+| 现有机制 | 只服务于嵌套 |
+| --- | --- |
+| `engine.Entry.Children` + `GroupByDomain` 里的 `parent` 映射 / `loops` / `buildEntry` | 跨域落位 |
+| `engine` 的两个测试：`TestGroupByDomainRelocatesCrossDomainChild`、`TestGroupByDomainKeepsSameDomainFlat` | 同上 |
+| `cli.statusRow.{depth, isLast, indent, parent}` + `statusWalk` 递归 + `statusLabel` 的 `├──`/`└──` | 文本视图的树 |
+| `status --json` 的 `issues[].parent` + 它的文档 | 平铺后仍能表达落位 |
+
+`GroupByDomain` 退化成「**分组 + 排序 + `(未分类)` 兜底**」——正好把 §11.2 里「已排序、**已嵌套**」的“已嵌套”删掉。
+
+### 3. 一个非平凡的连带：`parent` 失去了指代物
+
+- [machine-readable-output](machine-readable-output.md) 上一轮刚刚把 JSON 从 `groups[]→entries[]→children[]` 推翻成「顶层扁平 `issues[]` + 可选 `parent`」，并特意声明 `parent` 是「**落位**词，不是关系词」（“不能叫 `derived-from`，那等于声称一个它并不承载的关系”）。
+- 文本视图一旦不落位，`parent` 就没有可指的东西了——它是**从嵌套里长出来的字段**，不是独立事实。→ **该字段连同它的说明一起退场**（[README](../README.md) 那句、machine-readable-output 的 §2.1 表格与 §2 那条“嵌套保留”的论证）。
+- 代价可控：这是 `status --json` 的**破坏性**变更，但§11.3 已述本仓无外部消费者；而少一个“永远表述摆法”的词，比留一个失去指代的词干净。
+- 附带好处：JSON 与文本的“**顺序**一致”不变量更好守了——两边都是“一个 issue 一行”，块头只存在于文本（JSON 的 `domain` 字段已能重建分组）。
+
+### 4. 与 `relation-rendering` 的关系（新增一条边）
+
+`cli/relation-rendering`（ask）的问题 4 逐字就是：「**`status` 要不要显示关系？**还是坚持 `status` 只管 domain 目录、把关系留给 `graph`？」——本轮裁定等于把它答了：**`status` 不显示关系**（既不画树、也不画边），关系归 `path`（过程）与 `graph`（关系网）。故 `relates-to relation-rendering`。
+
+### 5. 落地清单（取代上节 §5）
+
+| 位置 | 要动什么 | 量 |
+| --- | --- | --- |
+| `engine.GroupByDomain` | 去掉跨域落位；删 `Entry.Children`；退化成分组 + 排序 + `(未分类)` 兜底 | 删 |
+| `engine` 测试 | `RelocatesCrossDomainChild` 删；`KeepsSameDomainFlat` 改成“跨域也平铺”；`OrdersAndBucketsUndomained` 保留 | 删 / 改 |
+| `cli` | `issueLabel` 拆成“块头 + 裸 id”；`statusWalk` / `statusLabel` 的 depth / indent / `├──` 去掉；`statusRow` 瘦身 | 净删 |
+| `status --json` | 删 `issues[].parent`（DTO 与赋值） | 删 |
+| [mvp-plan](mvp-plan.md) §11 / §11.1 | 「每行写作 `<domain>/<issue-id>`、不设目录标题行」→「块头携带 domain、行内裸 id」；§11.1「跨域派生（嵌套）」**整节撤掉**；§11.2「已嵌套」删 | 改 |
+| [machine-readable-output](machine-readable-output.md) | §2“嵌套保留”的论证 + §2.1 的 `parent` 行 | 改 |
+| [domain-status.md](domain-status.md) | 示例重画（无嵌套、无前缀） | 改 |
+| [README](../README.md) | `status` 那条：去掉 `parent`、“逐行一致”→“**issue 行的相对顺序**一致”；提交格式节无需改 | 改 |
+| [`cli_test.go`](../internal/cli/cli_test.go) | `TestStatusRendersDomainBlocks` 断言新画法；JSON 期望里的 `"parent"` 删掉 | 改 |
+
+### 6. 非目标（补一条，其余沿用上节 §4）
+
+- **不动 `graph` / `path` 的关系渲染**（那是 `relation-rendering` 的地盘）；本轮只是**把 `status` 从关系渲染里摘出去**。
+- **不删 `engine` 的关系数据**（`DerivedFrom` / `Spawns` / … 照旧解析、`check` 照旧校验）：本轮只是不再拿它决定 `status` 的**摆位**。
 
 ## collect：业内怎么编号，怎么处理重名
 
