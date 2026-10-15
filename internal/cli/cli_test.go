@@ -430,10 +430,14 @@ func TestWorkspaceNewReportsPath(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	got := out.String()
-	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity", "区内没有 kiln 二进制"} {
+	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity", "一次检出"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("workspace new missing %q:\n%s", want, got)
 		}
+	}
+	// The output must stay project-neutral: no advice about kiln's own binary.
+	if strings.Contains(got, "二进制") {
+		t.Fatalf("workspace new must not carry self-hosting advice:\n%s", got)
 	}
 }
 

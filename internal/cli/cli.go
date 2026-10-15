@@ -6,7 +6,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 
@@ -431,23 +430,16 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	fmt.Fprintf(e.out, "专用工作区: %s\n", path)
 	e.seedArea(ws, path)
 	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
-	fmt.Fprintf(e.out, "提交提示: 区内没有 kiln 二进制，用主干那份（改了 Go 源码需先重建它）: %s\n", selfPath())
+	// Project-neutral: an area is a bare checkout, whatever the project builds
+	// with. Making it usable is the project's own business, so the hint names no
+	// language, no path and no tool.
+	fmt.Fprintln(e.out, "提示: 区是一次检出——被忽略的构建产物与依赖不在其中，请自行 build / 装依赖")
 	if cfgPath, created, err := config.Ensure(e.dir); err != nil {
 		fmt.Fprintf(e.errw, "提示: 未能写入默认配置: %v\n", err)
 	} else if created {
 		fmt.Fprintf(e.out, "已写入默认配置: %s\n", cfgPath)
 	}
 	return 0
-}
-
-// selfPath names the binary the caller is already running, so the hint can point
-// at the exact program in hand — the main checkout's copy, when the area was made
-// from the main checkout.
-func selfPath() string {
-	if p, err := os.Executable(); err == nil {
-		return p
-	}
-	return "kiln"
 }
 
 // seedArea carries the repository's declared local files (.worktreeinclude) into
