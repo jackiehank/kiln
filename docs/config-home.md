@@ -43,8 +43,53 @@
 | **Q** `.kiln/config.<ext>`，忽略改 `/ws` | 配置天然**可版本化**，区仍被忽略 | `.kiln/.gitignore` 自身变成需要提交的受控文件；且**主干不能提交**（U 布局的护栏）→ 首次得在专用区里提交它 |
 | **R** `.kiln/config.<ext>`，忽略 `/*` + `!config.*` | 状态根仍整体自忽略 | 例外规则要维护；git 会把配置显式报成未跟踪（需有人提交）——即"可版本化"得靠一条例外规则兜着 |
 
+## collect：配置"放哪 + 什么格式"的行业惯例
+
+> 一次调研 + 本机实测。目的：看主流工具**各自怎么处理这两件事**，再看 kiln 的候选该怎么收敛。来源见节末。
+
+### 1. 位置：惯例是「分成两层」，且方向相反
+
+| 工具 | 工具**自有**的配置 | 项目**共享**的配置（随版本） |
+| --- | --- | --- |
+| **git** | 三层：系统 `…/etc/gitconfig`、用户 `~/.gitconfig`、**仓库 `.git/config`**（在状态目录内，**不进工作树、不随版本**） | 仓库根的 `.gitignore` / `.gitattributes`（**提交进版本**） |
+| **jj** | 三层：用户 `%APPDATA%\jj\config.toml`、**repo `%APPDATA%\jj\repos\<hash>\config.toml`**、**workspace `%APPDATA%\jj\workspaces\<hash>\config.toml`**——**全在仓库之外** | 与 git 同理：忽略类文件在仓库根、随版本 |
+| **Cargo / Ruff / pyproject / golangci-lint / tsconfig** | — | **项目根**：`Cargo.toml` / `ruff.toml` / `pyproject.toml` / `.golangci.yml` / `tsconfig.json`，**全部随版本** |
+
+**一句话**：**"工具自己的东西"惯例放状态目录（或仓库外）、不随版本；"项目共享的东西"惯例放项目根、随版本。**
+
+→ 对 kiln 的直接含义：`.kiln.json` 装的是 **action 词表**——**协作者该用同一套词**，属"项目共享"。它现在"随版本"是**符合惯例的**；搬进 `.kiln/`（默认整目录自忽略）等于把它**降级为"只随仓库、不随版本"**。所以位置问题的**前置问题**是：**词表算项目共享，还是算工具本地？**
+
+> 副产物：jj 的 repo / workspace 配置**实测在仓库之外**（旧文档说的 `.jj/repo/config.toml` 在 0.45.1 上并不存在）——可见"仓库级配置放哪"连成熟工具都会**随版本漂移**。因此 kiln 值得有个**自述命令**（如 `kiln config path`，jj 就有 `jj config path`），别让用户靠猜。
+
+### 2. 格式：惯例按「给谁读」分
+
+| 格式 | 谁在用 | 为什么 |
+| --- | --- | --- |
+| **严格 JSON** | `package.json`、各类**交换 / 产物** | 机器产出、无注释需求，解析器必须严格 |
+| **JSONC（JSON + 注释）** | **`tsconfig.json`、`.vscode/settings.json`** | 微软推广的 JSONC 规格；TypeScript 1.8 专门加注释，原文理由是「**总是很乐意能给配置写说明**」，编译器自带 JSONC reader。tsconfig 能有注释而 `package.json` 不能，正因为后者是**发布产物** |
+| **TOML** | **jj**（文件头带 `#:schema`）、`Cargo.toml`、`pyproject.toml`、Ruff | 主打"给人读、语义明显、**无缩进陷阱**、支持注释"；社区共识是**手写的扁平配置用 TOML**，深层嵌套 / 生态所需的才上 YAML（K8s、CI） |
+| **多格式并存** | **golangci-lint**（`yml` / `yaml` / `toml` / `json` 都支持） | "不选"的解法：自由给用户，代价是维护多条解析路径；配套 **JSON Schema 校验**与 `migrate` 迁移（**迁移前先备份旧文件**） |
+| **YAML** | CI / K8s / 部分 lint | 深层嵌套与生态使然；缩进敏感是代价 |
+
+**两条可抄的习惯**：① **schema 校验**——jj 在配置头写 `#:schema <url>`（本机那份用户配置就有这一行），golangci-lint 用 JSON Schema 校验配置；② **迁移向导**——golangci-lint 的 `migrate` 先备份再改。
+
+### 3. 对候选的收敛
+
+- **位置**：先答"词表算不算**项目共享**"。
+  - **算**（协作者必须同词表）→ 惯例支持**放项目根、随版本**；若仍要收进 `.kiln/`，就必须选 **Q** 或 **R**（改忽略规则把配置放出来）——"**可版本化**"这条不能靠忽略规则偷偷丢掉。
+  - **不算**（视作本地偏好）→ **P** 或 **R** 都行，随版本与否不再重要。
+- **格式**：惯例把候选压成三条路——
+  - **L1 严格 JSON + 工具侧解释**：文件仍是 **A**（零依赖），把"为什么这么设"从文件**搬到工具**（`kiln config explain` / schema 文档）→ 零依赖 + 注释需求另解；
+  - **L2 JSONC（E）**：零依赖 + 文件内可注释，代价是**非标准**（外部工具可能不认，需自写剥注释）；
+  - **L3 TOML（B）**：手写体验与生态最好，代价是**打破 stdlib-only**（本仓首个第三方依赖）。
+  - **C（YAML）与 D（自造 DSL）本轮基本可排除**：YAML 与"手写少量扁平键"的场景不合且陷阱多；自造 DSL 没生态——**调研里也没有主流工具自造配置语言**。
+- **两件几乎无争议的**：**schema 校验**（与 `check` 的取向一致）、**`kiln config path` 自述命令**（对齐 `jj config path`）。
+
+> 来源：[git-config（多层配置与语法）](https://git-scm.com/docs/git-config) ｜ [jj Settings（三层配置）](https://docs.jj-vcs.dev/v0.36.0/config/) ｜ [jj CLI reference（`jj config path`）](https://docs.jj-vcs.dev/v0.36.0/cli-reference/) ｜ [JSONC 规格（微软为 VS Code 引入）](https://jsonc.org/) ｜ [TypeScript 1.8：Allow comments in tsconfig](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-1-8.html) ｜ [为什么 tsconfig 能注释而 package.json 不能](https://zeroutil.com/blog/tsconfig-json-comments-jsonc/) ｜ [TOML 官网（以人为先）](https://toml.io/cn/) ｜ [TOML vs YAML vs JSON 对比](https://codeutil.dev/blog/toml-vs-yaml-vs-json-config-formats) ｜ [golangci-lint：配置文件（多格式 + JSON Schema）](https://golangci-lint.run/docs/configuration/file/) ｜ [golangci-lint：迁移指南（先备份）](https://golangci-lint.run/product/migration-guide/)
+
 ## 待定
 
+- **前置问题（collect 催生）**：action 词表算"项目**共享**"（随版本）还是"工具本地偏好"？——它决定位置那题怎么答。
 - 新旧路径的优先级与弃用时间窗。
 - 是否需要"仓库根 vs 当前目录"的显式开关（不引入开关更简，但会改变既有行为）。
 - 注释性配置是否值得——若选 A/E，就默认放弃在配置里写"为什么"。
