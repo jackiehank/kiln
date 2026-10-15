@@ -28,7 +28,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
 worktree 默认: on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）| off（允许在 main 提交）
-（配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
+（配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
 
 do/commit 的 flags:
   --title  --refs  --target  --scope  --domain  --tag
@@ -36,7 +36,7 @@ do/commit 的 flags:
 
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
-status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档，见 docs/machine-readable-output.md）
+status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在 main 提交）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 `

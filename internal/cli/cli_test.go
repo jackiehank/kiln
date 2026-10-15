@@ -264,6 +264,18 @@ func TestUsageTextAlignsDescriptions(t *testing.T) {
 	}
 }
 
+// The help text has to stand alone. kiln ships as a tool of its own, so its own
+// help cannot point at documents that live in one particular repository — the
+// reader may not have them.
+func TestUsageTextCitesNoRepositoryDocument(t *testing.T) {
+	text := usageText()
+	for _, unwanted := range []string{"docs/", ".md"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("help must not cite a document (%q):\n%s", unwanted, text)
+		}
+	}
+}
+
 // fakeRunner supplies hand-built history and stat/show output so the CLI tests
 // never touch a real repository.
 type fakeRunner struct {
