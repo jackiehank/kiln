@@ -658,10 +658,69 @@ agent 彼此**看不见**，它们**共享一个仓库**——能"看见彼此"�
 - 主干是否也承担"合并"职责（如把 `kiln/<issue>` 分支合回主干）。
 - **非目标**：本轮不改代码。
 
+## test：落地 U 方案——workspace 原语 + 主干结构性护栏
+
+> 承「hypothesize：U 方案设计」：把「主干只读 / 只合并，动作只在专用工作区提交」**落地成代码并实测**。范围按早先约定取**核心 U**（`new` / `list` + 护栏 + `--force`），`--adopt` 不做。
+
+### 落地内容
+
+- **`vcs.Workspace`**（新接口，**与 `vcs.Repo` 分开**）：`IsDedicated()` / `NewWorkspace(issue)` / `ListWorkspaces()`；配套 `WorkspaceInfo{Path, Issue, Main}`、`SiblingArea(root, issue)`（兄弟目录 `<repo>--<issue>`）、`SamePath`。分开是为了区分"**后端能读写**"与"**后端能隔离**"。
+- **`vcs/git`**：`IsDedicated` = `.git` 是**文件**（链接工作树）还是**目录**（主干）；`NewWorkspace` → `git worktree add <path> -b kiln/<issue>`；`ListWorkspaces` 解析 `git worktree list --porcelain`（首条即主干，分支前缀 `kiln/` 即 issue）。
+- **`vcs/jj`**：`IsDedicated` 以 `jj workspace root` 对照 `jj workspace list -T 'name ++ "\x1f" ++ root ++ "\x1e"'`，判"当前区是否 `default`"；`NewWorkspace` → `jj workspace add --name <issue> <path>`；`ListWorkspaces` 解析同一模板。
+- **`cli`**：新命令 `kiln workspace new <issue>` / `kiln workspace list`；`kiln commit` 增护栏 G——**纯结构判据：在主干即拒绝**（exit 1），`--force` 显式豁免；**读命令一律不受限**；后端不实现 `vcs.Workspace` 时跳过护栏（不假装有隔离）。`kiln -h` 同步更新。
+- **命名即绑定**：区路径 / 分支 / workspace 名全部由 issue 派生，**无绑定文件**——承「按 issue 建隔离区（静默化）」的选择。
+
+### 验证
+
+- `gofmt -l` 干净；`go vet ./...` 通过；`go test ./...` **全绿**。
+- 新增单测 14 例：`vcs` 2（`SiblingArea` / `SamePath`）、`vcs/git` 2（worktree porcelain 解析）、`vcs/jj` 2（workspace 列表解析）、`cli` 8（主干拒绝 / `--force` / 专用区放行 / `do` 不受影响 / `list` 标注 / `new` 打印路径 / 非法 issue 拒绝 / 未知子命令）。
+
+### 真机实验（临时仓）
+
+**git 后端**（`gmain`：主干 + 一个专用区）
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 1 | 主干有 `a.md`/`b.md` 未提交改动 → `kiln commit` | **拒绝**，exit 1；提交数不变、两文件仍游离 → **动作根本没落盘** |
+| 2 | `kiln workspace new u-test` ×2 | 建 `…/gmain--u-test`（分支 `kiln/u-test`）；**第二次原样复用**（幂等，exit 0） |
+| 3 | `kiln workspace list` | 主干行 + `专用 u-test`，按路径宽度对齐 |
+| 4 | 结构判据 | 主干：`.git` 是目录、`gitdir == commondir`；区里：`.git` 是**文件**、`gitdir = …/.git/worktrees/gmain--u-test` ≠ `commondir` |
+| 5 | 区内 `git add c.md` + `kiln commit` | **成功**（exit 0）；区里 `kiln path` 立即显示该动作 |
+| 6 | **主干读区内的动作** | **读不到**（`未找到问题: u-test`，exit 1）→ **git 的分支隔离** |
+| 7 | 主干 `--force`（且 `git add -A`） | 成功，但 `git show --stat` = **a.md + b.md 两文件** → **复现"吞并别人的改动"**；对照实验 1，护栏挡的正是这件事 |
+| 8 | 主干 `kiln status` | 正常（exit 0）——**读不受限** |
+| 9 | 主干 `git merge kiln/u-test` 后再 `kiln path` | **读到 2 步**（区内动作 + 主干强制动作）→ **合并即全局** |
+
+**jj 后端**（`jmain`：colocated，`default` + 一个专用 workspace）
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 10 | `default` workspace → `kiln commit` | **拒绝**，exit 1 |
+| 11 | `kiln workspace new u-test` ×2 + `list` | 建 `…/jmain--u-test`（workspace 名 = issue）；复用幂等；list 显示主干 + 专用 |
+| 12 | 区内 `kiln commit`（c.md **未暂存**） | **成功**——jj 终结整个工作区变更，**免暂存** |
+| 13 | **`default` 读区内的动作** | **读到**（exit 0）——`all()` 覆盖共享 store → **jj 的读是全局的** |
+| 14 | `default` 里 `b.md`/`e.md` 待提交 → `kiln commit` | 拒绝；`jj status` 显示两文件**仍在工作副本**（未提交）→ **吞并没发生** |
+| 15 | `default` `--force` | 成功（豁免） |
+
+### 发现（对假设的修正）
+
+1. **"读是全局的"只对 jj 成立，对 git 不成立**。hypothesize（U）§3 写"主干照样读，且看到的是**全局**（Log 是全仓的）"——**实验 6 证伪**：git 的动作提交在 `kiln/<issue>` 分支上，**主干在 merge 前读不到**（§3 的"全仓"实际只是"全分支"）。后果：并行期间**主干的 `status` / `check` 会少报在飞动作**；jj 因 workspace **共享同一 store**（`all()` 覆盖全部）没有这个缺口。→ 应写进方案：**git 布局下"全局视图"要靠周期合并兑现，jj 布局下天然兑现。**
+2. **护栏确实挡在"吞并"之前**（实验 1/7、14）：主干**根本没有动作提交** → A 无法把 B 的未提交改动带进自己的动作。"**结构性、零判断**"的承诺成立。
+3. **护栏是 fail-closed 的**：判不出"我在哪"（后端不支持 / 命令失败）时报错停手，**不静默放行**——避免"以为有隔离"。
+4. **后端中立性成立**：`workspace new` / `list` 两端**同一命令、同一输出形态**；差异（分支名 vs workspace 名、暂存 vs 免暂存）全被适配器吞在内部——**这正是 `vcs` 抽象该吞的东西**。
+5. **自举摩擦是真的**（承 §5）：本仓第一次建区**只能用原生 `git worktree add`**（旧二进制没有 `workspace` 命令）——"单人也要走一次建区"在落地时表现为"**新命令得先有二进制**"。→ **首次建区天然需要一条不依赖 kiln 的引导路径**（原生 VCS 命令即可，不必为此设计特殊命令）。
+6. **环境坑（记录备查）**：本机 `core.autocrlf=true`，专用区 checkout 出 **CRLF**，使 `gofmt -l` 把**整棵树**报成未格式化（主干是 LF 所以干净）；归一成 LF 后干净，且 `git diff --cached` 证实**未产生伪改动**。**不是 kiln 的问题，但会在"每个新建的工作区"上反复出现**。
+
+### 未做 / 待定
+
+- **`--adopt` 未实现**（§7 待定项）："已在主干改了文件才想提交"目前只有护栏报错 + 提示，没有把改动迁进专用区的命令。
+- **残留分支的复用边界**：区被删而 `kiln/<issue>` 分支尚存时，`workspace new` 会因 `-b` 冲突失败（未做二次尝试兜底）。
+- **主干承担合并职责**：实验 9 用原生 `git merge` 走通；kiln 不提供合并命令——与"编排在外"一致，维持现状。
+
 ## 非目标
 
-- 本轮不改代码、不新增 / 删除命令。
 - 不评估 MCP 的实现细节。
+- 不实现 `--adopt`；不做"绑定文件 / 文件归属检测"；不让 kiln 编排 agent。
 
 ## 备注
 

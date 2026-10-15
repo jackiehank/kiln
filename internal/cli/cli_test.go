@@ -327,3 +327,127 @@ func TestShowRejectsOutOfRangeOrdinal(t *testing.T) {
 		t.Fatalf("stderr = %q", errb.String())
 	}
 }
+
+// workspaceRunner is a fakeRunner that also stands in for a backend offering
+// workspace isolation.
+type workspaceRunner struct {
+	fakeRunner
+	dedicated bool
+	areas     []vcs.WorkspaceInfo
+}
+
+func (w workspaceRunner) IsDedicated() (bool, error) { return w.dedicated, nil }
+func (w workspaceRunner) NewWorkspace(issue string) (string, error) {
+	return "/ws/repo--" + issue, nil
+}
+func (w workspaceRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) { return w.areas, nil }
+
+// newWorkspaceEnv builds an env whose backend reports the given layout.
+func newWorkspaceEnv(out, errw *bytes.Buffer, dedicated bool) *env {
+	return &env{
+		actions: model.DefaultActionSet(),
+		repo:    workspaceRunner{fakeRunner: demoRunner(), dedicated: dedicated},
+		out:     out,
+		errw:    errw,
+	}
+}
+
+// Recording an action in the main area is refused: main is read/merge-only,
+// which is what makes silent cross-agent contamination structurally impossible.
+func TestCommitInMainIsRefused(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, true); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "主干") {
+		t.Fatalf("stderr = %q, want the main-area refusal", errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("nothing was committed, yet stdout = %q", out.String())
+	}
+}
+
+// --force is the explicit escape hatch for committing in the main area.
+func TestCommitInMainWithForce(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect", "--force"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: demo") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+// A dedicated area records actions without any guard.
+func TestCommitInDedicatedArea(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+}
+
+// `do` only prints, so the layout guard does not apply to it.
+func TestDoIsUnaffectedByTheGuard(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+}
+
+// `workspace list` labels the main area and names each dedicated one.
+func TestWorkspaceListLabelsAreas(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: workspaceRunner{areas: []vcs.WorkspaceInfo{
+			{Path: "C:/w/kiln", Main: true},
+			{Path: "C:/w/kiln--cli-necessity", Issue: "cli-necessity"},
+		}},
+		out:  &out,
+		errw: &errb,
+	}
+	if code := e.workspace([]string{"list"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"C:/w/kiln ", "主干", "C:/w/kiln--cli-necessity", "专用 cli-necessity"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("workspace list missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// `workspace new` derives the area from the issue and points the user at it.
+func TestWorkspaceNewReportsPath(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, true)
+	if code := e.workspace([]string{"new", "cli-necessity"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("workspace new missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// An issue ID that could not name a directory is rejected before anything is
+// created, since the name is what binds the area to the issue.
+func TestWorkspaceNewRejectsLooseIssueID(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).workspace([]string{"new", "Bad_ID"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "非法 issue ID") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// A missing or unknown subcommand is a usage error.
+func TestWorkspaceUnknownSubcommand(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).workspace(nil); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+}

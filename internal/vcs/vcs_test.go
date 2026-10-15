@@ -3,6 +3,7 @@ package vcs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +53,27 @@ func TestDetectRejectsUnknownPreference(t *testing.T) {
 	mkdir(t, dir, ".git")
 	if _, err := Detect(dir, "svn"); err == nil {
 		t.Fatal("expected an error for an unknown preference")
+	}
+}
+
+// A dedicated area lives beside the main checkout, named after the issue, so
+// the name alone binds the two with no extra bookkeeping.
+func TestSiblingAreaNamesAreaAfterIssue(t *testing.T) {
+	root := filepath.Join("w", "kiln")
+	want := filepath.Join("w", "kiln--cli-necessity")
+	if got := SiblingArea(root, "cli-necessity"); got != want {
+		t.Fatalf("SiblingArea = %q, want %q", got, want)
+	}
+}
+
+// Paths that differ only in case name the same location on the platforms kiln
+// runs on; genuinely different directories must not.
+func TestSamePathComparesLocations(t *testing.T) {
+	root := filepath.Join("w", "kiln")
+	if !SamePath(root, strings.ToUpper(root)) {
+		t.Fatal("case differences must not distinguish two paths")
+	}
+	if SamePath(root, root+"--x") {
+		t.Fatal("different directories must not compare equal")
 	}
 }

@@ -39,3 +39,26 @@ func TestLastLine(t *testing.T) {
 		t.Fatalf("lastLine of blanks = %q", got)
 	}
 }
+
+// `jj workspace list -T` yields name/root records. The "default" workspace is
+// the main checkout; every other one is dedicated and named after its issue.
+func TestParseWorkspacesReadsNameAndRoot(t *testing.T) {
+	out := "default\x1fC:/w/repo\x1e" +
+		"cli-necessity\x1fC:/w/repo--cli-necessity\x1e"
+	got := parseWorkspaces(out)
+	if len(got) != 2 {
+		t.Fatalf("got %d areas, want 2", len(got))
+	}
+	if !got[0].Main || got[0].Issue != "" || got[0].Path != "C:/w/repo" {
+		t.Fatalf("default workspace = %+v; want the main area with no issue", got[0])
+	}
+	if got[1].Main || got[1].Issue != "cli-necessity" {
+		t.Fatalf("dedicated workspace = %+v; want issue cli-necessity", got[1])
+	}
+}
+
+func TestParseWorkspacesSkipsEmptyRecords(t *testing.T) {
+	if got := parseWorkspaces("\n\x1e\n"); len(got) != 0 {
+		t.Fatalf("got %d areas, want 0", len(got))
+	}
+}

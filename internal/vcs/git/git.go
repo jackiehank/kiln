@@ -5,7 +5,9 @@ package git
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,6 +54,87 @@ func (r ExecRunner) ShowStat(id string, short bool) (string, error) {
 		flag = "--shortstat"
 	}
 	return r.run("show", flag, "--format=", id)
+}
+
+// IsDedicated reports whether the current checkout is a linked worktree. The
+// main checkout keeps `.git` as a directory; a linked worktree replaces it with
+// a file pointing back at the main repository.
+func (r ExecRunner) IsDedicated() (bool, error) {
+	root, err := r.root()
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(filepath.Join(root, ".git"))
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir(), nil
+}
+
+// NewWorkspace creates, or reuses, the linked worktree bound to issue on branch
+// kiln/<issue> and returns its path.
+func (r ExecRunner) NewWorkspace(issue string) (string, error) {
+	areas, err := r.ListWorkspaces()
+	if err != nil {
+		return "", err
+	}
+	path := vcs.SiblingArea(areas[0].Path, issue)
+	for _, a := range areas {
+		if vcs.SamePath(a.Path, path) {
+			return path, nil // an area for this issue already exists
+		}
+	}
+	if _, err := r.run("worktree", "add", path, "-b", vcs.BranchPrefix+issue); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ListWorkspaces returns the main checkout followed by every linked worktree,
+// as `git worktree list` orders them. Only areas on a kiln/<issue> branch carry
+// an issue.
+func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
+	out, err := r.run("worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	return parseWorktrees(out), nil
+}
+
+// root returns the working directory of the current checkout.
+func (r ExecRunner) root() (string, error) {
+	out, err := r.run("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// parseWorktrees reads `git worktree list --porcelain`: blank-line separated
+// records, each led by its root path and naming its checked-out branch. The
+// first record is the main checkout.
+func parseWorktrees(out string) []vcs.WorkspaceInfo {
+	var areas []vcs.WorkspaceInfo
+	for _, block := range strings.Split(out, "\n\n") {
+		var area vcs.WorkspaceInfo
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "worktree "):
+				area.Path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+			case strings.HasPrefix(line, "branch "):
+				ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+				if issue, ok := strings.CutPrefix(ref, "refs/heads/"+vcs.BranchPrefix); ok {
+					area.Issue = issue
+				}
+			}
+		}
+		if area.Path == "" {
+			continue
+		}
+		area.Main = len(areas) == 0
+		areas = append(areas, area)
+	}
+	return areas
 }
 
 // run executes git with args and returns stdout; on failure the error carries

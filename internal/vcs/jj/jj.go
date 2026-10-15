@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,6 +63,103 @@ func (r ExecRunner) ShowStat(id string, short bool) (string, error) {
 		return lastLine(out), nil
 	}
 	return out, nil
+}
+
+// workspaceFormat renders one workspace per record: name, root, record
+// separator. jj's template language emits the two control bytes verbatim.
+const workspaceFormat = `name ++ "\x1f" ++ root ++ "\x1e"`
+
+// mainWorkspace is jj's name for the workspace created at init; kiln treats it
+// as the main checkout.
+const mainWorkspace = "default"
+
+// IsDedicated reports whether the current workspace is a dedicated one: any
+// workspace other than the main "default" one.
+func (r ExecRunner) IsDedicated() (bool, error) {
+	current, err := r.workspaceRoot()
+	if err != nil {
+		return false, err
+	}
+	areas, err := r.ListWorkspaces()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range areas {
+		if vcs.SamePath(a.Path, current) {
+			return !a.Main, nil
+		}
+	}
+	return false, fmt.Errorf("jj workspace list 未列出当前工作区: %s", current)
+}
+
+// NewWorkspace creates, or reuses, the jj workspace bound to issue and returns
+// its path. The workspace name is the issue, so naming alone binds it.
+func (r ExecRunner) NewWorkspace(issue string) (string, error) {
+	areas, err := r.ListWorkspaces()
+	if err != nil {
+		return "", err
+	}
+	path := vcs.SiblingArea(areas[0].Path, issue)
+	for _, a := range areas {
+		if vcs.SamePath(a.Path, path) {
+			return path, nil // an area for this issue already exists
+		}
+	}
+	if _, err := r.run("workspace", "add", "--name", issue, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ListWorkspaces returns the main workspace followed by the dedicated ones.
+func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
+	out, err := r.run("workspace", "list", "-T", workspaceFormat)
+	if err != nil {
+		return nil, err
+	}
+	areas := parseWorkspaces(out)
+	sort.SliceStable(areas, func(i, j int) bool {
+		if areas[i].Main != areas[j].Main {
+			return areas[i].Main
+		}
+		return areas[i].Path < areas[j].Path
+	})
+	return areas, nil
+}
+
+// workspaceRoot returns the root of the workspace the runner operates in.
+func (r ExecRunner) workspaceRoot() (string, error) {
+	out, err := r.run("workspace", "root")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// parseWorkspaces splits the workspace-list template output into areas. Each
+// record is a name and a root separated by a unit separator.
+func parseWorkspaces(out string) []vcs.WorkspaceInfo {
+	var areas []vcs.WorkspaceInfo
+	for _, rec := range strings.Split(out, "\x1e") {
+		rec = strings.Trim(rec, "\r\n")
+		if rec == "" {
+			continue
+		}
+		name, root, ok := strings.Cut(rec, "\x1f")
+		if !ok {
+			continue
+		}
+		name, root = strings.TrimSpace(name), strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		area := vcs.WorkspaceInfo{Path: root, Main: name == mainWorkspace}
+		if !area.Main {
+			area.Issue = name
+		}
+		areas = append(areas, area)
+	}
+	return areas
 }
 
 // run executes jj with args and returns stdout; on failure the error carries

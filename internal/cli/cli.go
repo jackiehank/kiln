@@ -33,6 +33,7 @@ do/commit 的 flags:
 
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
+commit 额外 flag:  --force（在主干提交的显式豁免；默认主干只读/只合并）
 `
 
 // usageCommands is the command surface rendered by usageText.
@@ -45,6 +46,8 @@ var usageCommands = [][2]string{
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii]", "问题关系图"},
+	{"kiln workspace new <issue>", "建专用工作区（主干只读，动作只在专用区提交）"},
+	{"kiln workspace list", "列出全部工作区（主干 + 专用）"},
 }
 
 // usageText renders the help text, aligning descriptions by terminal display
@@ -173,7 +176,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText())
 		return 0
-	case "do", "commit", "path", "status", "check", "list", "graph", "show":
+	case "do", "commit", "path", "status", "check", "list", "graph", "show", "workspace":
 		// handled below, once the vocabulary is loaded
 	default:
 		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
@@ -208,6 +211,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.list(rest)
 	case "graph":
 		return e.graph(rest)
+	case "workspace":
+		return e.workspace(rest)
 	}
 	return 2
 }
@@ -310,12 +315,130 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
 		return 1
 	}
+	if !f.has("force") {
+		if code := e.refuseInMain(backend); code != 0 {
+			return code
+		}
+	}
 	if err := backend.Action(msg); err != nil {
 		fmt.Fprintf(e.errw, "提交失败: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(e.out, msg)
 	return 0
+}
+
+// refuseInMain enforces kiln's unified layout: the main checkout is read/merge
+// only, so an action is recorded in a dedicated area instead. The test is purely
+// structural, so it needs no concurrency knowledge. Backends without workspace
+// support are left unchecked; --force bypasses the guard.
+func (e *env) refuseInMain(backend vcs.Repo) int {
+	ws, ok := backend.(vcs.Workspace)
+	if !ok {
+		return 0
+	}
+	dedicated, err := ws.IsDedicated()
+	if err != nil {
+		fmt.Fprintf(e.errw, "无法判定工作区类型: %v\n", err)
+		return 1
+	}
+	if dedicated {
+		return 0
+	}
+	fmt.Fprintln(e.errw, "拒绝提交：当前是主干（只读/只合并），动作只在专用工作区提交。")
+	fmt.Fprintln(e.errw, "先 `kiln workspace new <issue>`，再 cd 到专用区提交；确要在主干提交时加 --force。")
+	return 1
+}
+
+// workspace implements `kiln workspace new <issue>` and `kiln workspace list`.
+func (e *env) workspace(args []string) int {
+	sub := ""
+	rest := args
+	if len(args) > 0 {
+		sub, rest = args[0], args[1:]
+	}
+	ws, code := e.workspaceBackend()
+	if ws == nil {
+		return code
+	}
+	switch sub {
+	case "new":
+		return e.workspaceNew(ws, rest)
+	case "list":
+		return e.workspaceList(ws)
+	default:
+		fmt.Fprintln(e.errw, "用法: kiln workspace new <issue> | kiln workspace list")
+		return 2
+	}
+}
+
+// workspaceBackend opens the backend and requires workspace support.
+func (e *env) workspaceBackend() (vcs.Workspace, int) {
+	backend, err := e.backend()
+	if err != nil {
+		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		return nil, 1
+	}
+	ws, ok := backend.(vcs.Workspace)
+	if !ok {
+		fmt.Fprintln(e.errw, "当前后端不支持工作区")
+		return nil, 1
+	}
+	return ws, 0
+}
+
+// workspaceNew creates (or reuses) the dedicated area bound to an issue and
+// points the user at it. The area's name and branch are derived from the issue,
+// so naming alone is the binding — no extra file keeps them in sync.
+func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
+	pos, _ := parse(args)
+	if len(pos) < 1 {
+		fmt.Fprintln(e.errw, "用法: kiln workspace new <issue>")
+		return 2
+	}
+	issue := pos[0]
+	if !model.ValidIssueID(issue) {
+		fmt.Fprintf(e.errw, "非法 issue ID: %q（须为小写 kebab-case slug）\n", issue)
+		return 2
+	}
+	path, err := ws.NewWorkspace(issue)
+	if err != nil {
+		fmt.Fprintf(e.errw, "建立工作区失败: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(e.out, "专用工作区: %s\n", path)
+	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
+	return 0
+}
+
+// workspaceList prints every working area, main first, aligned by path width.
+func (e *env) workspaceList(ws vcs.Workspace) int {
+	areas, err := ws.ListWorkspaces()
+	if err != nil {
+		fmt.Fprintf(e.errw, "读取工作区失败: %v\n", err)
+		return 1
+	}
+	width := 0
+	for _, a := range areas {
+		if w := displayWidth(a.Path); w > width {
+			width = w
+		}
+	}
+	for _, a := range areas {
+		fmt.Fprintf(e.out, "%s  %s\n", pad(a.Path, width), areaRole(a))
+	}
+	return 0
+}
+
+// areaRole labels an area in `kiln workspace list`.
+func areaRole(a vcs.WorkspaceInfo) string {
+	if a.Main {
+		return "主干（只读/只合并）"
+	}
+	if a.Issue == "" {
+		return "专用"
+	}
+	return "专用 " + a.Issue
 }
 
 func (e *env) path(args []string) int {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -39,6 +40,44 @@ type Repo interface {
 	ShowStat(id string, short bool) (string, error)
 	// Action records one kiln action carrying the given commit message.
 	Action(message string) error
+}
+
+// BranchPrefix namespaces the branches of kiln's dedicated areas in git.
+const BranchPrefix = "kiln/"
+
+// WorkspaceInfo describes one working area a backend knows about.
+type WorkspaceInfo struct {
+	Path  string // path of the area's root directory
+	Issue string // issue the area is bound to; empty for the main area
+	Main  bool   // the main checkout, which kiln keeps read/merge-only
+}
+
+// Workspace is the working-area surface, implemented by backends that can
+// isolate one area per issue. It is separate from Repo so a backend may serve
+// reads and writes without offering isolation.
+type Workspace interface {
+	// IsDedicated reports whether the current area is a dedicated (non-main)
+	// one. Only dedicated areas may record actions.
+	IsDedicated() (bool, error)
+	// NewWorkspace creates the dedicated area bound to issue, reusing it when it
+	// already exists, and returns its path.
+	NewWorkspace(issue string) (string, error)
+	// ListWorkspaces lists every known area, the main checkout first.
+	ListWorkspaces() ([]WorkspaceInfo, error)
+}
+
+// SiblingArea returns the dedicated area path for issue: a sibling directory of
+// the main checkout named <repo>--<issue>. Keeping areas outside the repository
+// is what stops them from polluting it.
+func SiblingArea(mainRoot, issue string) string {
+	mainRoot = filepath.Clean(mainRoot)
+	return filepath.Join(filepath.Dir(mainRoot), filepath.Base(mainRoot)+"--"+issue)
+}
+
+// SamePath reports whether two paths name the same location, tolerating the
+// separator and case differences the platforms introduce.
+func SamePath(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
 // Detect picks a backend for dir. prefer is "", "auto", "git" or "jj". In auto
