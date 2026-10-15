@@ -295,14 +295,19 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit))
 		return 2
 	}
-	issue := pos[0]
+	issue := e.normalizedIssue(pos[0])
 	action := strings.ToLower(strings.TrimSpace(pos[1]))
 	if !e.actions.IsValid(action) {
 		fmt.Fprintf(e.errw, "非法 action: %q（可选: %s）\n", action, strings.Join(e.actions.Names(), ", "))
 		return 2
 	}
 	if !model.ValidIssueID(issue) {
-		fmt.Fprintf(e.errw, "警告: issue ID %q 不符合 <namespace>/<slug> 约定\n", issue)
+		fmt.Fprintf(e.errw, "警告: issue ID %q 不符合单段 kebab-case slug 约定（小写字母 / 数字 / `-`，长度 ≤ 50）\n", issue)
+	}
+	if e.actions.IsStart(action) {
+		if code := e.refuseDuplicateStart(issue); code != 0 {
+			return code
+		}
 	}
 
 	msg := trailer.Format(trailer.Fields{
@@ -510,7 +515,7 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue>")
 		return 2
 	}
-	issue := pos[0]
+	issue := e.normalizedIssue(pos[0])
 	if !model.ValidIssueID(issue) {
 		fmt.Fprintf(e.errw, "非法 issue ID: %q（须为小写 kebab-case slug）\n", issue)
 		return 2
@@ -1006,6 +1011,68 @@ func (e *env) renderWorktreeLegend(areas []vcs.WorkspaceInfo) {
 	}
 	fmt.Fprintln(e.out)
 	fmt.Fprintln(e.out, line)
+}
+
+// normalizedIssue folds the spellings that mean the same issue and says so when it
+// did. Normalizing on the **write** side — and only there — is what keeps one
+// issue from being split in two by case, '_' or a doubled '-': the trailer value,
+// the worktree name and its branch all come out of this one call.
+func (e *env) normalizedIssue(raw string) string {
+	issue := model.NormalizeIssueID(raw)
+	if issue != raw {
+		fmt.Fprintf(e.errw, "提示: issue ID 已归一化：%q → %q\n", raw, issue)
+	}
+	return issue
+}
+
+// refuseDuplicateStart stops a second start action on an issue that already has
+// one: with a flat ID space and one person per repository, the same name is the
+// same issue, so there is nothing to open — the honest answer is "continue it".
+//
+// An issue that exists **without** a start action still goes through: adding the
+// missing start to such an issue is a repair (check already flags it as an error),
+// not a new issue.
+func (e *env) refuseDuplicateStart(issue string) int {
+	p, ok := e.findIssue(issue)
+	if !ok || !e.hasStart(p) {
+		return 0
+	}
+	rest := make([]string, 0, len(e.actions.Names()))
+	for _, name := range e.actions.Names() {
+		if !e.actions.IsStart(name) {
+			rest = append(rest, name)
+		}
+	}
+	fmt.Fprintf(e.errw, "拒绝: issue %q 已经有起点动作 %q（共 %d 个动作）——同名即同一条 issue，不需要再新建\n",
+		issue, e.actions.Start(), len(p.Actions))
+	fmt.Fprintf(e.errw, "提示: 要继续它，用 kiln commit %s <action>（可选: %s）\n", issue, strings.Join(rest, ", "))
+	return 1
+}
+
+// hasStart reports whether the issue has been opened already.
+func (e *env) hasStart(p *model.Issue) bool {
+	for _, a := range p.Actions {
+		if e.actions.IsStart(a.Kind) {
+			return true
+		}
+	}
+	return false
+}
+
+// findIssue reads one issue out of the history, best effort on purpose: `do` only
+// prints a message and must keep working outside a repository, so an unreadable
+// history means "no opinion", never an error.
+func (e *env) findIssue(issue string) (*model.Issue, bool) {
+	backend, err := e.backend()
+	if err != nil {
+		return nil, false
+	}
+	commits, err := backend.Log()
+	if err != nil {
+		return nil, false
+	}
+	p, ok := engine.Build(engine.ActionsFromCommits(commits)).Issues[issue]
+	return p, ok
 }
 
 func (e *env) isDone(p *model.Issue) bool {

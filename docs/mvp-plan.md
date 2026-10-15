@@ -108,9 +108,11 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 - 格式：单段 **kebab-case slug**，如 `session-expiry`、`action-config`
 - 规则：小写；只允许字母、数字、`-`；长度 ≤ 50；不允许 `/`
 - 唯一性范围：单个仓库内
-- 唯一性**不靠注册表**，靠命名约定 + `kiln check` 检测 + 人工确认
+- 唯一性**不靠注册表**，靠命名约定 + 写侧拒绝 + `kiln check` 检测
+- **写侧归一化**：`do` / `commit` / `worktree new` 把 ID 折叠成唯一写法（大小写、`_`、连续与首尾 `-`：`Session__Expiry` → `session-expiry`），折叠结果**提示在 stderr**；没有唯一等价物的写法（空格、`.`、`/`）**不折叠**，只按上面的规则**警告**
+- **起点动作重名拒绝**：`ask` 只用于新建——对一个**已有起点动作**的 issue 再 `ask` 会被**拒绝**（exit 1）并给出继续追踪的命令；同名即同一条 issue。若 issue 已存在但**没有**起点动作，`ask` 仍放行（那是修复，`check` 本来就报 `start-action` 错）——见 [issue-uniqueness](issue-uniqueness.md)
 
-> 早期设计用过 `<namespace>/<slug>`（namespace = 项目名或创建者名）来降低重名概率，并给跨仓库引用留了 `repo-name/...` 前缀。但单仓库、单人使用时 namespace 恒等于项目名、零信息量，于是**去掉**：ID 收敛为单段 slug。去重与跨仓库引用怎么做，已作为 issue `status-by-domain` 派生的独立问题追踪。
+> 早期设计用过 `<namespace>/<slug>`（namespace = 项目名或创建者名）来降低重名概率，并给跨仓库引用留了 `repo-name/...` 前缀。但单仓库、单人使用时 namespace 恒等于项目名、零信息量，于是**去掉**：ID 收敛为单段 slug。唯一性怎么保证已由 issue `issue-uniqueness` 定案（不动 namespace，归一化 + 拒绝）；跨仓库引用前缀**不做**。
 
 ### 2.5 规范提交信息样例
 
@@ -309,7 +311,7 @@ kiln/
 - issue「同源」的表达：两个 issue 共用**非 issue 的来源**（故障 / 论文 / 会议）时，用 `relates-to` 兜底还是新增对称关系 / 外部来源引用——见 [docs/common-origin.md](common-origin.md)
 - 变更展示**已落地**：`path --stat` / `--shortstat` + `show <issue> [n]`（两层，对齐 git 的 log/show、委托 git 渲染）；`path --diff` 否决——见 [docs/action-diff.md](action-diff.md)
 - 用 diff 反查 `target:` 声明是否属实：`check` 新增"声明 vs 现实"的一致性校验（候选 D，源于 `action-diff`）——见 [docs/target-honesty.md](target-honesty.md)
-- 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
+- 同一 issue ID 下出现第二个 `ask`：**已定**——起点动作只用于新建，对已有起点的 issue 再 `ask` 会被**拒绝**；它是**写侧护栏而不是不变量**（合入的历史仍可能出现第二个 `ask`）——见 [issue-uniqueness](issue-uniqueness.md)
 - `kiln graph --format=dot|mermaid`：接入外部渲染
 - 机器可读输出**已落地（三个命令）**：`status` / `list` / `check` 的 `--json` —— 顶层一个对象、`status` 平铺成一层行、`check` 用 `rule` 码说话且 `ok` 与退出码同义；`path` / `show` / `worktree list` 与 `--toon` 仍待定（原「`kiln check --format=json`：CI 集成与 PR 评论」并入此问）——见 [docs/machine-readable-output.md](machine-readable-output.md)
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性

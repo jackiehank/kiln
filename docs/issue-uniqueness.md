@@ -60,6 +60,49 @@
 - 不做跨仓库引用前缀（那解决的是“引用别处”，不是“本仓重名”，见 collect §7）。
 - `kiln rename` 仍留待 mvp-plan §10（本方向只保证**不需要为显示名改名**）。
 
+## test：落地——写侧归一化 + 起点动作重名拒绝
+
+> 把 hypothesize 的两件落地。改动集中在**一个函数 + 一个闩**，没有新增 flag、没有新命令。
+
+### 1. 代码
+
+| 位置 | 改动 |
+| --- | --- |
+| [`model.NormalizeIssueID`](../internal/model/model.go) | 新增：小写 + `_`→`-` + 折叠连续 `-` + 去首尾 `-`；空格 / `.` / `/` 一概**不动** |
+| [`env.normalizedIssue`](../internal/cli/cli.go) | 新增：折叠并**提示到 stderr**（`提示: issue ID 已归一化："Session__Expiry" → "session-expiry"`） |
+| [`env.write`](../internal/cli/cli.go) | `do` / `commit` 的公共实现，接上折叠 + 起点锁；顺带修掉陈旧警告措辞（`<namespace>/<slug>` → 单段 kebab-case slug） |
+| [`env.refuseDuplicateStart`](../internal/cli/cli.go) / `hasStart` / `findIssue` | 新增：已有起点动作则**拒绝**（exit 1）并给出继续追踪的命令；`findIssue` **best effort**——读不到历史就“无意见”，不报错 |
+| [`env.workspaceNew`](../internal/cli/cli.go) | 接到同一份折叠：区名 / 分支名不会跟 trailer 值分家 |
+
+### 2. 真机行为（四条）
+
+```
+$ kiln do Session__Expiry ask --title "并发可能出错"
+提示: issue ID 已归一化："Session__Expiry" → "session-expiry"
+并发可能出错
+
+issue: session-expiry
+action: ask
+title: 并发可能出错
+
+$ kiln do qualified-issue-id ask --title "又开一次"     # 已有起点 → 拒绝，exit 1
+拒绝: issue "qualified-issue-id" 已经有起点动作 "ask"（共 6 个动作）——同名即同一条 issue，不需要再新建
+提示: 要继续它，用 kiln commit qualified-issue-id <action>（可选: hypothesize, collect, test, conclude, apply）
+
+$ kiln do Session__Expiry collect --title "查两家实现"   # 非起点动作同样折叠
+提示: issue ID 已归一化："Session__Expiry" → "session-expiry"
+…
+
+$ kiln do design/whatever ask --title x                  # 无法折叠的 → 仅警告，仍然输出
+警告: issue ID "design/whatever" 不符合单段 kebab-case slug 约定（小写字母 / 数字 / `-`，长度 ≤ 50）
+```
+
+### 3. 验证
+
+- `gofmt -l internal/` → 空；`go vet ./...` → 空；`go test ./...` → **全绿**。
+- 新增单测：`TestNormalizeIssueID`（折叠表 + “折叠后必须合法”）；`TestDoNormalizesTheIssueID`（`collect` 也折叠，且折叠后不再报“不符合”）；`TestDoRefusesASecondStart`（exit 1 **且 stdout 为空**，消息含继续命令）；`TestRefusalSeesThroughTheSpelling`（折叠后仍被拦：`Demo__One` → `demo-one` 撞已有）；`TestStartIsAllowedToRepairAnIssueWithoutOne`（孤儿 issue 补 `ask` 放行）；`TestDoOutsideARepositoryStillPrints`（仓外 `do` 不受影响）；`TestWorkspaceNewNormalizesTheIssueID`。
+- **两个旧测试因行为变化而改写**（这不是“改测试迎合代码”，而是旧断言的前提被本迭代推翻）：`TestDoWarnsOnLooseIssueID` 原来用 `Bad_ID` 断言“警告 + 原样输出”，现在 `Bad_ID` 会被折叠成合法 ID → 改用真正不可折叠的 `bad/id`；`TestWorkspaceNewRejectsLooseIssueID` 同理改用 `bad/id`。
+
 ## collect：业内怎么保证「扁平人类可读 ID」的唯一性
 
 > 一轮联网调研：初稿由一个 **pi 子代理**（`pi -p`，独立 session `kiln-issue-uniqueness-collect`）检索，随后由本仓**逐条复核**（凡本节能引"官方原文"的都是复核过的；标 **[二手]** 的为非官方）。来源见节末。

@@ -61,3 +61,31 @@ func TestDefaultActionSet(t *testing.T) {
 		t.Fatalf("terminal set wrong for %v", set.Names())
 	}
 }
+
+func TestNormalizeIssueID(t *testing.T) {
+	cases := map[string]string{
+		"action-config":    "action-config",
+		"Session-Expiry":   "session-expiry",
+		"session_expiry":   "session-expiry",
+		"Session__Expiry":  "session-expiry",
+		"a--b":             "a-b",
+		"-lead-and-trail-": "lead-and-trail",
+		"  padded  ":       "padded",
+		"a_ -_b":           "a- -b",  // the space has no single answer: not folded
+		"bad/id":           "bad/id", // no single answer: left for ValidIssueID
+		"has space":        "has space",
+		"中文":               "中文",
+		"":                 "",
+	}
+	for in, want := range cases {
+		if got := NormalizeIssueID(in); got != want {
+			t.Fatalf("NormalizeIssueID(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Folded spellings must land on a valid ID when the input was otherwise legal.
+	for _, in := range []string{"Session_Expiry", "a--b-", "UPPER"} {
+		if got := NormalizeIssueID(in); !ValidIssueID(got) {
+			t.Fatalf("NormalizeIssueID(%q) = %q, which is not a valid ID", in, got)
+		}
+	}
+}

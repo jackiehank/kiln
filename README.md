@@ -96,7 +96,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 
 | Trailer | 含义 |
 | --- | --- |
-| `issue:` | issue ID（单段 kebab-case slug，如 `session-expiry`） |
+| `issue:` | issue ID（单段 kebab-case slug，如 `session-expiry`）；**写侧会归一化**（大小写 / `_` / 连续 `-`），对**已有起点动作**的 issue 再 `ask` 会被拒绝（见 [docs/mvp-plan.md](docs/mvp-plan.md) §2.4） |
 | `action:` | 动作类型（上表词表里的一员） |
 
 **可选（描述）**：`title:` 人类可读标题 ｜ `refs:` 引用的对象 ｜ `target:` 涉及的文件 ｜ `scope:` 描述性范围 ｜ `domain:` 领域分类 ｜ `tags:` 标签

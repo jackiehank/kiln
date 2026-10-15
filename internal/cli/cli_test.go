@@ -55,15 +55,94 @@ func TestDoRejectsUnknownAction(t *testing.T) {
 
 func TestDoWarnsOnLooseIssueID(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := Run([]string{"do", "Bad_ID", "ask"}, &out, &errb)
+	code := Run([]string{"do", "bad/id", "ask"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	if !strings.Contains(errb.String(), "不符合") {
 		t.Fatalf("expected a naming warning, stderr = %q", errb.String())
 	}
-	if !strings.Contains(out.String(), "issue: Bad_ID") {
+	if !strings.Contains(out.String(), "issue: bad/id") {
 		t.Fatalf("expected output to still be produced, got %q", out.String())
+	}
+}
+
+// Case, `_` and doubled `-` are folded on the way in — on **every** action, not
+// just the start — so the same issue cannot be split in two by spelling. The fold
+// is announced, and the trailer carries the folded name.
+func TestDoNormalizesTheIssueID(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+	if code := e.write([]string{"Session__Expiry", "collect"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), `"Session__Expiry" → "session-expiry"`) {
+		t.Fatalf("the fold must be announced, stderr = %q", errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: session-expiry") {
+		t.Fatalf("the trailer must carry the folded name, stdout = %q", out.String())
+	}
+	if strings.Contains(errb.String(), "不符合") {
+		t.Fatalf("a folded ID is a valid ID: %q", errb.String())
+	}
+}
+
+// A second start action on a name that already exists is refused: same name, same
+// issue, so there is nothing to open. The message points at the way forward
+// instead of leaving the caller to guess.
+func TestDoRefusesASecondStart(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newJSONEnv(&out, &errb)
+	if code := e.write([]string{"parent", "ask", "--title", "又开一次"}, false); code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a refused action must print no message: %q", out.String())
+	}
+	for _, want := range []string{"拒绝", "已经有起点动作", "kiln commit parent", "hypothesize"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Fatalf("refusal missing %q:\n%s", want, errb.String())
+		}
+	}
+}
+
+// The fold runs before the refusal, so a second start written in another spelling
+// is refused too — otherwise `Session-Expiry` would open a twin of `session-expiry`.
+func TestRefusalSeesThroughTheSpelling(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{commits: []vcs.Commit{
+		{ID: "c1", Date: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), Message: "起点\n\nissue: demo-one\naction: ask\ntitle: 起点"},
+	}}, out: &out, errw: &errb}
+	if code := e.write([]string{"Demo__One", "ask"}, false); code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, errb.String())
+	}
+}
+
+// An issue that exists **without** a start action can still take one: that is a
+// repair — `check` reports the missing start — not a new issue.
+func TestStartIsAllowedToRepairAnIssueWithoutOne(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{commits: []vcs.Commit{
+		{ID: "c1", Date: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), Message: "先调研\n\nissue: orphan\naction: collect\ntitle: 先调研"},
+	}}, out: &out, errw: &errb}
+	if code := e.write([]string{"orphan", "ask"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: orphan") {
+		t.Fatalf("the repair must produce a message: %q", out.String())
+	}
+}
+
+// `do` prints and must keep working outside a repository, so the duplicate check
+// stays silent when the history cannot be read at all.
+func TestDoOutsideARepositoryStillPrints(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+	if code := e.write([]string{"nowhere", "ask"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: nowhere") {
+		t.Fatalf("stdout = %q", out.String())
 	}
 }
 
@@ -788,9 +867,24 @@ func TestWorkspaceNewReportsPath(t *testing.T) {
 
 // An issue ID that could not name a directory is rejected before anything is
 // created, since the name is what binds the area to the issue.
+// A loose ID is folded before it is judged, so the worktree name and the trailer
+// value cannot drift apart.
+func TestWorkspaceNewNormalizesTheIssueID(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).workspace([]string{"new", "Demo__One"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), `"Demo__One" → "demo-one"`) {
+		t.Fatalf("the fold must be announced, stderr = %q", errb.String())
+	}
+	if !strings.Contains(out.String(), "/ws/repo--demo-one") {
+		t.Fatalf("the area must be named after the folded issue: %q", out.String())
+	}
+}
+
 func TestWorkspaceNewRejectsLooseIssueID(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, true).workspace([]string{"new", "Bad_ID"}); code != 2 {
+	if code := newWorkspaceEnv(&out, &errb, true).workspace([]string{"new", "bad/id"}); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 	if !strings.Contains(errb.String(), "非法 issue ID") {

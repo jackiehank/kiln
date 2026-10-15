@@ -168,6 +168,21 @@ type Repo struct {
 // ValidIssueID reports whether id is a lowercase kebab-case slug of at most 50
 // characters. Issue IDs carry no namespace: uniqueness within a repository is
 // maintained by naming convention plus `kiln check`, without a registry.
+// NormalizeIssueID folds the spellings that mean the same issue: case, '_'
+// against '-', runs of '-' and the ones at either end.
+//
+// Only equivalences with a single answer are folded. Anything else — spaces,
+// dots, '/', non-ASCII — is left alone for ValidIssueID to warn about, because
+// guessing a name is worse than reporting it.
+func NormalizeIssueID(id string) string {
+	s := strings.ToLower(strings.TrimSpace(id))
+	s = strings.ReplaceAll(s, "_", "-")
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	return strings.Trim(s, "-")
+}
+
 func ValidIssueID(id string) bool {
 	return len(id) > 0 && len(id) <= 50 && validSegment(id)
 }
