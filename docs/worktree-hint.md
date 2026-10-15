@@ -334,3 +334,47 @@ design/demo   test  ■
 ### 6. 切片二（未做）
 
 `do` 提示（五态 + 后端配方）、`-h` footer 措辞升格、`commit` 拒绝语按 main 脏 / 净分派（需要一个新的 `Workspace.Dirty()` ——`AreaState` 刻意不报 main）。
+
+## test（切片二 A）：`do` 的五态提示 + `-h` 措辞升格
+
+### 1. 落地内容
+
+- **`internal/vcs`**：新增 `ErrNoRepository` 哨兵——把"不在仓库里"从"打不开仓库"里**独立出来**，好让 `do` 认出并说出这一句；`Workspace` 加 **`Dirty()`**（git = `status --porcelain`、jj = `diff --summary`）：**`AreaState` 刻意不报 main**，所以需要另一个只问"我站的地方脏不脏"的方法。
+- **`internal/cli`**：`do` 打完消息后在 **stderr** 给一行提示（`worktreeTip`），**stdout 一字不动、exit code 不变**；配方按后端分派（`carryRecipe`，用新记下的 `env.kind` 路由——由 `openRepo` 在开仓时记录）；`-h` 的 footer 那行从"配置陈述"升格为"**动作指引**"（`worktree 默认: on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）| off（…）`）。
+
+### 2. 五态真机（git / jj 两个临时仓）
+
+| 态 | 输出 |
+| --- | --- |
+| 不在仓库里 | `提示: 不在仓库里（从 <绝对路径> 向上也没有 .git / .jj）`，**exit 0** |
+| `worktree off` / 已在专用区 | **静默**（stderr 0 字节） |
+| main + 净 + on | `提示: 本仓要求动作在 worktree 里提交——开工前先 kiln worktree new <issue>` |
+| main + 脏（git） | 上句改为 `…；你已有未提交改动——git：git stash -u → kiln worktree new <issue> → 进区后 git stash pop` |
+| main + 脏（jj） | `…；你已有未提交改动——jj：先在仓库根 mkdir .kiln/ws，再 jj workspace add --name <issue> <区路径> -r @（新区即带上它），最后在 main 跑 jj edit @-` |
+
+### 3. stdout 纯度（硬约束的实测）
+
+把 `kiln do` 的 **stdout 原样**喂给 `git commit -m`：
+
+```
+$ git commit -q -m "$(kiln do demo ask --title 起点)"
+$ git log -1 --format=%B      → 只有那条消息，没有"提示"
+```
+
+`do` 的 exit code 仍是 **0**——提示不改退出码。
+
+### 4. 两条配方都**照着手跑通**了（不是只打印）
+
+- **git**：`git stash -u` → `kiln worktree new demo` → 区内 `git stash pop` → **区内 a.txt=b、main a.txt=a** ✓（干净地"迁走"）
+- **jj**：`mkdir .kiln/ws` → `jj workspace add --name demo <区> -r @` → main `jj edit @-` → **区内 b、main a** ✓
+
+> **实现中逮住的一个真 bug**：最初的 jj 配方直接写 `jj workspace add …`——**跑不通**（`os error 3`）：**jj 不建中间目录**，而 `.kiln/ws` 那时还不存在（这正是 kiln 自己 `PrepareAreas` 先做的事）。→ 配方补上 `mkdir .kiln/ws`。**少了这一步，打印出来的配方就是个陷阱**——这条只有照着手跑才会暴露。
+
+### 5. 测试
+
+- **`internal/cli`**：`TestDoTipsWhenIsolationIsRequired`（stderr 有提示、stdout 无提示）、`TestDoTipCarriesTheBackendRecipe`（git / jj 两 case）、`TestDoStaysQuietWhenThereIsNothingToAsk`（off / 已在区内）、`TestDoSaysWhenThereIsNoRepository`（不在仓库仍打印消息、exit 0）。假后端补 `Dirty()`。
+- `gofmt -l` 空、`go vet` / `go test ./...` **全绿**；`-h` 那行措辞已核。
+
+### 6. 仍未做（切片二 B）
+
+`commit` 的**拒绝语按 main 脏 / 净分派**（含同样那两条配方）——`refuseInMain` 目前不分态，所以"我已经在 main 改了文件"时它仍只会说"先建区"。

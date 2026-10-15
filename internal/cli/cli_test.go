@@ -418,11 +418,13 @@ func TestShowRejectsOutOfRangeOrdinal(t *testing.T) {
 type workspaceRunner struct {
 	fakeRunner
 	dedicated bool
+	dirty     bool
 	areas     []vcs.WorkspaceInfo
 	state     vcs.AreaState // what every dedicated area still holds
 }
 
 func (w workspaceRunner) IsDedicated() (bool, error) { return w.dedicated, nil }
+func (w workspaceRunner) Dirty() (bool, error)       { return w.dirty, nil }
 func (w workspaceRunner) NewWorkspace(issue string) (string, error) {
 	return "/ws/repo--" + issue, nil
 }
@@ -484,6 +486,98 @@ func TestDoIsUnaffectedByTheGuard(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+}
+
+// `do` is the one place a caller is guaranteed to pass through before committing,
+// so it tells them what the repository asks of them — on stderr, leaving stdout
+// the bare commit message and the exit code untouched.
+func TestDoTipsWhenIsolationIsRequired(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, false) // standing in main
+	if code := e.write([]string{"demo", "collect"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "开工前先 kiln worktree new demo") {
+		t.Fatalf("stderr = %q, want the isolation tip", errb.String())
+	}
+	if strings.Contains(out.String(), "提示") {
+		t.Fatalf("stdout must stay the bare commit message:\n%s", out.String())
+	}
+}
+
+// With uncommitted work in main the tip carries the backend's own recipe: "先建区"
+// alone would leave that work behind, since a new area is a clean checkout.
+func TestDoTipCarriesTheBackendRecipe(t *testing.T) {
+	cases := []struct {
+		name string
+		kind vcs.Kind
+		want string
+	}{
+		{"git", vcs.Git, "git stash -u"},
+		{"jj", vcs.JJ, "jj edit @-"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			e := &env{
+				actions: model.DefaultActionSet(),
+				repo:    workspaceRunner{fakeRunner: demoRunner(), dirty: true},
+				kind:    tc.kind,
+				out:     &out, errw: &errb,
+			}
+			if code := e.write([]string{"demo", "test"}, false); code != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+			}
+			if !strings.Contains(errb.String(), "你已有未提交改动") || !strings.Contains(errb.String(), tc.want) {
+				t.Fatalf("stderr = %q, want the %s recipe", errb.String(), tc.name)
+			}
+		})
+	}
+}
+
+// Nothing to say when the repository asked for no isolation, or when the caller is
+// already standing in an area.
+func TestDoStaysQuietWhenThereIsNothingToAsk(t *testing.T) {
+	cases := []struct {
+		name string
+		env  func(out, errw *bytes.Buffer) *env
+	}{
+		{"isolation off", func(out, errw *bytes.Buffer) *env {
+			e := newWorkspaceEnv(out, errw, false)
+			e.worktree = config.WorktreeOff
+			return e
+		}},
+		{"already in an area", func(out, errw *bytes.Buffer) *env {
+			return newWorkspaceEnv(out, errw, true)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			if code := tc.env(&out, &errb).write([]string{"demo", "collect"}, false); code != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+			}
+			if errb.String() != "" {
+				t.Fatalf("stderr = %q, want silence", errb.String())
+			}
+		})
+	}
+}
+
+// `do` needs no repository — but a caller outside one should hear it, because that
+// is the one thing worth saying there.
+func TestDoSaysWhenThereIsNoRepository(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), dir: t.TempDir(), out: &out, errw: &errb}
+	if code := e.write([]string{"demo", "ask"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "不在仓库里") {
+		t.Fatalf("stderr = %q, want the no-repository tip", errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: demo") {
+		t.Fatalf("the message must still be printed:\n%s", out.String())
 	}
 }
 

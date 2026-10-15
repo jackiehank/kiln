@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -25,7 +26,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
-worktree 默认: on（强制 worktree）| off（允许在 main 提交）
+worktree 默认: on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）| off（允许在 main 提交）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
 
 do/commit 的 flags:
@@ -139,6 +140,7 @@ type env struct {
 	vcsPref  string
 	worktree string
 	repo     vcs.Repo
+	kind     vcs.Kind // the backend that was opened, recorded for backend-specific wording
 	out      io.Writer
 	errw     io.Writer
 }
@@ -149,29 +151,29 @@ func (e *env) backend() (vcs.Repo, error) {
 	if e.repo != nil {
 		return e.repo, nil
 	}
-	r, err := openRepo(e.dir, e.vcsPref)
+	r, kind, err := openRepo(e.dir, e.vcsPref)
 	if err != nil {
 		return nil, err
 	}
-	e.repo = r
+	e.repo, e.kind = r, kind
 	return r, nil
 }
 
 // openRepo picks a backend for dir. In auto mode jj wins over git: a colocated
 // workspace contains both .jj and .git, so reading through git would silently
 // miss jj's view.
-func openRepo(dir, prefer string) (vcs.Repo, error) {
+func openRepo(dir, prefer string) (vcs.Repo, vcs.Kind, error) {
 	kind, err := vcs.Detect(dir, prefer)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	switch kind {
 	case vcs.Git:
-		return git.ExecRunner{Dir: dir}, nil
+		return git.ExecRunner{Dir: dir}, kind, nil
 	case vcs.JJ:
-		return jj.ExecRunner{Dir: dir}, nil
+		return jj.ExecRunner{Dir: dir}, kind, nil
 	}
-	return nil, fmt.Errorf("未知后端: %s", kind)
+	return nil, "", fmt.Errorf("未知后端: %s", kind)
 }
 
 // Run executes one command and returns the process exit code.
@@ -318,6 +320,9 @@ func (e *env) write(args []string, commit bool) int {
 	})
 	if !commit {
 		fmt.Fprintln(e.out, msg)
+		if tip := e.worktreeTip(issue); tip != "" {
+			fmt.Fprintln(e.errw, tip)
+		}
 		return 0
 	}
 	backend, err := e.backend()
@@ -368,6 +373,70 @@ func (e *env) refuseInMain(backend vcs.Repo) int {
 // actions. An unset value means on: the guard holds unless a repository turned
 // it off by name.
 func (e *env) isolated() bool { return e.worktree != config.WorktreeOff }
+
+// worktreeTip returns the isolation hint `do` prints on stderr, or "" when there
+// is nothing worth saying. It is best effort on purpose — `do` only prints a
+// message, so a hint that cannot be computed must never become a failure — and it
+// is deliberately kept off stdout, which has to stay the bare commit message.
+func (e *env) worktreeTip(issue string) string {
+	backend, err := e.backend()
+	if err != nil {
+		if errors.Is(err, vcs.ErrNoRepository) {
+			// Being outside a repository is worth saying: there is no isolation
+			// to ask for, and a caller who just formatted an action should know
+			// it will not be recorded anywhere here.
+			return "提示: " + err.Error()
+		}
+		return ""
+	}
+	if !e.isolated() {
+		return ""
+	}
+	ws, ok := backend.(vcs.Workspace)
+	if !ok {
+		return ""
+	}
+	if here, err := ws.IsDedicated(); err != nil || here {
+		return "" // already in a dedicated area, or undecidable: stay quiet
+	}
+	head := "提示: 本仓要求动作在 worktree 里提交——开工前先 kiln worktree new " + issue
+	dirty, err := ws.Dirty()
+	if err != nil || !dirty {
+		return head
+	}
+	recipe := e.carryRecipe(issue, ws)
+	if recipe == "" {
+		return head
+	}
+	return "提示: 本仓要求动作在 worktree 里提交；你已有未提交改动——" + recipe
+}
+
+// carryRecipe names the commands that move main's uncommitted changes into a new
+// area, per backend. Nothing is carried by kiln itself (docs/worktree-adopt.md
+// settled that): the recipe is the backend's own, and both avoid rewriting
+// history, which is the trap on the jj side.
+func (e *env) carryRecipe(issue string, ws vcs.Workspace) string {
+	switch e.kind {
+	case vcs.Git:
+		// The stash is repository-wide, so it can be popped from inside the area.
+		return fmt.Sprintf("git：git stash -u → kiln worktree new %s → 进区后 git stash pop", issue)
+	case vcs.JJ:
+		// jj keeps the change in the current @, so basing the new workspace on it
+		// is what carries it; jj edit @- then leaves main clean without rewriting
+		// a single commit. (jj restore would rewrite main's @ and drag the new
+		// workspace along with it.) jj creates no intermediate directories, so the
+		// area's parent has to exist first — the mkdir is exactly what kiln's own
+		// PrepareAreas does before it calls workspace add.
+		dir := vcs.StateDir + "/" + vcs.AreasDir
+		mainRoot, err := mainRootOf(ws)
+		if err != nil {
+			return fmt.Sprintf("jj：先在仓库根 mkdir %s，再 jj workspace add --name %s <区路径> -r @（新区即带上它），最后在 main 跑 jj edit @-", dir, issue)
+		}
+		return fmt.Sprintf("jj：先在仓库根 mkdir %s，再 jj workspace add --name %s %s -r @（新区即带上它），最后在 main 跑 jj edit @-",
+			dir, issue, vcs.AreaPath(mainRoot, issue))
+	}
+	return ""
+}
 
 // workspace implements `kiln worktree new <issue>` and `kiln worktree list`.
 func (e *env) workspace(args []string) int {

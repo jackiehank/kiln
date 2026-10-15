@@ -134,6 +134,10 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 	return areas, nil
 }
 
+// Dirty reports whether the current workspace holds working-copy changes — the
+// same reading `workspace forget` is refused on, asked of where the caller stands.
+func (r ExecRunner) Dirty() (bool, error) { return r.hasChanges(r.Dir) }
+
 // AreaState reports what the workspace still holds. Only the uncommitted half
 // exists on this backend: `workspace forget` asks no questions and loses no
 // commits — the workspace's commit stays in the repository — so there is no

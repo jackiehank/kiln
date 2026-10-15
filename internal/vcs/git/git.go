@@ -107,6 +107,14 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 	return parseWorktrees(out), nil
 }
 
+// Dirty reports whether the current checkout still holds uncommitted or
+// untracked changes — read wherever the caller stands, since the walk-up works
+// from any subdirectory of the working tree.
+func (r ExecRunner) Dirty() (bool, error) {
+	dirty, _, err := r.dirty(r.Dir)
+	return dirty, err
+}
+
 // AreaState reports what the linked worktree still holds. Every half mirrors
 // what RemoveWorkspace refuses on, so a listing and a removal can never disagree
 // about whether an area is safe to let go. The main checkout carries no issue's

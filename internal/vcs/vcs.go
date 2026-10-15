@@ -86,6 +86,10 @@ type Workspace interface {
 	// IsDedicated reports whether the current area is a dedicated (non-main)
 	// one. Only dedicated areas may record actions.
 	IsDedicated() (bool, error)
+	// Dirty reports whether the current checkout holds uncommitted or untracked
+	// changes — the "净 / 脏" question the isolation hints ask about where the
+	// caller is standing. Per-area state stays AreaState's job.
+	Dirty() (bool, error)
 	// NewWorkspace creates the dedicated area bound to issue, reusing it when it
 	// already exists, and returns its path.
 	NewWorkspace(issue string) (string, error)
@@ -206,10 +210,16 @@ func repoRoot(dir string) (root string, hasJJ, hasGit bool) {
 	}
 }
 
+// ErrNoRepository marks the "not in a repository at all" case, so a caller can
+// tell it apart from a repository that merely failed to open. `kiln do` runs
+// outside a repository by design, and it wants to say exactly this and nothing
+// more.
+var ErrNoRepository = errors.New("不在仓库里")
+
 // notARepository is the one wording kiln uses for "no repository here", naming
 // where the search started so the message is never the bare "." the caller typed.
 func notARepository(start string) error {
-	return fmt.Errorf("不在仓库里（从 %s 向上也没有 .git / .jj）", start)
+	return fmt.Errorf("%w（从 %s 向上也没有 .git / .jj）", ErrNoRepository, start)
 }
 
 // absDir makes dir absolute, falling back to a cleaned relative path.
