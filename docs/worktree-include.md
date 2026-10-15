@@ -1,6 +1,6 @@
 # issue: worktree-include — 要不要把「被忽略的本地文件」带进专用区
 
-- **状态**：collect（进行中）
+- **状态**：test（进行中）
 - **domain**：design
 
 ## 背景
@@ -123,3 +123,54 @@
 5. **与 `--adopt` 严划边界**：一个管"被忽略的本地文件"，一个管"未提交改动"。
 
 > 来源（厂商官方文档为骨干，其余标注类型）：[Claude Code：Run parallel sessions with worktrees（`.worktreeinclude`）](https://code.claude.com/docs/en/worktrees#copy-gitignored-files-into-worktrees) ｜ [Claude Code：Common workflows（Copy gitignored files to worktrees）](https://code.claude.com/docs/en/common-workflows) ｜ [Codex：Worktrees（Copy ignored local files into managed worktrees）](https://learn.chatgpt.com/docs/environments/git-worktrees) ｜ [VS Code：Git branches and worktrees（`git.worktreeIncludeFiles`）](https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees) ｜ [Auto-copy files when creating Git worktrees or Jujutsu workspaces（社区脚本）](https://cretezy.com/2026/worktree-copy) ｜ [Git Worktrees for Coding Agents Break on .env, node_modules and Port 3000（社区长文）](https://dev.to/gabrielanhaia/git-worktrees-for-coding-agents-break-on-env-nodemodules-and-port-3000-fix-all-three-3781) ｜ [Cargo：Build Cache（`CARGO_TARGET_DIR`）](https://doc.rust-lang.org/cargo/guide/build-cache.html) ｜ [pnpm：Motivation（content-addressable store）](https://pnpm.io/motivation) ｜ [uv：Caching](https://docs.astral.sh/uv/concepts/cache/)
+
+## test：播种落地——`.worktreeinclude` 在 git 与 jj 两个后端都生效
+
+> 本轮把 collect 的结论（做 B、只用厂商标准的独立文件、语义照抄）**落成代码并真机验证**。范围：`kiln workspace new` 建区后读仓库根的 `.worktreeinclude`，把被忽略的本地文件播种进新区。
+
+### 1. 落地形态
+
+- **清单**：仓库根 **`.worktreeinclude`**——**沿用厂商的键名与位置**（Claude Code / Codex / VS Code 同一约定，吃最强 LLM 先验）；一行一模式，`#` 注释与空行丢弃。走 **P（独立文件）**，不塞进 `.kilnconfig.jsonc`。
+- **时机**：`kiln workspace new <issue>` 建（或复用）区之后播种一次。
+- **新文件** [internal/vcs/include.go](../internal/vcs/include.go)：`IncludeFile`、`SeedArea(mainRoot, areaRoot)`、`readInclude`、`seedable`、`ignoredMatching`、`copyEntry`；接线在 [internal/cli/cli.go](../internal/cli/cli.go) 的 `workspaceNew` → `seedArea`（失败只提示、不阻断提交）。
+
+### 2. 语义（照抄厂商三条 + 一条自加护栏）
+
+| 规则 | 行为 |
+| --- | --- |
+| **只带"匹配且被忽略"的** | 被跟踪的文件永不复制（`--others --ignored` 天然排除已跟踪项） |
+| **已存在 → 跳过、不覆盖** | 目标区里已有的同名文件原样保留 |
+| **跳过 symlink** | 只复制**普通文件**；符号链接与目录都不跟进（目录由 path 展开到其下文件） |
+| **（自加）挡掉元数据根** | 任何落在 `.git` / `.jj` / `.kiln` 下的条目一律不带——清单再宽也不会把仓库元数据搬进区 |
+
+方向仍是**单向进区**、无回写；与 `--adopt`（未提交改动）仍是两件事。
+
+### 3. 关键机制：一次调用同时解出"被忽略"与"匹配"
+
+```
+git ls-files --others --ignored --exclude-standard -z -- <清单里的模式…>
+```
+
+- **被忽略** 由 `--others --ignored --exclude-standard` 给出（gitignore 语义本就是 **git 的**）；
+- **匹配** 由**清单模式充当 pathspec** 给出——`a.local`、`build` 这样的**纯路径**、以及 `*.local` 这样的 **glob** 都实测有效（`build` 展开为其下的 `build/out.bin`；`keep.txt` 若被跟踪则不会出现）。
+- **后端中立**：git 与 jj **共用这一条命令**——jj 读的是同一套 `.gitignore`，且 jj 仓默认 **colocated**（`.git` 在），命令照跑。这正是 collect 里"复制/跳过的逻辑与后端无关、只有枚举要分派"的落地：枚举统一交给 git，jj 侧唯一的差异（`.jj` 会被 git 视为被忽略）由上面的元数据护栏吸收。
+
+### 4. 真机验证
+
+| 后端 | 输入 | 结果 |
+| --- | --- | --- |
+| **git worktree** | 仓根 `.gitignore` = `*.local` / `secret.txt` / `build/`；`.worktreeinclude` = `a.local` / `secret.txt` / `build` | `kiln workspace new t1` → `已播种本地文件 3 个（.worktreeinclude）: a.local, build/out.bin, secret.txt`；区内三个文件都在；**未被忽略、未跟踪**的 `loose.txt` **未**进区；二次运行幂等 |
+| **jj（colocated）** | 同一套清单 | 同上，3 个文件都在区内；`.kiln` **未**被嵌套复制 |
+
+补充观察：
+
+1. **区里的 `.jj` 不是播种带进去的**：jj 的新工作区自带一份 per-workspace 元数据（`working_copy` + `repo`，实测 **4 个文件** vs 主干的 **42 个**），由 `jj workspace add` 生成；`seedable` 同时也显式挡掉了 `.jj`。→ 印证 collect 的"jj 必须排除 `.jj`"。
+2. **jj 没有"未跟踪但未忽略"这一状态**（非忽略文件自动被跟踪），所以"未被忽略的不进区"在 jj 侧由两个事实共同保证：枚举不带它 + 检出时它本来就在。
+3. **幂等/补播种**：删掉区内一个已播种文件后再跑 `workspace new`，只补回那一个（实测评 `已播种本地文件 1 个`），其余已存在的照旧跳过。→ 与 collect 留的"已有区补播种（可选）"顺带一致。
+4. **播种失败不阻断**：`SeedArea` 出错只在 stderr 提示，`workspace new` 仍成功、仍指向区。→ 记录动作不依赖播种。
+
+### 5. 测试与残留
+
+- **单测**（[internal/vcs/vcs_test.go](../internal/vcs/vcs_test.go)）：`readInclude` 去注释/空行/缺失即空、`seedable` 挡元数据根、`SeedArea` 端到端（真 git 仓：只带被忽略的、已存在的跳过、被跟踪的不重复、未忽略的不动）、无清单/纯注释清单 no-op、`copyEntry` 跳 symlink 与目录。`gofmt -l` 空、`go vet ./...` 与 `go test ./...` 全绿。
+- **非目标 / 残留**：**jj 非 colocated**（无 `.git`）下枚举不可用——此时 `SeedArea` 返回提示而非失败（当前 jj 仓默认 colocated，够用）；清单模式按 **git pathspec** 解析，与 gitignore 语法**略有差别**（如无前导斜杠的 `.env` 只匹配根级，不匹配任意层级）——够用，未做进一步的逐字对齐。
+- **留给 conclude**：要不要给 **kiln 自己的仓**加一份 `.worktreeinclude`（例如把 `kiln.exe` 列进去，正好治 `cli-necessity` 那次静默失败）——那是**策略**，不是机制；机制已就位。按 collect 的分层，`kiln.exe` 属**层③（构建产物）**，其正解倾向"重建"，故不默认列入，留 conclude 定。

@@ -405,6 +405,7 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 		return 1
 	}
 	fmt.Fprintf(e.out, "专用工作区: %s\n", path)
+	e.seedArea(ws, path)
 	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
 	if cfgPath, created, err := config.Ensure(e.dir); err != nil {
 		fmt.Fprintf(e.errw, "提示: 未能写入默认配置: %v\n", err)
@@ -412,6 +413,41 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 		fmt.Fprintf(e.out, "已写入默认配置: %s\n", cfgPath)
 	}
 	return 0
+}
+
+// seedArea carries the repository's declared local files (.worktreeinclude) into
+// a new area, so it starts usable instead of as a bare checkout. Seeding is best
+// effort: a failure is a hint, never a command failure, because the recording of
+// an action does not depend on it.
+func (e *env) seedArea(ws vcs.Workspace, areaRoot string) {
+	mainRoot, err := mainRootOf(ws)
+	if err != nil {
+		return // the backend could not name the main checkout; stay quiet
+	}
+	copied, err := vcs.SeedArea(mainRoot, areaRoot)
+	if err != nil {
+		fmt.Fprintf(e.errw, "提示: 未能播种本地文件: %v\n", err)
+		return
+	}
+	if len(copied) > 0 {
+		fmt.Fprintf(e.out, "已播种本地文件 %d 个（%s）: %s\n",
+			len(copied), vcs.IncludeFile, strings.Join(copied, ", "))
+	}
+}
+
+// mainRootOf returns the main checkout's root from a backend's area list, which
+// lists the main area first.
+func mainRootOf(ws vcs.Workspace) (string, error) {
+	areas, err := ws.ListWorkspaces()
+	if err != nil {
+		return "", err
+	}
+	for _, a := range areas {
+		if a.Main {
+			return a.Path, nil
+		}
+	}
+	return "", fmt.Errorf("后端未列出主干")
 }
 
 // config implements `kiln config path`: it prints where the repository config
