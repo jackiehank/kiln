@@ -56,13 +56,56 @@ func TestDetectRejectsUnknownPreference(t *testing.T) {
 	}
 }
 
-// A dedicated area lives beside the main checkout, named after the issue, so
+// An area lives inside the repository's state root, named after the issue, so
 // the name alone binds the two with no extra bookkeeping.
-func TestSiblingAreaNamesAreaAfterIssue(t *testing.T) {
+func TestAreaPathNamesAreaAfterIssue(t *testing.T) {
 	root := filepath.Join("w", "kiln")
-	want := filepath.Join("w", "kiln--cli-necessity")
-	if got := SiblingArea(root, "cli-necessity"); got != want {
-		t.Fatalf("SiblingArea = %q, want %q", got, want)
+	want := filepath.Join("w", "kiln", ".kiln", "ws", "cli-necessity")
+	if got := AreaPath(root, "cli-necessity"); got != want {
+		t.Fatalf("AreaPath = %q, want %q", got, want)
+	}
+}
+
+// The state root must exist, and hide itself, before the first area does: jj
+// creates no intermediate directories, and an unignored area would show up as
+// untracked content in the main checkout.
+func TestPrepareAreasCreatesStateRootAndSelfIgnore(t *testing.T) {
+	root := t.TempDir()
+	if err := PrepareAreas(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, StateDir, AreasDir)); err != nil {
+		t.Fatalf("areas directory missing: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, StateDir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != ignoreBody {
+		t.Fatalf(".gitignore = %q, want %q", body, ignoreBody)
+	}
+}
+
+// An existing .gitignore is kept rather than clobbered.
+func TestPrepareAreasKeepsExistingIgnoreFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, StateDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ignore := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(ignore, []byte("!keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareAreas(root); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(ignore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "!keep\n" {
+		t.Fatalf(".gitignore = %q, want the original untouched", body)
 	}
 }
 

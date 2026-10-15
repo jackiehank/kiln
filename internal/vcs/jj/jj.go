@@ -93,17 +93,23 @@ func (r ExecRunner) IsDedicated() (bool, error) {
 }
 
 // NewWorkspace creates, or reuses, the jj workspace bound to issue and returns
-// its path. The workspace name is the issue, so naming alone binds it.
+// its path. The workspace name is the issue, so naming alone binds it; it lives
+// under the repository's state root, anchored on the main workspace rather than
+// on Dir.
 func (r ExecRunner) NewWorkspace(issue string) (string, error) {
 	areas, err := r.ListWorkspaces()
 	if err != nil {
 		return "", err
 	}
-	path := vcs.SiblingArea(areas[0].Path, issue)
+	mainRoot := areas[0].Path
+	path := vcs.AreaPath(mainRoot, issue)
 	for _, a := range areas {
 		if vcs.SamePath(a.Path, path) {
 			return path, nil // an area for this issue already exists
 		}
+	}
+	if err := vcs.PrepareAreas(mainRoot); err != nil { // jj builds no parent dirs itself
+		return "", err
 	}
 	if _, err := r.run("workspace", "add", "--name", issue, path); err != nil {
 		return "", err

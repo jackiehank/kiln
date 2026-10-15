@@ -5,6 +5,7 @@
 package vcs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +46,19 @@ type Repo interface {
 // BranchPrefix namespaces the branches of kiln's dedicated areas in git.
 const BranchPrefix = "kiln/"
 
+// StateDir is the in-repo state root: everything kiln keeps for itself lives
+// under it, and it hides itself with its own .gitignore (see PrepareAreas).
+const StateDir = ".kiln"
+
+// AreasDir is the StateDir child holding one area per issue. The name is
+// deliberately short: an area nests a real working tree, and this segment is
+// paid for on every path below it.
+const AreasDir = "ws"
+
+// ignoreBody is what kiln writes into <StateDir>/.gitignore — the same trick jj
+// uses for .jj, so the state root never shows up as untracked content.
+const ignoreBody = "/*\n"
+
 // WorkspaceInfo describes one working area a backend knows about.
 type WorkspaceInfo struct {
 	Path  string // path of the area's root directory
@@ -66,12 +80,30 @@ type Workspace interface {
 	ListWorkspaces() ([]WorkspaceInfo, error)
 }
 
-// SiblingArea returns the dedicated area path for issue: a sibling directory of
-// the main checkout named <repo>--<issue>. Keeping areas outside the repository
-// is what stops them from polluting it.
-func SiblingArea(mainRoot, issue string) string {
-	mainRoot = filepath.Clean(mainRoot)
-	return filepath.Join(filepath.Dir(mainRoot), filepath.Base(mainRoot)+"--"+issue)
+// AreaPath returns the dedicated area for issue: <mainRoot>/.kiln/ws/<issue>.
+// Anchoring on the main checkout's root — never the caller's directory — keeps
+// an area created from inside another area from nesting inside it.
+func AreaPath(mainRoot, issue string) string {
+	return filepath.Join(filepath.Clean(mainRoot), StateDir, AreasDir, issue)
+}
+
+// PrepareAreas makes the state root ready for a new area: it creates
+// <mainRoot>/.kiln/ws and, when absent, writes the self-ignoring .gitignore.
+// Both halves are load-bearing: jj creates no intermediate directories, and the
+// ignore entry has to exist before the first area does, or git reports the area
+// as untracked content in the main checkout.
+func PrepareAreas(mainRoot string) error {
+	root := filepath.Clean(mainRoot)
+	if err := os.MkdirAll(filepath.Join(root, StateDir, AreasDir), 0o755); err != nil {
+		return err
+	}
+	ignore := filepath.Join(root, StateDir, ".gitignore")
+	if _, err := os.Stat(ignore); err == nil {
+		return nil // leave an existing file alone rather than clobber an edit
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.WriteFile(ignore, []byte(ignoreBody), 0o644)
 }
 
 // SamePath reports whether two paths name the same location, tolerating the

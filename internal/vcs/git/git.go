@@ -72,17 +72,22 @@ func (r ExecRunner) IsDedicated() (bool, error) {
 }
 
 // NewWorkspace creates, or reuses, the linked worktree bound to issue on branch
-// kiln/<issue> and returns its path.
+// kiln/<issue> and returns its path. The worktree lives under the repository's
+// state root, so it is anchored on the main checkout rather than on Dir.
 func (r ExecRunner) NewWorkspace(issue string) (string, error) {
 	areas, err := r.ListWorkspaces()
 	if err != nil {
 		return "", err
 	}
-	path := vcs.SiblingArea(areas[0].Path, issue)
+	mainRoot := areas[0].Path
+	path := vcs.AreaPath(mainRoot, issue)
 	for _, a := range areas {
 		if vcs.SamePath(a.Path, path) {
 			return path, nil // an area for this issue already exists
 		}
+	}
+	if err := vcs.PrepareAreas(mainRoot); err != nil {
+		return "", err
 	}
 	if _, err := r.run("worktree", "add", path, "-b", vcs.BranchPrefix+issue); err != nil {
 		return "", err

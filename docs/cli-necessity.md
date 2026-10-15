@@ -717,6 +717,66 @@ agent 彼此**看不见**，它们**共享一个仓库**——能"看见彼此"�
 - **残留分支的复用边界**：区被删而 `kiln/<issue>` 分支尚存时，`workspace new` 会因 `-b` 冲突失败（未做二次尝试兜底）。
 - **主干承担合并职责**：实验 9 用原生 `git merge` 走通；kiln 不提供合并命令——与"编排在外"一致，维持现状。
 
+## test：区的位置改到仓库内 `.kiln/ws/`
+
+> 承 U 方案 §7 的待定项「区的位置约定」。原倾向是"仓库之外的兄弟目录 `<repo>--<issue>`"；本轮按用户要求改为**仓库内的状态根**，并先把 git / jj 的惯例查清再动。
+
+### 调研：git 与 jj 各自怎么放
+
+| | **git** | **jj** |
+| --- | --- | --- |
+| 工作树放哪 | **无约定**，路径由调用方给（官方只定义 `<path>`） | **无约定**，同理 |
+| 自己的元数据 | 集中在 `$GIT_DIR/worktrees/<id>/`，**扁平、每工作树一目录**：`HEAD`/`index`/`ORIG_HEAD`/`commondir`/`gitdir`（回指文件）/`logs/`/`refs/` | 共享 store 在主 `.jj/repo/`（`store`/`op_store`/`op_heads`/`index`/`workspace_store`/`submodule_store`）；次 workspace 的 `.jj/repo` 是**指向共享 store 的文件**，另有自己的 `.jj/working_copy/{checkout,tree_state,type}` |
+| 状态目录的自我忽略 | 无 | **有**：`.jj/.gitignore`，内容 `/*` |
+| 建中间目录 | `worktree add` **会建** | **不建**（实测父目录不存在 → `Cannot access … 系统找不到指定的路径`） |
+| 区落在仓库内的后果 | 主干 `git status` 冒 `?? .kiln/` → **必须忽略** | 默认**看不见**（`jj status` 无变化、`jj diff -r @` 0 文件）——不走进嵌套 workspace |
+| 清理原语 | `worktree remove` | `workspace forget` / `remove`（`remove` 连**被忽略的文件**一起删；主 workspace 不可删） |
+
+社区（面向 agent 的 worktree 工具）惯例同样是「**仓库内目录 + 必须 gitignore**」（`.worktrees/`、`claude/worktrees/`、`.workspaces/<slug>/`），并有工具用 `.worktreeinclude` 把**被忽略的本地文件**复制进新工作树。
+
+### 选定与落地
+
+```
+<repo>/                      ← 主干（main checkout，只读/只合并）
+  .kiln/
+    .gitignore               ← 内容 /*：状态根自我忽略（照 jj 的 .jj/.gitignore）
+    ws/
+      <issue>/               ← 一个 issue 的专用区 = 工作树根
+                                （git 分支 kiln/<issue>；jj workspace 名 = issue）
+```
+
+- **两级，且 `ws` 刻意短**：多一层需要一个**稳定命名键**——domain 会变、agent 身份已判"不做"、时间戳是噪声，都不成立；而 git 自己**扁平**（`.git/worktrees/<name>`）、jj **固定两层**（`.jj/repo` 共享 + `.jj/working_copy` 每区），都不按内容再分层。短名是因为**区里每条路径都要摊这个字符数**（Windows 260 预算）。
+- **锚点是主干根**（`worktree list` 首条 / `workspace list` 的 `default`），**不是进程 cwd、也不是当前所在区**——避免"区中区"。
+- **忽略用自我忽略**（`.kiln/.gitignore` = `/*`），**不动仓库受控文件**——在"主干不能提交"的 U 布局下尤其要紧：kiln 没法替你落一个根 `.gitignore` 的改动。
+- **登记仍由 VCS 提供**：git `worktree list` / jj `workspace list` 已是登记处 → 状态根下**不存 kiln 自己的绑定文件或索引**（守住"命名即绑定"）。
+- 代码：`SiblingArea` → `AreaPath(mainRoot, issue)` = `<mainRoot>/.kiln/ws/<issue>`，新增 `PrepareAreas(mainRoot)`。CLI 与**识别逻辑未改**（git 仍从分支 `kiln/<issue>` 推 issue，jj 仍用 workspace 名）。
+
+### 验证（临时仓，新二进制）
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 1 | git：`kiln workspace new u-test` | 区落在 **`<repo>/.kiln/ws/u-test`**；同时写入 `.kiln/.gitignore` = `/*`；主干 `git status` **空** |
+| 2 | git：连跑两次 | **幂等复用**（同路径，exit 0） |
+| 3 | git：`workspace list` | 主干行 + 嵌套路径的 `专用 u-test` |
+| 4 | git：区内 `git add` + `kiln commit` | **成功**（exit 0） |
+| 5 | jj：`kiln workspace new u-test` | **成功**（此前因父目录不存在直接失败）——`PrepareAreas` 先建 `<repo>/.kiln/ws` |
+| 6 | jj：主干 `git status` / `jj status` | **都空**（colocated 下 git 也安静） |
+| 7 | jj：区内 `kiln commit`（未暂存） | **成功**（exit 0） |
+| 8 | 单测 | `gofmt -l` 干净、`go vet` / `go test ./...` 全绿（`vcs` 新增 `AreaPath` + `PrepareAreas` 共 3 例） |
+
+### 两条实现约束（都是实测逼出来的）
+
+1. **必须先建中间目录**：jj 不建（git 建）→ `PrepareAreas` 统一 `MkdirAll(<repo>/.kiln/ws)`。
+2. **忽略条目必须先于第一个区存在**，否则 git 立刻把区报成未跟踪内容；`PrepareAreas` 写 `.gitignore`，且**已存在则不动**（不覆盖用户改过的规则）。
+
+### 风险 / 与 U 原决策的取舍
+
+1. **`git clean -xdf` 在主干执行会删掉整个 `.kiln/`（所有区一起没）**——这是"区在仓库内"的真实代价；U §2 原本倾向仓库外兄弟目录，正是为了躲这个。**这是取向交换**，换来"工作区集中在仓库内一处、`ls .kiln/ws` 即见"。
+2. **Windows 长路径**：`<repo>/.kiln/ws/<issue>` 再叠构建产物可能逼近 260 上限——故 `ws` 取短名（本机已启用长路径则无碍）。
+3. **jj"看不见嵌套 workspace"是 0.45 的隐式行为**，不能当契约——靠显式 `.gitignore` 兜住。
+4. **缺一个原语**：jj 有 `workspace remove` / `forget`，kiln 只有 `new` / `list`；区进了仓库内后清理需求更明显，**留作下一轮候选**。
+5. 一处不协调：配置是根下的 `.kiln.json`（**文件**），状态根是 `.kiln/`（**目录**）——同前缀不同物；将来可收成 `.kiln/config.json`，本轮不动。
+
 ## 非目标
 
 - 不评估 MCP 的实现细节。
