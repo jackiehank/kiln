@@ -5,18 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"kiln/internal/vcs"
 )
 
-// writeConfig puts body at <root>/.kiln/config.jsonc, creating the state root.
+// writeConfig puts body at <root>/.kilnconfig.jsonc.
 func writeConfig(t *testing.T, root, body string) {
 	t.Helper()
-	dir := filepath.Join(root, vcs.StateDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -158,7 +152,7 @@ func TestReadFindsConfigFromSubdirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.VCS != "jj" || cfg.Path != filepath.Join(root, ".kiln", FileName) {
+	if cfg.VCS != "jj" || cfg.Path != filepath.Join(root, FileName) {
 		t.Fatalf("cfg = %+v, want the repo-root file", cfg)
 	}
 }

@@ -1,7 +1,8 @@
-// Package config resolves kiln's per-repository configuration. It lives at one
-// place: <repo>/.kiln/config.jsonc, the repository's state root. The config is
-// project-shared — it travels with the checkout and is meant to be committed,
-// so every collaborator reads the same vocabulary.
+// Package config resolves kiln's per-repository configuration. The file lives at
+// the repository root — <repo>/.kilnconfig.jsonc — beside the other project-shared
+// files, because kiln's config carries the project's own vocabulary, which every
+// collaborator should read the same way. It is committed project content, not
+// local state: kiln's local state (the .kiln/ state root) stays ignored.
 //
 // The file is JSONC: JSON plus // and /* */ comments, because a config that can
 // say why each entry is set is worth more than one that cannot. Only comments
@@ -18,11 +19,10 @@ import (
 	"strings"
 
 	"kiln/internal/model"
-	"kiln/internal/vcs"
 )
 
-// FileName is the config file, inside the state root.
-const FileName = "config.jsonc"
+// FileName is the config file, at the repository root.
+const FileName = ".kilnconfig.jsonc"
 
 // file mirrors the on-disk schema. The vocabulary is grouped so later settings
 // can sit beside it instead of competing for the top-level keys.
@@ -101,7 +101,7 @@ func actionSet(f file) (*model.ActionSet, error) {
 }
 
 // Path resolves the config file for startDir by walking up from it: the first
-// <dir>/.kiln/config.jsonc wins, and the nearest repository root — a directory
+// <dir>/.kilnconfig.jsonc wins, and the nearest repository root — a directory
 // holding .git or .jj — stops the walk and names the canonical location when no
 // file exists yet. ok is false outside a repository.
 func Path(startDir string) (path string, ok bool) {
@@ -110,7 +110,7 @@ func Path(startDir string) (path string, ok bool) {
 		dir = filepath.Clean(startDir)
 	}
 	for {
-		candidate := filepath.Join(dir, vcs.StateDir, FileName)
+		candidate := filepath.Join(dir, FileName)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, true
 		}
@@ -136,13 +136,13 @@ func isRepoRoot(dir string) bool {
 	return false
 }
 
-// Ensure writes the commented default config at the repository's state root when
-// none exists yet, so a fresh repository has something to edit. An existing file
-// is never touched. created reports whether it wrote one.
+// Ensure writes the commented default config at the repository root when none
+// exists yet, so a fresh repository has something to edit. An existing file is
+// never touched. created reports whether it wrote one.
 func Ensure(startDir string) (path string, created bool, err error) {
 	path, ok := Path(startDir)
 	if !ok {
-		return "", false, fmt.Errorf("不在仓库里，定位不到 %s/%s", vcs.StateDir, FileName)
+		return "", false, fmt.Errorf("不在仓库里，定位不到 %s", FileName)
 	}
 	if _, err := os.Stat(path); err == nil {
 		return path, false, nil
@@ -160,8 +160,8 @@ func Ensure(startDir string) (path string, created bool, err error) {
 
 // defaultFile is the seeded config: the built-in vocabulary spelled out, with
 // the comments JSONC exists for.
-const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享）。
-// 位置：<仓库根>/.kiln/config.jsonc（kiln config path 打印路径）
+const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享），放在仓库根。
+// 位置：<仓库根>/.kilnconfig.jsonc（kiln config path 打印路径）
 // 格式：JSONC（JSON + 注释）；除注释外是严格 JSON，不支持尾逗号。
 {
   // action 词表：每个项目可以不同 —— 这是 kiln 的自定义点。

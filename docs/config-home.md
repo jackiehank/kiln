@@ -198,6 +198,52 @@
 - 配置的只读视图（如 `config list` / `--json`）本轮未做，只做了 `config path`。
 - 区里那份配置与主干那份**理论上可分叉**（各自是检出副本，且被忽略的 `.kiln/ws` 不进区）；目前靠"配置随版本"自然收敛，没有额外同步机制。
 
+## test（复议）：「配置放 `.kiln/` 还是根」——改到仓库根 `.kilnconfig.jsonc`
+
+> 上一轮已按"收进 `.kiln/`"落地；本轮是用户**复议**后的反转。记下 A/B 对照、三笔实测成本与落地。
+
+### 复议：A/B 对照
+
+| 维度 | A：`.kiln/config.jsonc`（上一轮） | B：根下 `.kilnconfig.jsonc`（本轮） |
+| --- | --- | --- |
+| 仓库根条目 | 不变（`.kiln/` 已因 `ws/` 存在） | **+1** |
+| "一个家" | 全在 `.kiln/` | 配置在根、状态在 `.kiln/` |
+| `.kiln/` 的语义 | **混合**（本地状态 + 项目内容） | **单一**：纯本地状态 |
+| 忽略规则 | 被迫 `/*` → `/ws`，`.kiln/.gitignore` 变成**要提交的受控文件** | `/*` 自我忽略（同 jj 的 `.jj`，**无需提交**） |
+| 实测摩擦 | ① 修订了 cli-necessity 的原决策；② 主干不能提交 → 得在专用区提交那个 `.gitignore`；③ **实际挡过一次快进合并**（未跟踪文件被 git 拒绝覆盖） | 三条**全部消失** |
+| `git status` 观感 | `?? .kiln/`（看不出区是否真被忽略，要 `check-ignore` 确认） | `?? .kilnconfig.jsonc`（单文件；`.kiln/` **永不出现**） |
+| 惯例对照 | 工具**成族**配置用点目录（`.github/workflows`、`.vscode`） | **项目共享**的单文件配置用根（`.editorconfig`、`.golangci.yml`；git 自己也把共享的 `.gitignore`/`.gitattributes` 放根，只把本地的 `.git/config` 放进状态目录） |
+| 决策 3（会长） | 加配置不动根 | 每个新配置文件 +1 根条目 |
+
+**定论的分层视角**：**共享进根，本地进 `.kiln/`**——正好与 git / jj 的双层惯例对齐。
+
+### 落地内容
+
+- `config.FileName` = **`.kilnconfig.jsonc`**，位置 = **仓库根**；`Path` 的向上搜索改为直接找 `<dir>/.kilnconfig.jsonc`（最近的 `.git` / `.jj` 仍是"还没有文件时该写哪"的规范落点）。
+- **`internal/config` 不再依赖 `internal/vcs`**（不必再引用状态根常量）——依赖方向更干净。
+- **`vcs.ignoreBody` 回到 `/*`**：`.kiln/.gitignore` 重新"自我隐藏"、**不需要提交**；`PrepareAreas` 的注释同步回"状态根自我隐藏"。
+- 播种内容的头行改为"放在仓库根 / 位置：`<仓库根>/.kilnconfig.jsonc`"。
+- 本仓自身：删除上一轮提交的 `.kiln/config.jsonc` 与 `.kiln/.gitignore`，新建根下 `.kilnconfig.jsonc`。
+- 文档同步：`docs/mvp-plan.md` §2.3（位置与文件名）、`docs/cli-necessity.md` 的修订注记（改回 `/*`）。
+
+### 验证（临时仓，新二进制）
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 1 | 干净 git 仓 `kiln config path` | 打印 **`<repo>/.kilnconfig.jsonc`** 并播种；头行即"放在仓库根" |
+| 2 | 播种后 `git status` | 只有 **`?? .kilnconfig.jsonc`** |
+| 3 | `kiln workspace new u-test` | 建区（`.kiln/ws/u-test`）；`.kiln/.gitignore` = **`/*`**；`git status` **仍只有那一行**（`.kiln/` 完全不出现） |
+| 4 | `git check-ignore -v .kiln/ws/u-test` | `.kiln/.gitignore:1:/*` → 区被忽略 |
+| 5 | 带注释 + 自定义词表；子目录里 `config path` | 词表生效（`hypothesize` 非法）；子目录仍解析到**仓库根那份** |
+| 6 | colocated jj 仓 | 同样落在 `<repo>/.kilnconfig.jsonc`；`git status` 只有 `A .kilnconfig.jsonc` |
+| 7 | 单测 | `gofmt -l` 干净、`go vet` / `go test ./...` 全绿（改的是路径与断言，测试数不变） |
+
+### 结论
+
+- **这个 issue 的前提被自己的调研推翻**：原始命题是"把配置收进 `.kiln/`"，而 collect 的惯例（项目共享 → 根）与上一轮落地实测的三笔成本，共同指向"配置该在根"。**"问了 → 查了 → 做了 → 复议后改前提"**，正是这个 issue 最有价值的部分。
+- `.kiln/` 从此**只装本地状态**（自我忽略、无需提交）；将来若出现"工具本地、不随版本"的设置（缓存、个人偏好），那里仍是它们的家。
+- 你要的三条行为**全部保留**：JSONC、分组 schema、锚定仓库根、`config path` 播种。
+
 ## 非目标
 
 - 不评估"配置放到仓库之外"（与本项目 in-repo 的取向冲突）。

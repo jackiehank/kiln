@@ -1,5 +1,5 @@
-// kiln 配置 —— 随仓库提交（项目共享）。
-// 位置：<仓库根>/.kiln/config.jsonc（kiln config path 打印路径）
+// kiln 配置 —— 随仓库提交（项目共享），放在仓库根。
+// 位置：<仓库根>/.kilnconfig.jsonc（kiln config path 打印路径）
 // 格式：JSONC（JSON + 注释）；除注释外是严格 JSON，不支持尾逗号。
 {
   // action 词表：每个项目可以不同 —— 这是 kiln 的自定义点。

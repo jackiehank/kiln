@@ -25,7 +25,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
-（配置：<仓库根>/.kiln/config.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
+（配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
 
 do/commit 的 flags:
   --title  --refs  --target  --scope  --domain  --tag

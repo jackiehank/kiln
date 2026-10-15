@@ -751,7 +751,7 @@ agent 彼此**看不见**，它们**共享一个仓库**——能"看见彼此"�
 - **登记仍由 VCS 提供**：git `worktree list` / jj `workspace list` 已是登记处 → 状态根下**不存 kiln 自己的绑定文件或索引**（守住"命名即绑定"）。
 - 代码：`SiblingArea` → `AreaPath(mainRoot, issue)` = `<mainRoot>/.kiln/ws/<issue>`，新增 `PrepareAreas(mainRoot)`。CLI 与**识别逻辑未改**（git 仍从分支 `kiln/<issue>` 推 issue，jj 仍用 workspace 名）。
 
-> **修订（config-home）**：本节"忽略用自我忽略（`.kiln/.gitignore` = `/*`）"这条已被推翻——配置随后定为**项目共享、随版本**，忽略规则因此收敛成 **`/ws`**（只忽略区；配置与 `.gitignore` 自身都可见、可提交）。见 `docs/config-home.md` 的 `## test` 节。
+> **修订 → 再修订（config-home）**：本节"忽略用自我忽略（`.kiln/.gitignore` = `/*`）"**一度**被推翻——config-home 先把配置收进 `.kiln/`、忽略规则因此改成 `/ws`；随后该 issue **复议**又把配置挪到**仓库根**（`.kilnconfig.jsonc`），于是忽略规则**回到本节的原决策 `/*`**，只是配置不再住在状态根里。见 `docs/config-home.md`。
 
 ### 验证（临时仓，新二进制）
 

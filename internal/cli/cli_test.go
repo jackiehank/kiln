@@ -467,7 +467,7 @@ func TestConfigPathSeedsTheFile(t *testing.T) {
 	if code := e.config([]string{"path"}); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
-	want := filepath.Join(root, vcs.StateDir, config.FileName)
+	want := filepath.Join(root, config.FileName)
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("stdout = %q, want it to name %s", out.String(), want)
 	}

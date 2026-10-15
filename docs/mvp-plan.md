@@ -75,7 +75,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 **顺序不是约束**：`ask` 只负责“开启一个 issue”，其后的动作是一个**无序集合**——任意组合、任意次序都合法，不存在“必须先 hypothesize 再 test”之类的流水线要求。正常情况一个 issue 只有一个 `ask`；同一 issue ID 下再出现 `ask`，实际属于另一个 issue（该识别留待后续迭代）。
 
-词表由**仓库根**的 `.kiln/config.jsonc` 覆盖（不存在则用上面的默认值；`kiln config path` 打印路径，缺失时还会写入一份带注释的默认配置）：
+词表由**仓库根**的 `.kilnconfig.jsonc` 覆盖（不存在则用上面的默认值；`kiln config path` 打印路径，缺失时还会写入一份带注释的默认配置）：
 
 ```jsonc
 {
@@ -89,7 +89,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 }
 ```
 
-- **位置**：`<仓库根>/.kiln/config.jsonc`——从当前目录**向上**找，命中的即仓库那一份。`.kiln/ws/` 是本地工作区（被忽略），配置与它同住但**不被忽略**：**配置随版本**（项目共享）。
+- **位置**：`<仓库根>/.kilnconfig.jsonc`——从当前目录**向上**找，命中的即仓库那一份。配置是**项目共享、随版本**，所以放仓库根（与 `.editorconfig` / `.golangci.yml` 一类同级）；`.kiln/` 只装本地状态（工作区），**整体自我忽略、不入版本**。
 - **格式**：JSONC（JSON + `//` 与 `/* */` 注释）；除注释外是严格 JSON，**不支持尾逗号**。
 - `actions.names`：合法词表（大小写不敏感，入库时归一为小写）
 - `actions.start`：开启 issue 的动作，缺省取 `names` 首项
@@ -99,7 +99,7 @@ kiln 不发明新的存储格式，也不接管文件创建。它把自己定位
 
 最小配置只需列出词表，例如 `{"actions": {"names": ["ask", "probe", "done"]}}` → `start=ask`、`terminal=done`。
 
-> 早期版本用仓库根下的 `.kiln.json`（扁平 JSON）。**已移除**：现在只认 `.kiln/config.jsonc`，旧文件不再被读取。
+> 命名沿革：`.kiln.json`（早期，扁平 JSON）→ `.kiln/config.jsonc`（一度收进状态根）→ **`.kilnconfig.jsonc`（现在，仓库根）**。旧的两种名字都**不再被读取**。
 
 ### 2.4 issue ID 命名约定
 
@@ -222,7 +222,7 @@ kiln/
 ├── cmd/kiln/main.go         # 进程入口
 ├── internal/
 │   ├── model/               # 领域类型（Action / Issue / Repo）+ ActionSet 词表
-│   ├── config/              # 读取 .kiln/config.jsonc（JSONC）→ 词表 + vcs（缺省用内置默认）
+│   ├── config/              # 读取 .kilnconfig.jsonc（仓库根，JSONC）→ 词表 + vcs（缺省用内置默认）
 │   ├── trailer/             # 提交信息 → trailers 的解析（纯函数，可单测）
 │   ├── git/                 # Git 适配层：log / commit（接口 + exec 实现）
 │   ├── engine/              # 聚合、path / check / status / list / graph
@@ -235,7 +235,7 @@ kiln/
 
 ## 6. MVP 范围 / 非目标
 
-**做**：识别规则、trailer 解析、可配置 action 词表（`.kiln/config.jsonc`）、`do`、`commit`、`path`、`status`、`check`（规则 1–4）、`list`、`graph --format=ascii`。
+**做**：识别规则、trailer 解析、可配置 action 词表（`.kilnconfig.jsonc`）、`do`、`commit`、`path`、`status`、`check`（规则 1–4）、`list`、`graph --format=ascii`。
 
 **不做（MVP 明确排除）**：文件创建、变更类型区分、模式切换、中央注册表、签名校验、`rename` 自动改写、`check` 的规则 5–7（阻塞状态 / 循环依赖 / 对象引用）、`--format=json`、MCP server。
 
