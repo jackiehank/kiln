@@ -29,6 +29,86 @@ cli/action-diff                 ✓ conclude
 5. **视图与输入要不要强制一致**：`status` 打出来的名字必须能粘回命令吗？
 6. **与 `issue-uniqueness` 的分工**：那条问"唯一性怎么保证"，本条问"输入侧要不要用限定名"，互为前提。
 
+## collect：业内怎么编号，怎么处理重名
+
+> 一轮联网调研（厂商官方文档为骨干，其余标注类型）。目的：看 issue / 工单 / 想法类工具**有没有命名空间**、**重名怎么处理**，再看本 issue 的候选该怎么收敛。来源见本节末。
+
+### 1. 三种形态
+
+| 形态 | 谁这么做 | 编号的样子 | 唯一性边界 | 跨边界怎么引用 |
+| --- | --- | --- | --- | --- |
+| **前缀命名空间**（前缀 + 序列号） | Jira、YouTrack、Linear、ServiceNow（按表）、ClickUp（可选开） | `PROJ-123`、`ENG-123`、`INC0012345` | 前缀在**实例/工作区内唯一**；序列号只在前缀内唯一 | 不用——ID 自带命名空间 |
+| **全局单序列号** | Bugzilla、Azure DevOps、PEP、RFC、Debian BTS、Launchpad、Phabricator `T` | `#12345`、`T123`、`PEP 8` | **实例/组织内**唯一，且**不复用** | 不用；但跨实例/跨组织就有歧义（`AB#12`） |
+| **容器限定**（短号 + 隐含上下文） | GitHub、GitLab `iid`、Canny、Notion | `#123` | **容器内**（仓库 / 项目 / board）唯一 | 升级成完全限定引用：`owner/repo#123` |
+
+### 2. 命名空间不是"防重名"，是"让重名无害"
+
+- **GitHub**：`#1` 在**每个**仓库都存在——全网有上百万个 `#1`，从不冲突；只有跨仓引用时才升级成完全限定形式（官方文档：同仓 `Closes #10`、跨仓 `Fixes octo-org/octo-repo#100`）。
+- **GitLab** 自家 issue 的说法最直白：`id` 全局唯一，而 **`iid` 只在 namespace（group / subgroup / project）内唯一**；因此短引用是 `#123`、完全限定是 `group/subgroup/project#123`；epic 走另一套符号 `&123` / `group1/subgroup&123`。
+- **代价也被用户点破**：GitLab 有人专门开 issue 要求"全局持久数字 ID"，理由是"我们有多个组件、bug 常被报到错误组件，需要一个能口头念、能贴进表格、跨组件唯一"的标识——**离开容器就得带上下文**，这正是容器限定的账单。
+- 本仓实测：33 个 issue 的 `id` **无重复**（`kiln list --json` 里 `id` 无重值）——即当前重名不是现实问题。
+
+→ 命名空间买到的是"**局部唯一就够用**"。它不减少重名**数量**，只是把重名限制在互不可见的容器里。kiln 会担心重名，恰恰因为它只有**一个**容器（仓库）。
+
+### 3. 前缀是可变键：改名之后靠别名/重定向兜
+
+| 工具 | 改前缀 / 迁移 | 旧引用的命运 |
+| --- | --- | --- |
+| **Jira** | 改 project key | 旧 key 的链接、JQL、REST 调用**继续可用**（`/rest/api/issue/EXAMPLE-100` 仍能取到）；旧 key 不能再给新项目用，且随时可改回 |
+| **YouTrack** | 改 project ID | 旧 ID 存进 **Historical IDs**（只读）；用旧 ID 的**外部链接重定向**到新 ID |
+| **Linear** | issue 移到别的 team | 得到**新 identifier**；旧 identifier 仍可搜索、旧 URL 重定向，但正文里手写的 `#ENG-123` **不会被改写**（只在点击时跳转） |
+| **GitHub** | `gh issue transfer` 跨仓转移 | 社区 issue 抱怨"转移后 issue ID 变了"，写进 commit message 的 `#N` 链接因此断裂 |
+| **beads**（社区，git 原生 tracker） | `--rename-prefix` | 只换前缀段，输出 `prefix_renames` 的 old→new 映射，并把旧 id 存进 `external_ref` |
+
+- **共性：别名/重定向是数据库能力。** 每一个能在改名后不断链的工具，背后都有一张"旧名 → 新名"的表或一个可查询的别名层。
+- kiln **没有数据库**：所有状态住在提交信息里。改 ID / 换前缀只能"改写历史里的全部相关 trailer"（[mvp-plan](mvp-plan.md) §10 已把 `kiln rename` 列为后续迭代）——成本高于上表每一家。上表的 `external_ref` 是现成的对照：**要么留一个旧名兜底字段，要么改名就是断链**。
+- 另有一条实战翻车值得记：Jira 的**项目 name 可以与另一个项目的 key 撞名**，此时 JQL `project = ABC` 会产生歧义（官方 KB 的结论是"只按 key 查询"）。→ **显示名与寻址键一旦分裂，用显示名寻址就会翻车**——这正是本 issue 的起因。
+
+### 4. 重名的另一种解法：重复是"关系"，不是"命名"
+
+| 工具 | 机制 |
+| --- | --- |
+| **Bugzilla** | 字段 `dupe_of` + `duplicates` 表；resolution = `DUPLICATE`；还有按关键词"找疑似重复"的接口 |
+| **GitHub** | 评论里写 `Duplicate of #N` → 时间线出现 "marked as duplicate" 事件，可 Undo；跨仓同样用 `owner/repo#N` |
+| **Jira** | 默认 link type 里就有 `duplicates / is duplicated by`（与 `relates to`、`blocks`、`clones` 并列） |
+| **Canny**（想法类） | API 直接给**合并**：`mergeIdeaID` → `intoIdeaID`；post 同时带机器 `id` 与人类可读的 `urlName` |
+
+→ 没有任何一家做"**标题唯一**"约束；重名/重复**照单全收**，用一条关系把它们连起来。唯一性只在**标识**层面强求，从不在**名字**层面强求。
+
+### 5. 主流是"两把键"：可读键会变，内部键不变
+
+| 工具 | 可读键（人会改） | 内部键（不该变） |
+| --- | --- | --- |
+| GitHub | `number`（仓内） | `node_id` / GraphQL `id`（官方建议持久化它） |
+| Jira | issue key `PROJ-123` | 数字 `id` |
+| GitLab | `iid`（namespace 内） | `id`（全局） |
+| Linear | `identifier` `ENG-123` | UUID |
+| Canny | `urlName` | `id` |
+| Notion | 标题（URL 里的 slug 段） | 页面 UUID，API 只用 `id` 寻址 |
+| **kiln** | `issue:` trailer 的值 | **没有**——`issue:` 的值本身就是唯一键 |
+
+→ kiln 只有**一把键**，没有"内部不可变 ID"可以退守（对比 GitHub 的 `node_id`）。**这把键一旦改名，就得改写所有引用它的提交**——这是与上表全部工具的**结构性差异**，也是本 issue 与 `issue-uniqueness` 共同的约束。
+
+### 6. 单序列全局号：设计/想法类的先例
+
+- **PEP**：「PEP numbers are assigned by the PEP editors, and **once assigned are never changed**」；分配时几乎总是取"下一个可用号"。
+- **RFC**：「Each RFC is assigned a unique number and **these numbers are not reused**」；要改就**发一个新号取代旧的**（supersede + obsoletes）。
+- **Bugzilla / Azure DevOps / Launchpad / Debian BTS / Phabricator `T`**：单序列、只增、不复用。
+
+→ 当一个项目/生态只有**一个**规范的问题序列时，全局号既不需要命名空间、又比前缀短。**命名空间是"多序列并存"的产物**，不是"更高级的编号"。
+
+### 7. 对 kiln 的事实映射（先摆事实，不下结论）
+
+| 事实 | 出处 | 对本 issue 的含义 |
+| --- | --- | --- |
+| 唯一边界 = **单个仓库** | mvp-plan §2.4「唯一性范围：单个仓库内」 | "加 domain 前缀"不是新增容器，而是在**现有唯一容器**上再叠一个前缀 |
+| **domain 不是容器**，它是动作上的可选 trailer | `p.Domain` 由**每个**带 `domain:` 的动作覆写（[engine.go](../internal/engine/engine.go)）；`issueLabel` 对空 domain 回退到裸 `id` | ①任意后续动作都能**改写**这个前缀 → 前缀是**可变地址**；②没声明 domain 的 issue **没有前缀** → 一旦接受限定名就是"两套写法并存" |
+| 视图**已经**有一层 namespace，输入侧没有 | `issueLabel`（`status` 独有）vs `repo.Issues[...]` 直查 | 分裂已经存在；要么补输入侧，要么拆视图——**保持现状等于长期留一个"看得见、粘不回"的名字** |
+| 展示的 `domain/` 前缀**不一定**等于 issue 自己的 domain | `GroupByDomain` 会把跨域子 issue **挪到父的块下**（`status --json` 用 `parent` 表达这点） | 块的位置是"视图摆法"，issue 自己的前缀是另一个事实——两者已经在同一个视图里同时出现 |
+| 没有数据库，也没有第二把键 | 状态全在提交信息里 | 别名/重定向**不可得**；改名的代价高于本节全部工具 |
+| 重名的检测点是**现成的** | `kiln check` 已是完整性校验的落点（**目前不查重**，只查起点/终点等不变量） | kiln 有"先允许重名、再由 `check` 报错"这条路——有 DB 的工具是**在建表时**就用约束挡掉，没有这个自由度 |
+
+> 来源（厂商官方文档为骨干，其余标注类型）：[Atlassian：Editing a project key](https://confluence.atlassian.com/spaces/ADMINJIRASERVER/pages/938847080/Editing+a+project+key)（官方文档）｜ [Atlassian：Configuring issue linking](https://confluence.atlassian.com/spaces/ADMINJIRASERVER/pages/938847862/Configuring+issue+linking)（官方文档，默认 link type 含 `duplicates / is duplicated by`）｜ [Atlassian KB：Sprint 无法管理 / JQL 项目名与项目 key 撞名](https://confluence.atlassian.com/spaces/JIRAKB/pages/1125881102/Some+Jira+users+can+t+manage+a+Sprint+create+start+complete+edit+due+to+lack+of+permissions)（官方 KB）｜ [Atlassian KB：JCMA 迁移预检的项目名 / 项目键冲突](https://support.atlassian.com/atlassian-cloud/kb/project-name-and-project-key-conflict-when-migrating-using-jira-cloud-migration-assistant-jcma)（官方 KB）｜ [GitHub Docs：Linking a pull request to an issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)（官方文档）｜ [GitHub Docs：Using global node IDs](https://docs.github.com/en/graphql/guides/using-global-node-ids)（官方文档）｜ [GitHub Docs：Marking issues or pull requests as a duplicate](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/marking-issues-or-pull-requests-as-a-duplicate)（官方文档）｜ [GitHub Docs：Using keywords in issues and pull requests](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/using-keywords-in-issues-and-pull-requests)（官方文档）｜ [GitHub Docs：Transferring an issue to another repository](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/transferring-an-issue-to-another-repository)（官方文档）｜ [cli/cli#8686](https://github.com/cli/cli/issues/8686)（社区 issue：转移后 issue ID 变 / commit 里的链接断）｜ [GitLab Docs：Issues API](https://docs.gitlab.com/api/issues)（官方文档：`id` / `iid` / `closed_as_duplicate_of`）｜ [gitlab-org/gitlab#482027](https://gitlab.com/gitlab-org/gitlab/-/issues/482027)（GitLab 自家 issue：`id` 全局唯一、`iid` 只在 namespace 内唯一；短引用 vs 完全限定；epic `&123`）｜ [gitlab-org/gitlab#24821](https://gitlab.com/gitlab-org/gitlab/-/issues/24821)（GitLab 自家 issue：要求全局持久数字 ID，跨组件歧义）｜ [Microsoft Learn：Key concepts, objects, and terms（Azure DevOps）](https://learn.microsoft.com/en-us/azure/devops/project/navigation/glossary?view=azure-devops)（官方文档：work item ID 在组织 / 项目集合内唯一）｜ [Microsoft Learn：Connect Azure Boards to GitHub](https://learn.microsoft.com/en-us/azure/devops/boards/github/connect-to-github?view=azure-devops)（官方文档：ID 跨组织不唯一 → `AB#12` 歧义）｜ [Bugzilla：Bugs API（`dupe_of`）](https://bugzilla.readthedocs.io/en/latest/api/core/v1/bug.html)（官方文档）｜ [Bugzilla Schema 5.2（`duplicates` 表 / resolution `DUPLICATE`）](https://schema.bugzilla.org?action=single&version=5.2&view=View+schema)（官方文档）｜ [Linear Docs：Issues](https://linear.app/docs/creating-issues)（官方文档：移到别的 team → 新 identifier、旧 identifier 仍可搜索、旧引用不改写）｜ [Linear Docs：Projects（`P-TEAM-123`）](https://linear.app/docs/projects)（官方文档）｜ [YouTrack Docs：Configure a Project](https://www.jetbrains.com/help/youtrack/server/configuring-a-project.html)（官方文档：project ID 唯一、作 issue 前缀、Historical IDs 重定向）｜ [Canny API Reference](https://developers.canny.io/api-reference)（官方文档：post `id` + `urlName`、`mergeIdeaID` → `intoIdeaID`）｜ [Notion API：Page](https://developers.notion.com/reference/page)（官方文档：页面 `id` 为 UUID，`url` 另给）｜ [PEP 0](https://peps.python.org)（官方文档：编号由编辑分配、一旦分配永不改）｜ [PEP 1](https://peps.python.org/pep-0001)（官方文档：几乎总取下一个可用号）｜ [draft-eastlake-test-rfc-numbers](https://www.ietf.org/archive/id/draft-eastlake-test-rfc-numbers-01.html)（IETF 草案：每个 RFC 唯一编号、不复用）｜ [Wikipedia：Request for Comments](https://en.wikipedia.org/wiki/Request_for_Comments)（二手：被取代即发新号）｜ [Gerrit：Change-Ids](https://gerrit-review.googlesource.com/Documentation/user-changeid.html)（官方文档：Change-Id **不保证**实例内唯一，可在不同 repository / branch 间复用）｜ [Gerrit：User Guide](https://gerrit.cloudera.org/Documentation/intro-user.html)（官方文档：Change-Ids are unique for a branch of a project）｜ [ClickUp Help：Create Custom Task IDs](https://help.clickup.com/hc/en-us/articles/6304361756951-Create-Custom-Task-IDs)（官方帮助页；正文被 Cloudflare 拦，仅标题可核）｜ [ClickUp 反馈：search by custom task id](https://feedback.clickup.com/feature-requests/p/search-by-custom-task-id-in-list-view)（社区：必须带完整前缀才搜得到，用户抱怨 `[DEV-1232]` 要手打进标题）｜ [ServiceNow Community：改 INC 前缀](https://www.servicenow.com/community/developer-forum/change-my-incident-numbers-from-starts-inc-to-incq/m-p/2851113)（官方社区：Number Maintenance 按表设前缀，**改前缀不回溯已有记录**）｜ [ServiceNow 观察记：sys_number 与 INC 编号规则](https://note.com/u_sn_notes/n/n40cfb8c4d5d2)（二手：编号 = prefix + 补零序号，一表一行规则）｜ [beads_rust README](https://github.com/Dicklesworthstone/beads_rust/blob/main/README.md)（社区 / 开源，git 原生 tracker：前缀式 ID、`--rename-prefix` 输出 old→new 映射、旧 id 存 `external_ref`）｜ [git-bug](https://github.com/git-bug/git-bug)（开源，git 内嵌 tracker；其 ID 为内容哈希、按"最短唯一前缀"寻址，见[社区实操文章](https://dev.to/jamilxt/this-bug-tracker-lives-inside-your-git-repo-a-hands-on-guide-to-git-bug-3bjp)与 [HN 讨论](https://news.ycombinator.com/item?id=43971620)：用户想要的正是 `ABC-123` 这种人手写的 key）
 ## hypothesize：这是 `status` 的**显示**问题——domain 由分组头显示一次，行内只留裸 id
 
 > 方向定稿：**不引入命名空间**（`issue:` trailer 不动、输入解析不动），只改**显示**。理由与代价见下；三件必须一起定的事见 §3。
@@ -208,83 +288,13 @@ design
 - 单测改动：`TestStatusRendersDomainBlocks` 断言改为“块头 + 裸 id”，并**反向**断言输出里不再有 `cli/` / `design/` / `├──` / `└──`；`engine` 的 `RelocatesCrossDomainChild` 换成 `KeepsCrossDomainFlat`；`status --json` 的 golden 里 `domains` 1→2、行序改为 `child`先、`parent` 字段删；`TestListJSONSharesTheIssueRow` 改成**按 ID 取行**比对（两个视图排序不同是刻意的）。
 - `kiln check` 不受影响（关系数据照旧解析、校不校验都不变）。
 
-## collect：业内怎么编号，怎么处理重名
+## 结论（已定）
 
-> 一轮联网调研（厂商官方文档为骨干，其余标注类型）。目的：看 issue / 工单 / 想法类工具**有没有命名空间**、**重名怎么处理**，再看本 issue 的候选该怎么收敛。来源见本节末。
+1. **不引入命名空间。** `issue:` 保持**单段 kebab-case slug**（[mvp-plan](mvp-plan.md) §2.4 的不变量不动），输入侧**不接受** `<domain>/<id>` 限定名——`kiln path cli/x` 继续报「未找到问题」。理由：那条路只解决“显示名粘不回”，代价是把早年删掉的 namespace 从输入侧请回来；而 `domain` 是**可选 + 最后一个非空值胜出**的 trailer，拿它当命名空间就是拿一个**可变地址**当容器。
+2. **歧义从显示侧消除（已落地）。** `status` **块头写一次 domain、行内只写裸 id、不画树**——显示出来的名字就是命令能吃的名字；一个 issue 只出现在**自己 domain** 的块里。
+3. **嵌套整体废除。** `status` 只管目录；关系归 `kiln graph`（关系网）与 `kiln path`（过程）。连带退场：JSON 的 `parent` 字段、`engine` 的跨域落位（`Entry.Children` / 环检测 / 递归构造）——**净删代码**。
+4. **与邻居的分工**：`cli/relation-rendering` 的“`status` 要不要显示关系” = **不显示**（该问已答，它只剩 `graph` 补 `blocks` / `supersedes` 的部分）；`design/issue-uniqueness` **未被牵连**——唯一性仍靠命名约定 + `kiln check` 检测，将来若要跨仓库/跨序列前缀，另开题。
+5. **不解决的**：`kiln rename`（改名后旧引用怎么办）仍是 [mvp-plan](mvp-plan.md) §10 的后续项。本裁定只保证“**不需要为显示名改名**”，并未降低无数据库带来的改名成本。
 
-### 1. 三种形态
+> 一句话：**名字只有一份（裸 slug），domain 是目录不是路径。**
 
-| 形态 | 谁这么做 | 编号的样子 | 唯一性边界 | 跨边界怎么引用 |
-| --- | --- | --- | --- | --- |
-| **前缀命名空间**（前缀 + 序列号） | Jira、YouTrack、Linear、ServiceNow（按表）、ClickUp（可选开） | `PROJ-123`、`ENG-123`、`INC0012345` | 前缀在**实例/工作区内唯一**；序列号只在前缀内唯一 | 不用——ID 自带命名空间 |
-| **全局单序列号** | Bugzilla、Azure DevOps、PEP、RFC、Debian BTS、Launchpad、Phabricator `T` | `#12345`、`T123`、`PEP 8` | **实例/组织内**唯一，且**不复用** | 不用；但跨实例/跨组织就有歧义（`AB#12`） |
-| **容器限定**（短号 + 隐含上下文） | GitHub、GitLab `iid`、Canny、Notion | `#123` | **容器内**（仓库 / 项目 / board）唯一 | 升级成完全限定引用：`owner/repo#123` |
-
-### 2. 命名空间不是"防重名"，是"让重名无害"
-
-- **GitHub**：`#1` 在**每个**仓库都存在——全网有上百万个 `#1`，从不冲突；只有跨仓引用时才升级成完全限定形式（官方文档：同仓 `Closes #10`、跨仓 `Fixes octo-org/octo-repo#100`）。
-- **GitLab** 自家 issue 的说法最直白：`id` 全局唯一，而 **`iid` 只在 namespace（group / subgroup / project）内唯一**；因此短引用是 `#123`、完全限定是 `group/subgroup/project#123`；epic 走另一套符号 `&123` / `group1/subgroup&123`。
-- **代价也被用户点破**：GitLab 有人专门开 issue 要求"全局持久数字 ID"，理由是"我们有多个组件、bug 常被报到错误组件，需要一个能口头念、能贴进表格、跨组件唯一"的标识——**离开容器就得带上下文**，这正是容器限定的账单。
-- 本仓实测：33 个 issue 的 `id` **无重复**（`kiln list --json` 里 `id` 无重值）——即当前重名不是现实问题。
-
-→ 命名空间买到的是"**局部唯一就够用**"。它不减少重名**数量**，只是把重名限制在互不可见的容器里。kiln 会担心重名，恰恰因为它只有**一个**容器（仓库）。
-
-### 3. 前缀是可变键：改名之后靠别名/重定向兜
-
-| 工具 | 改前缀 / 迁移 | 旧引用的命运 |
-| --- | --- | --- |
-| **Jira** | 改 project key | 旧 key 的链接、JQL、REST 调用**继续可用**（`/rest/api/issue/EXAMPLE-100` 仍能取到）；旧 key 不能再给新项目用，且随时可改回 |
-| **YouTrack** | 改 project ID | 旧 ID 存进 **Historical IDs**（只读）；用旧 ID 的**外部链接重定向**到新 ID |
-| **Linear** | issue 移到别的 team | 得到**新 identifier**；旧 identifier 仍可搜索、旧 URL 重定向，但正文里手写的 `#ENG-123` **不会被改写**（只在点击时跳转） |
-| **GitHub** | `gh issue transfer` 跨仓转移 | 社区 issue 抱怨"转移后 issue ID 变了"，写进 commit message 的 `#N` 链接因此断裂 |
-| **beads**（社区，git 原生 tracker） | `--rename-prefix` | 只换前缀段，输出 `prefix_renames` 的 old→new 映射，并把旧 id 存进 `external_ref` |
-
-- **共性：别名/重定向是数据库能力。** 每一个能在改名后不断链的工具，背后都有一张"旧名 → 新名"的表或一个可查询的别名层。
-- kiln **没有数据库**：所有状态住在提交信息里。改 ID / 换前缀只能"改写历史里的全部相关 trailer"（[mvp-plan](mvp-plan.md) §10 已把 `kiln rename` 列为后续迭代）——成本高于上表每一家。上表的 `external_ref` 是现成的对照：**要么留一个旧名兜底字段，要么改名就是断链**。
-- 另有一条实战翻车值得记：Jira 的**项目 name 可以与另一个项目的 key 撞名**，此时 JQL `project = ABC` 会产生歧义（官方 KB 的结论是"只按 key 查询"）。→ **显示名与寻址键一旦分裂，用显示名寻址就会翻车**——这正是本 issue 的起因。
-
-### 4. 重名的另一种解法：重复是"关系"，不是"命名"
-
-| 工具 | 机制 |
-| --- | --- |
-| **Bugzilla** | 字段 `dupe_of` + `duplicates` 表；resolution = `DUPLICATE`；还有按关键词"找疑似重复"的接口 |
-| **GitHub** | 评论里写 `Duplicate of #N` → 时间线出现 "marked as duplicate" 事件，可 Undo；跨仓同样用 `owner/repo#N` |
-| **Jira** | 默认 link type 里就有 `duplicates / is duplicated by`（与 `relates to`、`blocks`、`clones` 并列） |
-| **Canny**（想法类） | API 直接给**合并**：`mergeIdeaID` → `intoIdeaID`；post 同时带机器 `id` 与人类可读的 `urlName` |
-
-→ 没有任何一家做"**标题唯一**"约束；重名/重复**照单全收**，用一条关系把它们连起来。唯一性只在**标识**层面强求，从不在**名字**层面强求。
-
-### 5. 主流是"两把键"：可读键会变，内部键不变
-
-| 工具 | 可读键（人会改） | 内部键（不该变） |
-| --- | --- | --- |
-| GitHub | `number`（仓内） | `node_id` / GraphQL `id`（官方建议持久化它） |
-| Jira | issue key `PROJ-123` | 数字 `id` |
-| GitLab | `iid`（namespace 内） | `id`（全局） |
-| Linear | `identifier` `ENG-123` | UUID |
-| Canny | `urlName` | `id` |
-| Notion | 标题（URL 里的 slug 段） | 页面 UUID，API 只用 `id` 寻址 |
-| **kiln** | `issue:` trailer 的值 | **没有**——`issue:` 的值本身就是唯一键 |
-
-→ kiln 只有**一把键**，没有"内部不可变 ID"可以退守（对比 GitHub 的 `node_id`）。**这把键一旦改名，就得改写所有引用它的提交**——这是与上表全部工具的**结构性差异**，也是本 issue 与 `issue-uniqueness` 共同的约束。
-
-### 6. 单序列全局号：设计/想法类的先例
-
-- **PEP**：「PEP numbers are assigned by the PEP editors, and **once assigned are never changed**」；分配时几乎总是取"下一个可用号"。
-- **RFC**：「Each RFC is assigned a unique number and **these numbers are not reused**」；要改就**发一个新号取代旧的**（supersede + obsoletes）。
-- **Bugzilla / Azure DevOps / Launchpad / Debian BTS / Phabricator `T`**：单序列、只增、不复用。
-
-→ 当一个项目/生态只有**一个**规范的问题序列时，全局号既不需要命名空间、又比前缀短。**命名空间是"多序列并存"的产物**，不是"更高级的编号"。
-
-### 7. 对 kiln 的事实映射（先摆事实，不下结论）
-
-| 事实 | 出处 | 对本 issue 的含义 |
-| --- | --- | --- |
-| 唯一边界 = **单个仓库** | mvp-plan §2.4「唯一性范围：单个仓库内」 | "加 domain 前缀"不是新增容器，而是在**现有唯一容器**上再叠一个前缀 |
-| **domain 不是容器**，它是动作上的可选 trailer | `p.Domain` 由**每个**带 `domain:` 的动作覆写（[engine.go](../internal/engine/engine.go)）；`issueLabel` 对空 domain 回退到裸 `id` | ①任意后续动作都能**改写**这个前缀 → 前缀是**可变地址**；②没声明 domain 的 issue **没有前缀** → 一旦接受限定名就是"两套写法并存" |
-| 视图**已经**有一层 namespace，输入侧没有 | `issueLabel`（`status` 独有）vs `repo.Issues[...]` 直查 | 分裂已经存在；要么补输入侧，要么拆视图——**保持现状等于长期留一个"看得见、粘不回"的名字** |
-| 展示的 `domain/` 前缀**不一定**等于 issue 自己的 domain | `GroupByDomain` 会把跨域子 issue **挪到父的块下**（`status --json` 用 `parent` 表达这点） | 块的位置是"视图摆法"，issue 自己的前缀是另一个事实——两者已经在同一个视图里同时出现 |
-| 没有数据库，也没有第二把键 | 状态全在提交信息里 | 别名/重定向**不可得**；改名的代价高于本节全部工具 |
-| 重名的检测点是**现成的** | `kiln check` 已是完整性校验的落点（**目前不查重**，只查起点/终点等不变量） | kiln 有"先允许重名、再由 `check` 报错"这条路——有 DB 的工具是**在建表时**就用约束挡掉，没有这个自由度 |
-
-> 来源（厂商官方文档为骨干，其余标注类型）：[Atlassian：Editing a project key](https://confluence.atlassian.com/spaces/ADMINJIRASERVER/pages/938847080/Editing+a+project+key)（官方文档）｜ [Atlassian：Configuring issue linking](https://confluence.atlassian.com/spaces/ADMINJIRASERVER/pages/938847862/Configuring+issue+linking)（官方文档，默认 link type 含 `duplicates / is duplicated by`）｜ [Atlassian KB：Sprint 无法管理 / JQL 项目名与项目 key 撞名](https://confluence.atlassian.com/spaces/JIRAKB/pages/1125881102/Some+Jira+users+can+t+manage+a+Sprint+create+start+complete+edit+due+to+lack+of+permissions)（官方 KB）｜ [Atlassian KB：JCMA 迁移预检的项目名 / 项目键冲突](https://support.atlassian.com/atlassian-cloud/kb/project-name-and-project-key-conflict-when-migrating-using-jira-cloud-migration-assistant-jcma)（官方 KB）｜ [GitHub Docs：Linking a pull request to an issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)（官方文档）｜ [GitHub Docs：Using global node IDs](https://docs.github.com/en/graphql/guides/using-global-node-ids)（官方文档）｜ [GitHub Docs：Marking issues or pull requests as a duplicate](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/marking-issues-or-pull-requests-as-a-duplicate)（官方文档）｜ [GitHub Docs：Using keywords in issues and pull requests](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/using-keywords-in-issues-and-pull-requests)（官方文档）｜ [GitHub Docs：Transferring an issue to another repository](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/transferring-an-issue-to-another-repository)（官方文档）｜ [cli/cli#8686](https://github.com/cli/cli/issues/8686)（社区 issue：转移后 issue ID 变 / commit 里的链接断）｜ [GitLab Docs：Issues API](https://docs.gitlab.com/api/issues)（官方文档：`id` / `iid` / `closed_as_duplicate_of`）｜ [gitlab-org/gitlab#482027](https://gitlab.com/gitlab-org/gitlab/-/issues/482027)（GitLab 自家 issue：`id` 全局唯一、`iid` 只在 namespace 内唯一；短引用 vs 完全限定；epic `&123`）｜ [gitlab-org/gitlab#24821](https://gitlab.com/gitlab-org/gitlab/-/issues/24821)（GitLab 自家 issue：要求全局持久数字 ID，跨组件歧义）｜ [Microsoft Learn：Key concepts, objects, and terms（Azure DevOps）](https://learn.microsoft.com/en-us/azure/devops/project/navigation/glossary?view=azure-devops)（官方文档：work item ID 在组织 / 项目集合内唯一）｜ [Microsoft Learn：Connect Azure Boards to GitHub](https://learn.microsoft.com/en-us/azure/devops/boards/github/connect-to-github?view=azure-devops)（官方文档：ID 跨组织不唯一 → `AB#12` 歧义）｜ [Bugzilla：Bugs API（`dupe_of`）](https://bugzilla.readthedocs.io/en/latest/api/core/v1/bug.html)（官方文档）｜ [Bugzilla Schema 5.2（`duplicates` 表 / resolution `DUPLICATE`）](https://schema.bugzilla.org?action=single&version=5.2&view=View+schema)（官方文档）｜ [Linear Docs：Issues](https://linear.app/docs/creating-issues)（官方文档：移到别的 team → 新 identifier、旧 identifier 仍可搜索、旧引用不改写）｜ [Linear Docs：Projects（`P-TEAM-123`）](https://linear.app/docs/projects)（官方文档）｜ [YouTrack Docs：Configure a Project](https://www.jetbrains.com/help/youtrack/server/configuring-a-project.html)（官方文档：project ID 唯一、作 issue 前缀、Historical IDs 重定向）｜ [Canny API Reference](https://developers.canny.io/api-reference)（官方文档：post `id` + `urlName`、`mergeIdeaID` → `intoIdeaID`）｜ [Notion API：Page](https://developers.notion.com/reference/page)（官方文档：页面 `id` 为 UUID，`url` 另给）｜ [PEP 0](https://peps.python.org)（官方文档：编号由编辑分配、一旦分配永不改）｜ [PEP 1](https://peps.python.org/pep-0001)（官方文档：几乎总取下一个可用号）｜ [draft-eastlake-test-rfc-numbers](https://www.ietf.org/archive/id/draft-eastlake-test-rfc-numbers-01.html)（IETF 草案：每个 RFC 唯一编号、不复用）｜ [Wikipedia：Request for Comments](https://en.wikipedia.org/wiki/Request_for_Comments)（二手：被取代即发新号）｜ [Gerrit：Change-Ids](https://gerrit-review.googlesource.com/Documentation/user-changeid.html)（官方文档：Change-Id **不保证**实例内唯一，可在不同 repository / branch 间复用）｜ [Gerrit：User Guide](https://gerrit.cloudera.org/Documentation/intro-user.html)（官方文档：Change-Ids are unique for a branch of a project）｜ [ClickUp Help：Create Custom Task IDs](https://help.clickup.com/hc/en-us/articles/6304361756951-Create-Custom-Task-IDs)（官方帮助页；正文被 Cloudflare 拦，仅标题可核）｜ [ClickUp 反馈：search by custom task id](https://feedback.clickup.com/feature-requests/p/search-by-custom-task-id-in-list-view)（社区：必须带完整前缀才搜得到，用户抱怨 `[DEV-1232]` 要手打进标题）｜ [ServiceNow Community：改 INC 前缀](https://www.servicenow.com/community/developer-forum/change-my-incident-numbers-from-starts-inc-to-incq/m-p/2851113)（官方社区：Number Maintenance 按表设前缀，**改前缀不回溯已有记录**）｜ [ServiceNow 观察记：sys_number 与 INC 编号规则](https://note.com/u_sn_notes/n/n40cfb8c4d5d2)（二手：编号 = prefix + 补零序号，一表一行规则）｜ [beads_rust README](https://github.com/Dicklesworthstone/beads_rust/blob/main/README.md)（社区 / 开源，git 原生 tracker：前缀式 ID、`--rename-prefix` 输出 old→new 映射、旧 id 存 `external_ref`）｜ [git-bug](https://github.com/git-bug/git-bug)（开源，git 内嵌 tracker；其 ID 为内容哈希、按"最短唯一前缀"寻址，见[社区实操文章](https://dev.to/jamilxt/this-bug-tracker-lives-inside-your-git-repo-a-hands-on-guide-to-git-bug-3bjp)与 [HN 讨论](https://news.ycombinator.com/item?id=43971620)：用户想要的正是 `ABC-123` 这种人手写的 key）
