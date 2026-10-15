@@ -1,6 +1,6 @@
 # issue: worktree-mode — 要不要把「开不开工作区（worktree）模式」做成配置项
 
-- **状态**：ask（进行中）
+- **状态**：collect（进行中）
 - **domain**：design
 
 ## 背景
@@ -62,3 +62,66 @@ kiln 现在**强制**"**主干只读 / 只合并，动作只在专用区提交**
 - 不改工作区的**布局**（`.kiln/ws/<issue>`）与**播种**（`.worktreeinclude`）——那是 `cli-necessity` / `worktree-include` 的定论。
 - 不新增 VCS 后端；不动 `vcs` 的 `auto | git | jj` 语义。
 - 本轮不改代码：只开题、定清问题与候选。
+
+## collect：别的工具怎么处理「隔离要不要强制」与「护栏强度」
+
+> 一轮联网调研（厂商官方文档为主）。目的：看有没有工具把"隔离"做成**可关**的配置、以及"护栏强度"在行业里怎么表达，再看本 issue 的候选该怎么收敛。来源见本节末。
+
+### 1. 有——而且直接就是「默认隔离 + 可关」
+
+**Claude Code 的 `worktree.bgIsolation`**（v2.1.143+）是**与本 issue 同形**的先例：
+
+| 取值 | 语义 |
+| --- | --- |
+| `"worktree"`（**默认**） | 背景会话**禁止改主干**（Edit/Write 被挡），直到 `EnterWorktree` |
+| `"none"` | **允许直接改工作副本**，不再先进 worktree |
+
+官方原文的理由句几乎与 kiln 的场景重合："**To turn off worktree isolation for a repository where git worktrees are impractical**, set `worktree.bgIsolation` to `"none"`"——而且这个键写在**项目设置**里（随仓库、随版本），不是命令行开关。
+
+它的形状同时落中本 issue 的三个候选：**键名 `worktree`** → 候选 **P**；**成组**（同组还有 `worktree.baseRef` = `"fresh"` / `"head"`）→ 候选 **R**；**字符串枚举**（`"worktree"` / `"none"`）→ 候选 **X**。
+
+> 一句话：**"隔离默认开、给不需要的仓库一条显式出路"**——这套形态已经被主流 agent 工具落地，kiln 的候选 B/C **不是空想**。
+
+### 2. 「护栏强度」的行业惯例 = 分级
+
+| 工具 | 级别 | 放哪 | 关键语义 |
+| --- | --- | --- | --- |
+| **ESLint** | `off` / `warn` / `error`（或 `0`/`1`/`2`） | 配置里的 `rules` | **`warn` 不影响退出码，`error` 影响**——正是"只警告"与"拒绝"的分野 |
+| **rustc / Cargo** | `allow` / `expect` / `warn` / `force-warn` / `deny` / `forbid` | `Cargo.toml` 的 `[lints.<tool>]` 表 | 六级；**警告与拒绝本就是相邻两档** |
+| **git** | 布尔 | `advice.*`，**默认 true** | "不需要提示就设 false"——**纯提示型**的开关用布尔 |
+
+三点收敛：
+
+1. **"只警告 vs 拒绝"是真实且普遍的诉求**（ESLint 的 warn/error、rustc 的 warn/deny 都在同一根轴上）→ kiln 若做，**三态（C）比两态（B）更贴行业**，但多一档语义与测试面。
+2. 这类强度**惯例写在配置里**（ESLint `rules` / Cargo `[lints]`），**不是命令行 flag**——支撑"做成配置项"这个大方向。
+3. **多级用枚举、纯提示用布尔**：`warn` 若要加，**布尔（候选 Y）就得改类型**（破坏性）→ 偏 **X**。
+
+### 3. 默认值：行业普遍"宽松默认、严格可选"——kiln 的"恒开"是反的
+
+- TypeScript `strict` **默认关**；ESLint 规则**默认关**；rustc 只有少数 correctness lint 默认 `deny`、**多数是 `warn`**；git `advice.*` 默认 true，但那是**提示**不是**拦截**。
+- → **惯例是"少拦，让你自己 opt-in 严格"。** kiln 的护栏（恒开、拒主干提交）**反其道**。
+- **但本例站得住**：kiln 拦的是**"污染 / 归属错乱"这类静默正确性故障**（`cli-necessity` / `evidence-fluidity` 的关切）——这正是"**默认安全**"该开的地方，与"lint 严格"的取舍不同。所以**默认值"开"（问题 6）无争议**，与 Claude Code 的 `bgIsolation` 默认 `"worktree"` 一致；要给的只是那条**显式出路**。
+
+### 4. opt-in vs 强制：各工具的立场
+
+| 工具 | 立场 |
+| --- | --- |
+| **git / jj** | worktree / workspace **纯 opt-in**，从不强制（也不替你看管"只在 worktree 干活"） |
+| **Claude Code** | 交互式 `--worktree` **opt-in**（每会话一选）；**背景会话 / 子代理默认隔离**，可关 |
+| **Codex** | managed worktree 是**聊天默认**（"By default, chats use a Codex-managed worktree"） |
+
+→ kiln 现在（`workspace new` 显式建区 + `commit` 结构性拒主干）**严于 git/jj**，**硬于** Claude Code 的"默认隔离"——因为它把"提醒"升级成了"**拒绝**"。
+
+### 5. 对候选的收敛
+
+| 问题 | 收敛 | 依据 |
+| --- | --- | --- |
+| **做不做（A/B/C）** | **倾向 B 或 C，而非 A** | 主流已落地"隔离默认开 + 可关"（`worktree.bgIsolation`）；A（恒开）不是行业共识，且让"就在主干干"的仓库每次手记 `--force` |
+| **两态 vs 三态** | **C（off / warn / error）更贴行业**，代价是多一档 | ESLint warn/error、rustc warn/deny 证明"警告 vs 拒绝"是普遍需求 |
+| **键名** | **`worktree`（P）有直接先例** | Claude Code 的 `worktree.*`；`workspace`（Q）是 kiln 自有语汇但指向"物件"而非"行为" |
+| **位置** | **成组（R）有直接先例**；单键平铺（同 `vcs`）更省但不留位 | `worktree.baseRef` + `worktree.bgIsolation` 同组 |
+| **取值** | **字符串枚举（X）** | Claude Code 用 `"worktree"` / `"none"`；布尔只适"纯提示型"，且加档即改类型 |
+| **默认值** | **默认"开"（隔离）——无争议** | 与 `bgIsolation: "worktree"` 默认一致；拦的是静默正确性故障 |
+| **与 `--force`** | **互补**：配置管默认强度，`--force` 管一次性豁免（保留） | Claude Code 只有设置、无 per-命令豁免；kiln 已有 `--force`，两者不冲突 |
+
+> 来源：[Claude Code：Settings（`worktree.bgIsolation` / `worktree.baseRef`）](https://code.claude.com/docs/en/settings) ｜ [Claude Code：Agent view（How file edits are isolated——关掉 worktree 隔离）](https://code.claude.com/docs/en/agent-view) ｜ [Claude Code：Run parallel sessions with worktrees](https://code.claude.com/docs/en/worktrees) ｜ [ESLint：Configure Rules（规则严重性 off / warn / error）](https://eslint.org/docs/latest/use/configure/rules) ｜ [rustc：Lint Levels（allow…forbid）](https://doc.rust-lang.org/stable/rustc/lints/levels.html) ｜ [Cargo：The Manifest Format（`[lints]` 表）](https://doc.rust-lang.org/cargo/reference/manifest.html) ｜ [Cargo：Configuration（lint 级别）](https://doc.rust-lang.org/stable/cargo/reference/config.html) ｜ [git：git-config（`advice.*` 默认 true）](https://git-scm.com/docs/git-config)
