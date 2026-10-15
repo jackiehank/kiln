@@ -66,3 +66,67 @@
 > 收敛成一个主题：**flag 与输出的"形状"应当自证**——标量 vs 列表、可选 vs 必填、可变 vs 不可变、序号是否稳定。这四类信息里，目前只有"必填"在 `-h` 上写清楚了，其余都得读源码或试错。
 
 > 来源：**本仓的一手使用记录**（agent 在 `qualified-issue-id` / `issue-uniqueness` / `status` 展示改造等 6 条 issue 上的完整会话：命令、输出、失败次数）；其中「已修」两项分别落在 `qualified-issue-id`（`status` 画法）与 `issue-uniqueness`（警告措辞与写侧归一化）的提交里。相关既有追踪：`refs-flag-splitting`（flag 形态，本条 issue 自身尚无 doc）、[relation-rendering](relation-rendering.md)（关系渲染不一致）、[target-honesty](target-honesty.md)（`target:` 声明与实际 diff）、[issue-list-scaling](issue-list-scaling.md)（全量输出与无索引）。
+
+## hypothesize：① `commit` 确认行 ② `-h` 补提交范围 ③ `show` 按动作名（取名×）
+
+> 用户裁定：① `commit` 加确认信息；② `-h` 补提交范围；③ `show` 按动作名展示“确实有必要”，但**先把“同名有好几个”定清楚**。
+
+### 0. 先摆数据：同名动作是常态，不是边角
+
+本仓实测（`kiln check --json` 按动作聚合）：**33 条 issue 里有 8 条带重复动作**；单种动作重复最多的是 `cli-necessity`（17 个动作）——**同一个动作出现 8 次**；`worktree-mode` 6 次、`worktree-hint` 5 次、`relation-vocabulary` 4 次。
+
+→ 所以 `show <issue> test` **必须**定义多匹配语义。“唯一匹配才接受”会让它在最常用的 issue 上直接不可用。
+
+### 1. ① `commit` 加确认行
+
+- **位置**：**stdout**，紧跟在消息之后。理由：`commit` 的输出是**结果**而不是提示（与 `worktree new` 打印的 `worktree: <path>` 同侧），不适用“提示只进 stderr”那条规矩。
+- **形态**：`已提交 <hash> · <action> · <issue>`（例：`已提交 830a0cd · test · qualified-issue-id`）。
+- **一个待选：带不带 hash。** 倾向 **带**（B）：确认行若不指认对象，就只说“成功了”；而同一个工具的 `worktree new` 给出的是**可复制的值**。代价量过：`vcs.Repo.Action(message) error` 要改成回传新 commit id——git 侧 = 提交后 `rev-parse HEAD`；jj 侧 = 刚落的动作就是 `@-` 的 commit id（多跑一条命令）；另外要改两个后端 + 测试假件，全是机械改动。**零代价的退路是 A**（`已提交 · test · qualified-issue-id`，不动接口），且 A **不封死** B：行格式预留可选字段即可。
+- **不改**：仍然打印完整消息（`do` / `commit` 输出同形是现状优势，别动）；不加 `--quiet` 之类开关。
+
+### 2. ② `-h` 补一行「提交范围」
+
+加在命令表下方，与既有的 `action 词表默认: …` / `worktree 默认: …` 同形：
+
+```
+提交范围: git 后端只提交已暂存的改动（kiln 不碰 index，先 git add）；
+           jj 后端直接固定整个工作副本（无暂存区，无需 add）
+```
+
+- **两条现有测试的约束**：① `TestUsageTextCitesNoRepositoryDocument` 禁止 help 里出现 `docs/` 与 `.md`——所以这里只能写语义、不能指文档；② `TestUsageTextAlignsDescriptions` 只算命令表三列的描述列宽，新增段落不影响它。
+- 顺带把 `--force`（`worktree: on` 时的一次性豁免）写进同一行——它也是“提交规则”的一部分，而现在同样只在 README 里。
+
+### 3. ③ `show` 按动作名——**取最近一次，并在有歧义时出声**
+
+| | 语义 | 代价 |
+| --- | --- | --- |
+| **A（推荐）** | `show <issue> <action>` = 该动作**最后一次**出现；**匹配到多个 → stderr 提示**`提示: 有 6 个 test，显示最后一个（2/6）；要看别的用序号`；**没有匹配 → 报错并列出该 issue 的动作**（序号 + 动作名 + 标题） | 小，且与现状默认同构 |
+| B | 唯一匹配才接受，多个就报错列候选 | 按 §0 的数据，它在最常用的 issue 上**不可用**；等于把选择推回给使用者 |
+| C | 支持 `<action>:<k>`（如 `test:2`） | 新语法要学；与序号并存 = 两套定位方式 |
+| D | 只保留序号，但把 `4/6` 写得更显眼 | 不解决“我要看最近那个 test”——而那正是真实诉求 |
+
+选 A 的五条理由：
+
+1. **与现状同构**：`show <issue>` 不给参数就是“**最后一个动作**”；A 只是把它推广为“最后一个 X”。
+2. **有官方先例**：git 的 `:/<text>` 就是“**the youngest matching commit**”（git-rev-parse(1) 原文）——按内容找、默认取最近一次，是版本控制里已被接受的手感。
+3. **不静默**（这才是本条的要害）：歧义时提示候选数，且 header 本来就有 `· 4/6 hypothesize ·`，所以“取到的是哪一个”永远看得见。这恰好补上访谈里那个漏洞——“序号取错时**只有 header 提示，而我不看 header**”：换成语义寻址后，**动作名本身就是自证**（你要 `test` 却拿到 `hypothesize`，一眼就错）。
+4. **序号仍在一等公民**：要精确定位第 k 个，今天就有 `n`，不需要新语法（所以 C 出局）。
+5. **输入类型可判**：动作名永远不会是纯数字（词表可配，但 `ValidIssueID`/词表已限定为字母词），所以“纯数字 = 序号、词表成员 = 动作名”不存在歧义解析。
+
+**非目标**：不改 `path` 的编号（它是索引，有用）；不给 `show` 加 `--first` / `--all` / `--list`（真要再说，别一开始就把面铺大）。
+
+### 4. 不在本轮的三条（仍在 collect 里排队）
+
+`--target` 的标量 vs 列表、flag “形状”自证（可选/必填/可变）、关系单向可见——三条都比这三条贵（前两条要动 `parse` / `trailer` 的语义，第三条动渲染层），且与既有 `refs-flag-splitting` / `relation-rendering` 重叠，留给那两条 issue。
+
+### 5. 落地清单（供 test）
+
+| 位置 | 改动 |
+| --- | --- |
+| `cli.write` | `commit` 成功后打确认行（stdout；hash 走待选 A/B） |
+| `vcs.Repo.Action` + `git` / `jj` 适配器（仅待选 B） | 回传新 commit id |
+| `usageText` | 新增「提交范围」段（避开 `docs/` / `.md`） |
+| `cli.show` | `pos[1]` 先判：纯数字 = 序号（现状行为不变）；词表成员 = 按名取**最后一次**；无匹配 = 报错 + 列候选；多匹配 = stderr 提示 |
+| 测试 | 确认行；`-h` 新段（不破两个既有 usage 测试）；`show` 的四种情形（唯一 / 多 / 无 / 序号仍准） |
+
+> 验证方式：单测 + 真仓跑 `show worktree-mode test`（该 issue 有 6 个 `test`，正好压测“取最近一次 + 提示候选数”）与 `show cli-necessity test`（8 个同名）。
