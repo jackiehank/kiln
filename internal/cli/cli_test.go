@@ -430,7 +430,7 @@ func TestWorkspaceNewReportsPath(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	got := out.String()
-	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity"} {
+	for _, want := range []string{"/ws/repo--cli-necessity", "kiln commit cli-necessity", "区内没有 kiln 二进制"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("workspace new missing %q:\n%s", want, got)
 		}
@@ -539,7 +539,8 @@ func TestRetiredWorkspaceCommandIsRejected(t *testing.T) {
 	if code := Run([]string{"workspace", "list"}, &out, &errb); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(errb.String(), "未知命令") {
+	// A hard cut still points the caller at the new name.
+	if !strings.Contains(errb.String(), "未知命令") || !strings.Contains(errb.String(), "已改名为 `worktree`") {
 		t.Fatalf("stderr = %q", errb.String())
 	}
 }

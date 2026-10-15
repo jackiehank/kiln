@@ -289,3 +289,45 @@ kiln 现在**强制**"**主干只读 / 只合并，动作只在专用区提交**
 1. **`--force` 一词两用**：`commit --force`（一次性豁免主干护栏）与 `worktree remove --force`（丢弃区里的工作）——都是"我知道后果、放行当次"，语义一致，故**同名、不另造**。
 2. **护栏的两半各自归属**：git 的脏区护栏**白拿**（git 自己有），未合并护栏**必须我们前置**；jj 则**两半都要我们做**（`forget` 既不问、也不删）。→ 正是 `vcs.Workspace` 该吸收的差异。
 3. **仍未做**：`worktree new --adopt`（搬未提交改动）——`cli-necessity` 提过、一直未落地，仍是独立缺口。
+
+## test（再续）：worktree 工作流的手感——`.gitattributes` + 两条零成本提示
+
+> 起因：用户问"每次开区、收区，整个过程还有什么不顺畅的"。以下是一份**基于本会话实际跑过 8 轮**的自查，本轮落其中最疼的三项，余项记在末尾。
+
+### 1. 自查：跑这一圈的摩擦（按代价排）
+
+| # | 摩擦 | 证据（本会话） |
+| --- | --- | --- |
+| 1 | **站在区里，却必须用主干那份二进制**，且**无处提示** | 本轮**真踩**：主干二进制比区内源码旧一轮，新加的配置键让它直接 **`配置错误: … unknown field "worktree"`**，只能改用区里临时 build 的那份 |
+| 2 | 每轮一段**行尾归一化**脚本 | 跑了约 **8 次**（`core.autocrlf=true` → 新区检出 CRLF → `gofmt -l` **误报整棵树**） |
+| 3 | 收尾**手敲 + 顺序敏感** | `merge` → `remove` → `branch -d`；顺序反了会**搁浅未合并分支** |
+| 4 | git 后端提交前**必须 `git add -A`** | jj 不需要；忘了就 "nothing to commit" |
+| 5 | **旧名硬切、零引导** | 本轮**自己踩**：`kiln workspace new` → 未知命令 |
+| 6 | `list` 不告诉你**哪个区能安全删** | 脏 / 未合并只在 `remove` 被拒时才暴露 |
+| 7 | 跨目录 **cwd** 管理 | 每轮 `Push-Location` / `Pop-Location` |
+
+> 一句话：kiln 管住了**区的生命周期**（`new` / `list` / `remove`），但**"在区里干活"的手感**仍全靠外部约定——cwd、用哪个二进制、要不要暂存、行尾。
+
+### 2. 本轮落地（用户挑的 1 / 2 / 3）
+
+- **仓库根 `.gitattributes`（`* text=auto eol=lf`）**——一次加、永久消灭第 2 条：**新区检出直接是 LF**，不再需要手工归一化；且实测**不会把主干现有的 CRLF 工作树判成 modified**（`eol=lf` 让 git 对工作树行尾不再敏感）。
+- **`kiln worktree new` 输出补一句**——把**正在运行的二进制绝对路径**打出来（`os.Executable`），并写明"区内没有 kiln 二进制，用主干那份（改了 Go 源码需先重建它）"→ 治第 1 条。
+- **旧名引导**——`未知命令: workspace（已改名为 `worktree`）`（`retiredCommands` 一张小表；普通未知命令照旧只报名字）→ 治第 5 条。
+
+### 3. 验证
+
+| 实验 | 结果 |
+| --- | --- |
+| 临时仓 `kiln worktree new t1` | 输出含 `提交提示: 区内没有 kiln 二进制，用主干那份（改了 Go 源码需先重建它）: <绝对路径>` |
+| `kiln workspace list` | `未知命令: workspace（已改名为 `worktree`）`；exit 2 |
+| `kiln nope` | 仍只是 `未知命令: nope`（旧名引导不外溢） |
+| **合并后在本仓新建区、不归一化直接 `gofmt -l`** | **空**（此前会误报整棵树） |
+
+单测：`TestWorkspaceNewReportsPath` 追加输出提示断言、`TestRetiredWorkspaceCommandIsRejected` 追加"已改名为"断言；`gofmt -l` 空、`go vet` / `go test ./...` **全绿**。
+
+### 4. 余项（本轮未做；要可另开 issue）
+
+- **`kiln worktree land <issue>`**：在主干一步收尾（主干干净检查 → `merge` → `remove`），消掉第 3 条的**顺序敏感**。
+- **`worktree list` 增状态列**（干净 / 有改动 / 分支未合并）→ 治第 6 条。
+- **`kiln commit` 在 git 后端先检查暂存并明说**（或加 `--all`）→ 治第 4 条。
+- **`kiln commit --in <area>`**（免 cd）→ 治第 1 / 7 条的 cd 部分。

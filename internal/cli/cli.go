@@ -6,6 +6,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -37,6 +38,10 @@ show 的 flags:  --stat（只给该动作的文件统计）
 commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在主干提交）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的区一起删）
 `
+
+// retiredCommands maps a name kiln no longer answers to its current spelling, so
+// a hard cut still tells the caller where the command went.
+var retiredCommands = map[string]string{"workspace": "worktree"}
 
 // usageCommands is the command surface rendered by usageText.
 var usageCommands = [][2]string{
@@ -184,6 +189,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config":
 		// handled below, once the vocabulary is loaded
 	default:
+		if now, ok := retiredCommands[cmd]; ok {
+			fmt.Fprintf(stderr, "未知命令: %s（已改名为 `%s`）\n\n%s", cmd, now, usageText())
+			return 2
+		}
 		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
 		return 2
 	}
@@ -422,12 +431,23 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	fmt.Fprintf(e.out, "专用工作区: %s\n", path)
 	e.seedArea(ws, path)
 	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
+	fmt.Fprintf(e.out, "提交提示: 区内没有 kiln 二进制，用主干那份（改了 Go 源码需先重建它）: %s\n", selfPath())
 	if cfgPath, created, err := config.Ensure(e.dir); err != nil {
 		fmt.Fprintf(e.errw, "提示: 未能写入默认配置: %v\n", err)
 	} else if created {
 		fmt.Fprintf(e.out, "已写入默认配置: %s\n", cfgPath)
 	}
 	return 0
+}
+
+// selfPath names the binary the caller is already running, so the hint can point
+// at the exact program in hand — the main checkout's copy, when the area was made
+// from the main checkout.
+func selfPath() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "kiln"
 }
 
 // seedArea carries the repository's declared local files (.worktreeinclude) into
