@@ -297,6 +297,7 @@ kiln/
 - 专用区**播种已落地**：`kiln worktree new` 读仓库根的 `.worktreeinclude`（沿用厂商标准键名与语义），把**被忽略的本地小文件**带进新区；git 与 jj（colocated）均生效，只带"匹配且被忽略"、已存在跳过、单向进区——见 [docs/worktree-include.md](worktree-include.md)
 - 工作区模式**可配已落地**：顶层 `worktree`（默认 `on`：主干只读、动作只在专用区；`off`：允许在主干提交），命令统一为 `kiln worktree`（`new` / `list` / `remove`），`--force` = 一次性豁免——见 [docs/worktree-mode.md](worktree-mode.md)
 - `worktree list` 的**状态列已落地**：尾列报每个区 `干净` / `有改动` / `未合并` / `目录已删`（可并列），main 一行报 `—`；判据收在 `vcs.Workspace.AreaState` 一处，与 `remove` 的拒绝**同源**，且默认全探——见 [docs/worktree-list-status.md](worktree-list-status.md)
+- `worktree` 约束的**提示三层已落地**：`kiln do` 按状态出声（不在仓库 / `off` / 已在区内 / main 净 / main 脏，脏态给**后端配方**）、`commit` 的拒绝语按 main 脏 / 净分派、`status` 头行报开关与已开数量并在有区的 issue 上打 `■`；提示**只进 stderr、exit code 不变**；另修好"后端探测只看当前目录导致子目录误报没有仓库"——见 [docs/worktree-hint.md](worktree-hint.md)
 - 动作「证据」可被改写 / 删除（jj 的流体历史）与「记录」取向的张力：**阻塞 cli-necessity**——见 [docs/evidence-fluidity.md](evidence-fluidity.md)
 - 关系渲染不一致：`graph` / `status` 未渲染 `blocks` / `supersedes`（而 `path` 有）——见 [docs/relation-rendering.md](relation-rendering.md)
 - 动作的**作者归属**：**已定"不做"**——现状 1 人 + 1 agent 共用同一 git 身份，且无消费场景；重启触发条件与理由见 [docs/author-attribution.md](author-attribution.md)
