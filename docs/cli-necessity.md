@@ -812,6 +812,61 @@ agent 彼此**看不见**，它们**共享一个仓库**——能"看见彼此"�
 - 本轮不改代码：只把实测坑与候选记下来。
 - `.worktreeinclude` 式清单要不要做、键长什么样——若要做得另开 issue。
 
+## test（再续 4）：本仓切到 jj 共存模式——jj 后端首次跑在自举仓上
+
+> 用户要求："现在工作目录是 git 管理，现在使用 jj 共存模式"。执行 `jj git init --colocate`，本仓**第一次同时是 git 仓与 jj 仓**；kiln 的 auto 检测（`.jj` 优先于 `.git`）随之自动切到 jj 后端。
+
+### 1. 切换与对齐
+
+| 检查 | 结果 |
+| --- | --- |
+| `jj git init --colocate` | `Done importing changes from the underlying Git repo.` exit 0；`.jj/` 生成 `repo` / `working_copy` / `.gitignore`（后者的内容是 `/*`） |
+| **git 侧是否被扰动** | **没有**：`git status` 空，`HEAD` 仍是切前的 `16a0d9b` |
+| **git 会不会看见 `.jj`** | **不会**：jj 自带的 `.jj/.gitignore`（`/*`）让 git 认为"这目录里没有非忽略文件"，故不报未跟踪 |
+| **jj 侧看不看得见 git 历史** | **看得见**：`jj log` 列出全部 kiln 动作；`@` 是 master 之上的**空**工作副本提交 |
+| **kiln 走哪个后端** | **jj**（`vcs: auto` + `.jj` 优先）：`kiln status` 25 个 issue / 90 个动作，`kiln path` / `kiln check` **全过**——与 git 视图**逐项一致** |
+| `kiln worktree list` | jj 后端照常工作（`main（只读/只合并）  —`） |
+
+### 2. 双向可见（临时仓实测）
+
+colocated 下 jj 的提交**同时进 git 的 refs**，两个视图不会分叉：
+
+```
+$ jj commit -m "jj 侧的动作"
+$ git log --oneline
+8198dba jj 侧的动作          ← git 看得见
+2311a6d git 侧的起点
+$ git status --short         → 空
+```
+
+### 3. 新踩到的危险：`git clean -xdf` 会连 `.jj/` 一起抹掉
+
+```
+$ git clean -xdf -n
+Would remove .jj/            ← jj 仓的全部状态
+Would remove .kiln/
+Would remove internal/git/
+Would remove kiln.exe
+```
+
+**成因**：jj 用 `.jj/.gitignore`（`/*`）自我忽略，好让 git 别把 `.jj` 报成未跟踪；可 `-x` 的语义恰恰是"**连同被忽略的一起清**"——那条 `/*` 反手把整个 `.jj/` 交了出去。**把它写进 `.gitignore` 也救不了**（`-x` 不看忽略的来源）。
+
+→ **本仓（已 colocated）禁止裸跑 `git clean -xdf`**；确实要清，用 `git clean -xdf -e .jj -e .kiln`，或只清具体路径。
+
+### 4. 顺带发现
+
+- `internal/git/` 是**空目录**（未跟踪、无文件、无忽略规则命中），早前会话的残留——`git clean -d` 会把它当"未跟踪目录"删掉（无关紧要，只是让干跑多一行噪音）。
+
+### 5. 对后续工作的含义
+
+1. **提交不再需要 `git add`**：jj 没有暂存区，`kiln commit <issue> <action>` 直接 finalize **整个工作副本改动**——所以改文件后**别夹带无关改动**（这是从 git 切过来最容易踩的一步）。
+2. **动作在 `@` 上成形**：jj 的 `Log` 排除 `@`，于是"提交前看不见、提交后才出现"——与 git 的"暂存 → 提交"等价，但更自动。
+3. 本节这条提交本身就是**第一次用 jj 后端 dogfood `kiln commit`**。
+
+### 未做 / 待定
+
+- **要不要把"本仓已 colocate、勿裸跑 git clean"制度化**（写进 living spec 或本仓文档）——本轮只记在本文与本仓的记忆里。
+
 ## 非目标
 
 - 不评估 MCP 的实现细节。
