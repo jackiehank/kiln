@@ -1,6 +1,6 @@
 # issue: worktree-list-status — `kiln worktree list` 要不要带状态列（哪个区能安全删）
 
-- **状态**：ask（进行中）
+- **状态**：已完成（conclude）
 - **domain**：cli
 - **关联**：derived-from `worktree-mode`
 
@@ -246,3 +246,47 @@ $ gofmt -l .                           → 空    ← 此前在 main 会误报�
 
 - `git ls-files --eol` 全 `w/lf`；`git check-attr` 脚本后缀 `eol=crlf`、其余 `eol=lf`。
 - `go vet ./...` / `go test ./...` **全绿**；`gofmt -l` **在 main 直接为空**——此前每轮都得借一只把 CRLF 归一过的 LF 镜像来验格式，现在不必了。
+
+## 结论（已定）
+
+**定了：`kiln worktree list` 尾列各区状态——`干净` / `有改动` / `未合并` / `目录已删`（可并列），`main` 一行报 `—`；判定收在 `vcs.Workspace.AreaState` 一处，`list` 与 `remove` 读同一份答案。**
+
+### 1. 逐条裁定（对 ask 的 7 个问题）
+
+| # | 问题 | 结论 |
+| --- | --- | --- |
+| 1 | **要哪几档** | **四档**：`干净` / `有改动` / `未合并` / `目录已删`；并列写在一格（`有改动，未合并`、`目录已删，未合并`），不拆多列。第四档是 test（续）实测补上的——"注册还在、目录没了"是 git 的真实状态（`prunable`） |
+| 2 | **判定同源吗** | **同源（候选 A）**：`AreaState` 是唯一来源；两后端各自实现，`list` 与 `remove` 共用 |
+| 3 | **代价与时机** | **默认全探（候选 X）**：`list` 每次为 N 个区各跑 1~2 条后端命令；**不加开关** |
+| 4 | **输出形态** | **候选 P**：三列 `<路径>  <角色>  <状态>`，路径与角色按显示宽度对齐 |
+| 5 | **main 一行** | **`—`**：main 不是专用区、没有 issue 分支可判；留空会被读成"干净" |
+| 6 | **后端中立** | **同口径、档位可不同**：git 有"未合并"，jj 没有（`workspace forget` 不丢提交）；`目录已删` 在 jj 侧也不会出现（`jj workspace list` 干脆不再列它） |
+| 7 | **作用域** | **只改 `worktree list`**；与 `kiln status`（全库概览）联动**不做** |
+
+### 2. 留下的不变式
+
+**一个区"能不能安全删"，全库只有一个答案——`vcs.Workspace.AreaState`。** `list` 只负责把它显示出来，`remove` 只负责按它拒绝或放行；两者不许各判一遍。
+
+推论有三：① 档位按后端能力裁剪（git 四档、jj 两档），但**口径一致**；② "读不出状态"仍算失败（exit 1），而"已知的没有"（`目录已删`）是**状态**、不是失败；③ 状态列**默认常开**——它的价值正是"不必先试删"，做成 flag 等于把摩擦挪个地方。
+
+### 3. 落地物
+
+- **代码**：[internal/vcs/vcs.go](../internal/vcs/vcs.go)（`AreaState{Gone, Dirty, Unmerged}` + `Workspace.AreaState`）；[internal/vcs/git/git.go](../internal/vcs/git/git.go)（`status --porcelain` 在该区里跑 + `merge-base --is-ancestor`，为此拆出 `runIn(dir, …)`）；[internal/vcs/jj/jj.go](../internal/vcs/jj/jj.go)（`diff --summary`）；[internal/cli/cli.go](../internal/cli/cli.go)（`workspaceList` 尾列 + `areaStateWord`）。
+- **一处行为变更**：`remove` 的"脏区"拒绝语不再用 git 的英文，改为 kiln 自己那句（两后端同一句）；git 自带的拒绝**保留为兜底**。
+- **仓库约定**：[.gitattributes](../.gitattributes) 分后缀例外（`*.bat` / `*.cmd` / `*.ps1` / `*.psm1` / `*.psd1` 留 CRLF，其余一律 LF），并把 main 工作树里 13 个旧文件的副本刷成 LF。
+- **测试**：真 git 仓的 `TestAreaStateMatchesWhyRemoveRefuses`（四态与 `remove` 逐一对齐，`Gone` 不报错）；cli 的 `TestWorktreeListShowsAreaState`（六行表驱动）、`TestWorktreeListLeavesMainUnjudged`、`TestWorktreeListFailsWhenStateIsUnknown`。`gofmt -l` 空、`go vet` / `go test ./...` 全绿。
+- **文档**：[docs/mvp-plan.md](mvp-plan.md) §10 加一条；本文件。
+
+### 4. 一并纠正的一条旧结论
+
+`cli-necessity` 的取舍里写过"区放在 `.kiln/` 下 → 主干跑 `git clean -xdf` 会把全部区删掉"。**不成立**：git 跳过嵌套仓库（干跑打印 `Would skip repository .kiln/ws/<issue>`），要 `git clean -xffd` 才连区一起抹。附带：`-xdf` 确实会删掉 `.kiln/.gitignore`，但 `worktree new` 会把它写回，**自愈**。
+
+（`cli-necessity.md` 的**历史正文不改写**——那是当时的记录；更正落在本节，并与项目记忆同步。）
+
+### 5. 未做（要可另开 issue）
+
+1. **`remove` 清不掉"目录已删"的区**——要清得先跑 `git worktree prune`。
+2. **状态列的颜色 / 紧凑记号**（候选 Q）。
+3. **`--status` / `--no-status` 开关**（候选 Y / Z）——X 已定，不做。
+4. **与 `kiln status` 联动**。
+5. **jj 侧补"未合回 main"一档**——需先有"jj 会丢东西"的正例，现在没有。
