@@ -373,9 +373,15 @@ func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 		if recipe := e.carryRecipe(issue, ws); recipe != "" {
 			fmt.Fprintln(e.errw, recipe)
 		}
-	} else {
-		fmt.Fprintf(e.errw, "先 `kiln worktree new %s`，再 cd 到 worktree 提交。\n", issue)
+		// --force stays documented, but it must not read as the cheaper
+		// alternative to the recipe: it only lets the guard through, it does not
+		// move anything, so it is offered as a condition you have to *want* —
+		// otherwise an agent optimizing for "make the command succeed" takes the
+		// one flag and leaves the work sitting in main.
+		fmt.Fprintln(e.errw, "（--force 只放行护栏、不把改动搬进区——只有你确实要把它留在 main 时才用；想长期允许 main 提交，把 worktree 设为 off。）")
+		return 1
 	}
+	fmt.Fprintf(e.errw, "先 `kiln worktree new %s`，再 cd 到 worktree 提交。\n", issue)
 	fmt.Fprintln(e.errw, "确要在 main 提交时加 --force（一次性豁免）；（想长期允许 main 提交，把配置里的 worktree 设为 off。）")
 	return 1
 }

@@ -479,6 +479,14 @@ func TestCommitRefusalCarriesTheRecipeWhenMainIsDirty(t *testing.T) {
 	if strings.Contains(got, "先 `kiln worktree new demo`") {
 		t.Fatalf("with a dirty main the plain advice is the wrong one:\n%s", got)
 	}
+	// --force must not be offered as the cheaper alternative here: it releases the
+	// guard, it does not move the work.
+	if strings.Contains(got, "确要在 main 提交时加 --force") {
+		t.Fatalf("the dirty branch must not offer --force as a parallel option:\n%s", got)
+	}
+	if !strings.Contains(got, "只放行护栏、不把改动搬进区") {
+		t.Fatalf("the caveat must say what --force does not do:\n%s", got)
+	}
 }
 
 // A clean main needs no recipe: "先建区" is exactly right there.
