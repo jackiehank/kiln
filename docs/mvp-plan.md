@@ -309,7 +309,7 @@ kiln/
 - 用 diff 反查 `target:` 声明是否属实：`check` 新增"声明 vs 现实"的一致性校验（候选 D，源于 `action-diff`）——见 [docs/target-honesty.md](target-honesty.md)
 - 同一 issue ID 下出现第二个 `ask` 时的识别（视为新 issue 的分叉）
 - `kiln graph --format=dot|mermaid`：接入外部渲染
-- `kiln check --format=json`：CI 集成与 PR 评论
+- 机器可读输出：读命令（`status` / `list` / `path` / `check` / `graph` / `worktree list`）的 `--json` / `--toon` 结构化输出，面向 agent 与脚本（原「`kiln check --format=json`：CI 集成与 PR 评论」并入此问）——见 [docs/machine-readable-output.md](machine-readable-output.md)
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
 - 封装为 MCP server：把结构化工具暴露给 Agent，彻底避免其拼 CLI
 
