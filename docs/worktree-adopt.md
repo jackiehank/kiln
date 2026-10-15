@@ -61,3 +61,75 @@
 ## 备注
 
 出处分布（供核实）：`cli-necessity.md` §U 方案（首次提出）｜§待定 ｜§test（落地时明确不做）｜§非目标；`worktree-include.md` §要回答的问题 4 / 待定 / collect 收敛表 / 结论 / 遗留 3；`worktree-mode.md` 取舍 5 / 遗留 5；`README.md`「已知边界」。
+
+## collect：别的工具怎么处理「把未提交改动带进新工作区」
+
+> 一轮调研。**以本地权威源 + 真机实测为骨干**（git / jj 自带的用法说明与真实行为），厂商文档用来回答"这件事到底有没有人做"。目的不是选方案，而是**给问题 1 备料**。
+
+### 1. 先说结论：厂商没把这个做成功能
+
+| 工具 | 有没有"带未提交改动进新 worktree"的能力 |
+| --- | --- |
+| **git** | **没有**。`git worktree add` 的选项只有 `-f / --detach / --checkout / --lock / --orphan / (-b\|-B) / --reason / --track / --guess-remote / --relative-paths`，**没有任何"携带改动"的开关**；它对脏工作区也**不拒绝**，只是**当没看见**（新区是目标提交的干净检出）。man page 无相关指引。 |
+| **jj** | **能，但它是"选父提交"的副作用**：`jj workspace add -r <revset>`。**不给 `-r`** 时，新工作区的 working-copy commit 建在当前 `@` 的**父**上（共享父 → **不含**你的改动）；**给 `-r @`** 就"如同执行了 `jj new @`" → **含**你的改动。文档**不把它称作**"携带改动"。 |
+| **VS Code** | 文档明说 worktree **不含**主工作区的未提交改动。 |
+| **Claude Code** | worktree 是 fresh checkout；只有 `.worktreeinclude`（管**被忽略**的文件），未记载携带未提交改动。 |
+| **JetBrains** | New Worktree 对话框只有 From branch，无此选项。 |
+| **Codex** | 调研**未找到**官方 worktree 文档（not found）。 |
+| **第三方 worktree 管理器** | 调研里**唯一一例**：`gwt switch --carry`——**已逐源核对**，见 §4。 |
+
+> 一句话：**"把未提交改动带进新工作区"在主流工具里不是一项功能**——共识是"你自己的本地状态自己管"（stash / apply / 重做）。唯一把它做成开关的是一支第三方脚本，而且叫 **`--carry`**，不叫 `--adopt`。
+
+### 2. git 侧：机制与坑（真机实测）
+
+**官方语义先垫底**：`refs/` 下的引用**跨 worktree 共享**（`git worktree` man 的 REFS 节；例外只有 `refs/bisect` / `refs/worktree` / `refs/rewritten`）。`refs/stash` 属 `refs/` ⇒ **stash 是仓库级的**，任何链接工作区都看得见、都能 `pop`。
+
+实测（一步不差；主干一个已跟踪改动 + 一个未跟踪文件）：
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | `git worktree add <path> -b feat` | **建区成功、不报错**；新区内容 =**旧内容**、**没有**那个未跟踪文件 → 改动**一点没跟过去** |
+| 2 | 主干 `git stash -u` | 主干**干净** |
+| 3 | 在**区内** `git stash list` | **看得见**那条 stash（印证"仓库级共享"） |
+| 4 | 区内 `git stash pop` | 已跟踪改动 **+ 未跟踪文件**都落进区里；主干仍干净 |
+
+**坑**：未跟踪要 `-u`、被忽略的还要 `-a`（**默认只存已跟踪的改动**）；顺序不能反（先 `pop` 回主干再建区 = 没搬）；`pop` 冲突时会保留 stash 但要人收拾；这条路**"迁走"得很彻底**（主干变干净），代价是**不可逆**（stash 已消费）。
+
+### 3. jj 侧：天然能"注入"，但"迁走"踩中流体历史的坑（真机实测）
+
+jj 把"未提交改动"就当成**一条提交**（工作副本 `@`），于是：
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | 主干有改动，`jj workspace add --name w <path>`（**不加 `-r`**） | 新区与主干 `@` **共享父** → 新区是**旧内容**（改动留在主干） |
+| 2 | 改加 `-r @` | 新区是**改后内容** ✓ —— 且**主干也仍然持有那份改动**：`-r @` 是**复制 / 注入**，不是搬迁 |
+| 3 | 主干想变干净——**错法**：`jj restore base.txt` | 主干 `@` 被**改写** → jj 打出 `Rebased 1 descendant commits.`，**新区的工作副本随即 stale**；`jj workspace update-stale` 之后真相是：**区里的改动没了**（回到旧内容）。**磁盘上那个"改后内容"是 stale 造成的假象。** |
+| 4 | 主干想变干净——**对法**：`jj edit @-` | **不改写任何提交**（无 rebase 提示）；主干工作副本退回旧内容；**区里的改后内容原封不动** |
+
+→ **jj 侧正解 = `-r @`（把改动交给新区的父提交）+ 主干 `jj edit @-`（把工作副本挪开）**：两步都**原生、都不改写历史**。一旦用 `restore` 这类"改内容"的动作，就会顺着 jj 的自动 rebase **把新区连坐**。
+
+> 这正面呼应 `evidence-fluidity`：**在 jj 上，"把改动搬走"的难点不在搬运，而在"别顺手改写历史"。**
+
+### 4. 唯一的先例（已逐源核对）：`gwt switch --carry`
+
+第三方 bash 脚本 `gwt`（worktree 管理器）的 `switch` 有 `--carry`：
+
+> `--carry  Copy working state (staged, unstaged, untracked) to new worktree (requires --create)`
+
+实现（读源码）：`git diff --cached --binary`（暂存）+ `git diff --binary`（未暂存）→ 新区里 `git apply --cached` / `git apply`；未跟踪文件按 **`git ls-files --others --exclude-standard`** 枚举再 `cp -a`。
+
+三点可借鉴：
+1. **名字是 `--carry`**（携带），不是 `--adopt`；
+2. **是"复制"不是"搬迁"**（源工作区不动）；
+3. **不含被忽略的文件**（枚举用了 `--exclude-standard`）——正好落在与 `.worktreeinclude` 的**分界线**上（层①归播种，它只管"未提交"）。
+
+### 5. 给问题 1 的三点材料
+
+1. **没有厂商先例**：主流工具一律"不代管未提交状态"，唯一例外是一支第三方脚本 → "做"这件事**没有行业共识可当理由**（也就没有"别人都有、我们也得有"的压力）。
+2. **机制代价不对称**：jj 侧是 `-r @` + `jj edit @-` 两枚**原生**命令（kiln 只是转发，**谈不上编排**）；git 侧却要 kiln 自己串 `stash -u` → `pop`——**那才是真正的"编排"**，与 U 方案的"编排在外"有张力。→ 若做，**两侧的"越界程度"并不相同**。
+3. **名字的先验在别处**：调研里 `adopt` 在其它工具一律指"**收编既有对象**"（GNU Stow `--adopt`、grove / vde-worktree 的 `wt adopt`），**没有**"携带未提交改动"的含义——若真做，`--carry`（或 `--with-changes`）比 `--adopt` 更贴既有语汇。
+
+> 来源。**本地权威源 + 实测**：`git worktree add -h` / `git stash -h` / `jj workspace add --help`（本机 jj 0.45.1）；两个后端的临时仓实测（见 §2 / §3 的表格）。
+> **厂商文档**：[git-worktree（REFS：`refs/` 跨 worktree 共享）](https://git-scm.com/docs/git-worktree) ｜ [git-stash（`-u` / `-a`）](https://git-scm.com/docs/git-stash) ｜ [Claude Code：worktrees](https://code.claude.com/docs/en/worktrees) ｜ [JetBrains：Use Git worktrees](https://www.jetbrains.com/help/idea/use-git-worktrees.html)。
+> **第三方（已逐源核对）**：[gwt（`switch --carry` 的源码与实现）](https://raw.githubusercontent.com/omerhadari/gwt/main/gwt)。
+> **二手 / 未逐字复核**（标注类型）：VS Code"worktree 不含未提交改动"那句话的原文（[delegate-two-tasks](https://code.visualstudio.com/docs/agents/guides/delegate-two-tasks)）、Codex 侧"not found"——均由调研代理报告。
