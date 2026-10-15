@@ -742,18 +742,21 @@ func (e *env) status(args []string) int {
 	if repo == nil {
 		return code
 	}
+	areas := e.knownAreas()
 	s := engine.Summarize(repo, e.actions)
 	if s.Total == 0 {
-		fmt.Fprintf(e.out, "问题总数: 0（完成 0 / 进行中 0）\n")
+		fmt.Fprintf(e.out, "问题总数: 0（完成 0 / 进行中 0）｜%s\n", worktreeSegment(e.worktree, areasOpen(areas)))
 		fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
 		fmt.Fprintln(e.out, "提示: 用 `kiln do <issue> <action>` 生成规范提交信息")
+		e.renderWorktreeLegend(areas)
 		return 0
 	}
 	groups := engine.GroupByDomain(repo)
-	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）｜domain %d 个\n",
-		s.Total, s.Complete, s.InProgress, engine.CountDomains(groups))
+	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）｜domain %d 个｜%s\n",
+		s.Total, s.Complete, s.InProgress, engine.CountDomains(groups), worktreeSegment(e.worktree, areasOpen(areas)))
 	fmt.Fprintf(e.out, "kiln 动作数: %d\n\n", s.Actions)
-	e.renderStatus(e.statusLines(groups))
+	e.renderStatus(e.statusLines(groups, areaIssues(areas)))
+	e.renderWorktreeLegend(areas)
 	return 0
 }
 
@@ -763,16 +766,17 @@ type statusLine struct {
 	left  string
 	done  bool
 	state string
+	area  bool // this issue has a worktree open
 }
 
-func (e *env) statusLines(groups []engine.DomainGroup) []statusLine {
+func (e *env) statusLines(groups []engine.DomainGroup, areas map[string]bool) []statusLine {
 	var lines []statusLine
 	for gi, g := range groups {
 		if gi > 0 {
 			lines = append(lines, statusLine{})
 		}
 		for i, en := range g.Entries {
-			e.appendEntry(&lines, en, "", i == len(g.Entries)-1, 0)
+			e.appendEntry(&lines, en, "", i == len(g.Entries)-1, 0, areas)
 		}
 	}
 	return lines
@@ -780,7 +784,7 @@ func (e *env) statusLines(groups []engine.DomainGroup) []statusLine {
 
 // appendEntry walks an entry and its nested children. Depth 0 lines carry no
 // tree connector; deeper ones get ├── / └── with │ continuation.
-func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, isLast bool, depth int) {
+func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, isLast bool, depth int, areas map[string]bool) {
 	left := issueLabel(en.Issue)
 	if depth > 0 {
 		conn := "├── "
@@ -789,7 +793,12 @@ func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, i
 		}
 		left = indent + conn + left
 	}
-	*lines = append(*lines, statusLine{left: left, done: e.isDone(en.Issue), state: stateWord(en.Issue)})
+	*lines = append(*lines, statusLine{
+		left:  left,
+		done:  e.isDone(en.Issue),
+		state: stateWord(en.Issue),
+		area:  areas[en.Issue.ID],
+	})
 
 	nextIndent := indent
 	if depth > 0 {
@@ -800,7 +809,7 @@ func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, i
 		}
 	}
 	for i, c := range en.Children {
-		e.appendEntry(lines, c, nextIndent, i == len(en.Children)-1, depth+1)
+		e.appendEntry(lines, c, nextIndent, i == len(en.Children)-1, depth+1, areas)
 	}
 }
 
@@ -821,8 +830,95 @@ func (e *env) renderStatus(lines []statusLine) {
 		if l.done {
 			mark = "✓"
 		}
-		fmt.Fprintf(e.out, "%s %s %s\n", pad(l.left, width), mark, l.state)
+		fmt.Fprintf(e.out, "%s %s %s%s\n", pad(l.left, width), mark, l.state, areaMark(l.area))
 	}
+}
+
+// AreaMark is the suffix that flags an issue as having a worktree open. U+25A0
+// (■) is the pick out of the geometric shapes: it is present in every font tested
+// except one vendored subset, and — unlike the ✓ this view already prints — it
+// survives in the very fonts where that ✓ is missing, so the new mark never
+// becomes the weakest link.
+const AreaMark = "■"
+
+// areaMark returns the marker cell for one row; rows without an area stay a
+// character shorter rather than carrying an empty column.
+func areaMark(hasArea bool) string {
+	if hasArea {
+		return "  " + AreaMark
+	}
+	return ""
+}
+
+// areaIssues lists the issues that currently have a worktree open, which is what
+// the marker in the domain view marks.
+func areaIssues(areas []vcs.WorkspaceInfo) map[string]bool {
+	set := make(map[string]bool, len(areas))
+	for _, a := range areas {
+		if a.Issue != "" {
+			set[a.Issue] = true
+		}
+	}
+	return set
+}
+
+// areasOpen counts the dedicated areas in a listing; the main checkout is not one
+// of them, so it never counts as an open worktree.
+func areasOpen(areas []vcs.WorkspaceInfo) int {
+	n := 0
+	for _, a := range areas {
+		if !a.Main {
+			n++
+		}
+	}
+	return n
+}
+
+// knownAreas lists the repository's working areas. It is best effort on purpose:
+// status is a read view, and an area list that cannot be read must not fail it —
+// the view then simply says zero, which is also what an empty repository has.
+func (e *env) knownAreas() []vcs.WorkspaceInfo {
+	backend, err := e.backend()
+	if err != nil {
+		return nil
+	}
+	ws, ok := backend.(vcs.Workspace)
+	if !ok {
+		return nil
+	}
+	areas, err := ws.ListWorkspaces()
+	if err != nil {
+		return nil
+	}
+	return areas
+}
+
+// worktreeSegment reports the isolation mode and how many areas are open — the
+// repository-level half of the worktree state, which is why it is shown even when
+// the mode is off and the count is zero: it answers "did this repository ask for
+// isolation", and a segment whose shape never changes reads better than one that
+// comes and goes.
+func worktreeSegment(mode string, areas int) string {
+	word := "on"
+	if mode == config.WorktreeOff {
+		word = "off"
+	}
+	return fmt.Sprintf("worktree %s（已开 %d 个）", word, areas)
+}
+
+// renderWorktreeLegend explains the marker — and names the area the caller is
+// standing in — but only when the repository has one open. A legend for a mark
+// that never appears would just be noise.
+func (e *env) renderWorktreeLegend(areas []vcs.WorkspaceInfo) {
+	if len(areas) == 0 {
+		return
+	}
+	line := AreaMark + " = 已开 worktree——各自状态见 kiln worktree list"
+	if here, ok := vcs.AreaAt(areas, "."); ok && !here.Main {
+		line += "｜当前：worktree " + here.Issue
+	}
+	fmt.Fprintln(e.out)
+	fmt.Fprintln(e.out, line)
 }
 
 func (e *env) isDone(p *model.Issue) bool {

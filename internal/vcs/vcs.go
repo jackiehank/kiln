@@ -150,12 +150,15 @@ func SamePath(a, b string) bool {
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
-// Detect picks a backend for dir. prefer is "", "auto", "git" or "jj". In auto
-// mode a jj repo wins over git: a colocated jj workspace contains both .jj and
-// .git, and reading through git would silently miss jj's view.
+// Detect picks a backend for dir, looking for the repository root first: the walk
+// goes up through dir's ancestors and stops at the first one holding a marker,
+// the same anchoring config.Path uses, so kiln behaves the same from any
+// subdirectory. prefer is "", "auto", "git" or "jj". In auto mode a jj repo wins
+// over git: a colocated jj workspace contains both .jj and .git, and reading
+// through git would silently miss jj's view.
 func Detect(dir, prefer string) (Kind, error) {
-	hasJJ := exists(filepath.Join(dir, ".jj"))
-	hasGit := exists(filepath.Join(dir, ".git"))
+	start := absDir(dir)
+	root, hasJJ, hasGit := repoRoot(start)
 	switch prefer {
 	case "", "auto":
 		if hasJJ {
@@ -168,16 +171,81 @@ func Detect(dir, prefer string) (Kind, error) {
 		if hasGit {
 			return Git, nil
 		}
-		return "", fmt.Errorf("vcs=git，但 %s 下没有 .git", dir)
+		if root == "" {
+			return "", notARepository(start)
+		}
+		return "", fmt.Errorf("vcs=git，但 %s 下没有 .git", root)
 	case string(JJ):
 		if hasJJ {
 			return JJ, nil
 		}
-		return "", fmt.Errorf("vcs=jj，但 %s 下没有 .jj", dir)
+		if root == "" {
+			return "", notARepository(start)
+		}
+		return "", fmt.Errorf("vcs=jj，但 %s 下没有 .jj", root)
 	default:
 		return "", fmt.Errorf("未知 vcs: %q（可选 auto / git / jj）", prefer)
 	}
-	return "", fmt.Errorf("%s 下既没有 .git 也没有 .jj", dir)
+	return "", notARepository(start)
+}
+
+// repoRoot walks dir and its ancestors, returning the first one that holds a
+// marker — .jj or .git — and which of the two it holds. root is "" once the walk
+// reaches the filesystem root, i.e. dir is in no repository at all.
+func repoRoot(dir string) (root string, hasJJ, hasGit bool) {
+	for {
+		hasJJ, hasGit = exists(filepath.Join(dir, ".jj")), exists(filepath.Join(dir, ".git"))
+		if hasJJ || hasGit {
+			return dir, hasJJ, hasGit
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false, false
+		}
+		dir = parent
+	}
+}
+
+// notARepository is the one wording kiln uses for "no repository here", naming
+// where the search started so the message is never the bare "." the caller typed.
+func notARepository(start string) error {
+	return fmt.Errorf("不在仓库里（从 %s 向上也没有 .git / .jj）", start)
+}
+
+// absDir makes dir absolute, falling back to a cleaned relative path.
+func absDir(dir string) string {
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return filepath.Clean(dir)
+}
+
+// AreaAt returns the known area that contains dir — the one the caller is
+// standing in, main included. Areas nest inside the main checkout, so the
+// *deepest* match wins; ok is false when dir is outside every area.
+func AreaAt(areas []WorkspaceInfo, dir string) (WorkspaceInfo, bool) {
+	abs := absDir(dir)
+	var best WorkspaceInfo
+	found := false
+	for _, a := range areas {
+		if !within(abs, a.Path) {
+			continue
+		}
+		if !found || len(filepath.Clean(a.Path)) > len(filepath.Clean(best.Path)) {
+			best, found = a, true
+		}
+	}
+	return best, found
+}
+
+// within reports whether dir sits at or under root, tolerating the separator and
+// case differences the platforms introduce.
+func within(dir, root string) bool {
+	dir, root = filepath.Clean(dir), filepath.Clean(absDir(root))
+	if strings.EqualFold(dir, root) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(dir), strings.ToLower(root)+string(filepath.Separator))
 }
 
 func exists(path string) bool {

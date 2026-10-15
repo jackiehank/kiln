@@ -278,7 +278,59 @@ design/cli-necessity           test  ■
 
 `off` 时同一位置写 `｜worktree off（已开 0 个）`。
 
-### 仍未定
+### 已定（用户本轮指示，落地见 §test）
 
-- **`（已开 0 个）` 在 off 且 0 个时要不要省略**（简要 vs 状态完整）——**倾向保留**：用户的指示是"数量也在头行显示"，那就永远显示，格式固定才好读。
-- **「你站在哪个区」**（上一轮的候选 F）仍待定；记号与计数已让头行变长，F 会让它更长。
+- ~~`（已开 0 个）` 在 off 且 0 个时要不要省略~~ → **保留**：用户指示"数量也在头行显示"，格式固定才好读。
+- ~~「你站在哪个区」放哪~~ → **放 legend**（用户指定），形如 `｜当前：worktree demo`。
+
+## test：落地（切片一）——探测向上找 + `status` 的 worktree 展示
+
+> 本轮落两块：**① 后端探测改「向上找仓库根」**（修子目录误报，为「不在仓库里」那句措辞打底）；**② `status` 显示 worktree 状态**（头行开关与区数量 / issue 行记号 / legend 含"当前在哪"）。
+> 切片二（`do` 提示、`-h` 措辞、`commit` 拒绝语按脏净分派）见文末。
+
+### 1. 落地内容
+
+- **`internal/vcs`**：`Detect` 先做 `repoRoot()` —— 走祖先链找第一个带 `.jj` / `.git` 的目录，**与 `config.Path` 同一套锚定**；新增 `notARepository()`，**一个说法**「不在仓库里（从 <绝对路径> 向上也没有 .git / .jj）」，且**报出搜索起点**（不再是含糊的 `.`）；新增 `AreaAt()`（按路径包含找"我站在哪个区"，**最深匹配**）与 `within()`。
+- **`internal/cli`**：`status` 头行尾加 `｜worktree on（已开 N 个）`（`areasOpen()` 只数**专用区**，main 不算）；有区的 issue 行尾加 `■`（`areaIssues()` / `areaMark()`）；有区时末行 legend，站在区内时带 `｜当前：worktree <issue>`；`knownAreas()` 是 **best effort**——读不到就当 0，**绝不让 status 失败**。
+
+### 2. 真机验证
+
+```
+# ① 子目录（原来误报"没有仓库"）
+$ cd docs && kiln status
+问题总数: 28（完成 20 / 进行中 8）｜domain 2 个｜worktree off（已开 0 个）     ← 原来是 打开仓库失败: . 下既没有 .git 也没有 .jj
+
+# ② 真不在任何仓库
+$ cd <temp> && kiln status
+打开仓库失败: 不在仓库里（从 C:\...\kiln-norepo3 向上也没有 .git / .jj）
+
+# ③ 有区的仓库（main 上跑）
+问题总数: 1（完成 0 / 进行中 1）｜domain 1 个｜worktree on（已开 1 个）
+kiln 动作数: 2
+
+design/demo   test  ■
+
+■ = 已开 worktree——各自状态见 kiln worktree list
+
+# ④ 从区内跑
+■ = 已开 worktree——各自状态见 kiln worktree list｜当前：worktree demo
+```
+
+### 3. 测试
+
+- **`internal/vcs`**：`TestDetectSearchesUpward`（子目录 → 找到父级仓库；`prefer=jj` 仍按存在的标记报错）、`TestDetectDoesNotReportARepositoryOutsideOne`（措辞 + 报出起点）、`TestAreaAtFindsTheContainingArea`（区内深处 / main / 无匹配 / 空表）。
+- **`internal/cli`**：`TestStatusShowsWorktreeModeAndAreas`、`TestStatusStatesWorktreeOffWithNoAreas`、`TestStatusLegendNamesTheCurrentArea`；`TestStatusRendersDomainBlocks` 随签名更新。
+- `gofmt -l` 空、`go vet` / `go test ./...` **全绿**。
+
+### 4. 实现中撞到的两个坑（都被单测当场逮住）
+
+1. **`AreaAt` 会被 main 抢先命中**：区就嵌在 main **里面**（`.kiln/ws/<issue>`），"第一段包含"匹配时 main 总是先中，于是"当前在哪"会答成 main。→ 改成**最深匹配**（路径最长者胜）。
+2. **计数把 main 算成"已开的一个"**：`len(areas)` 连 main 一起数了。→ 加 `areasOpen()`，只数专用区。
+
+### 5. 顺带观察（不是本轮引入，但值得记住）
+
+**在区内跑 `status`，读的是那个区的分支历史**：实测在区内看到 `design/demo   ask`，而 main 上是 `test`——因为区自建区那一刻起就是**独立分支**，`test` 那笔在 main 上、还没进区。→ 这是"区 = 一次检出 / 独立分支"的必然。**区内的 `status` 可能落后于 main。**
+
+### 6. 切片二（未做）
+
+`do` 提示（五态 + 后端配方）、`-h` footer 措辞升格、`commit` 拒绝语按 main 脏 / 净分派（需要一个新的 `Workspace.Dirty()` ——`AreaState` 刻意不报 main）。

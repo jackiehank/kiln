@@ -125,7 +125,7 @@ func TestStatusRendersDomainBlocks(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	e := &env{actions: model.DefaultActionSet(), out: &buf}
-	e.renderStatus(e.statusLines(groups))
+	e.renderStatus(e.statusLines(groups, nil))
 	got := buf.String()
 
 	for _, want := range []string{"cli/help-alignment", "design/action-config", "└── cli/child"} {
@@ -135,6 +135,87 @@ func TestStatusRendersDomainBlocks(t *testing.T) {
 	}
 	if !strings.Contains(got, "\n\n") {
 		t.Fatalf("expected a blank line between domain blocks:\n%s", got)
+	}
+}
+
+// `status` states the repository-level worktree mode and how many areas are open
+// — the "did this repository ask for isolation" question — marks the issues that
+// have one, and explains the mark once at the end rather than on every row.
+func TestStatusShowsWorktreeModeAndAreas(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: workspaceRunner{fakeRunner: demoRunner(), areas: []vcs.WorkspaceInfo{
+			{Path: "C:/w/kiln", Main: true},
+			{Path: "C:/w/kiln/.kiln/ws/demo", Issue: "demo"},
+		}},
+		out: &out, errw: &errb,
+	}
+	if code := e.status(nil); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{
+		"worktree on（已开 1 个）",
+		"■ = 已开 worktree——各自状态见 kiln worktree list",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status missing %q:\n%s", want, got)
+		}
+	}
+	marked := false
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "demo ") {
+			marked = strings.HasSuffix(line, AreaMark)
+		}
+	}
+	if !marked {
+		t.Fatalf("the issue with an area must carry the mark:\n%s", got)
+	}
+}
+
+// The segment is a statement of state, so it keeps its shape — off, and zero —
+// instead of coming and going; with no areas there is nothing to mark or explain.
+func TestStatusStatesWorktreeOffWithNoAreas(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions:  model.DefaultActionSet(),
+		repo:     workspaceRunner{fakeRunner: demoRunner()},
+		worktree: config.WorktreeOff,
+		out:      &out, errw: &errb,
+	}
+	if code := e.status(nil); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "worktree off（已开 0 个）") {
+		t.Fatalf("status must still state the mode:\n%s", got)
+	}
+	if strings.Contains(got, AreaMark) {
+		t.Fatalf("no area, no mark and no legend:\n%s", got)
+	}
+}
+
+// The legend names the area the caller is standing in — cheap to know, and the
+// question whoever is about to commit actually has.
+func TestStatusLegendNamesTheCurrentArea(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: workspaceRunner{fakeRunner: demoRunner(), areas: []vcs.WorkspaceInfo{
+			{Path: cwd, Issue: "demo"},
+		}},
+		out: &out, errw: &errb,
+	}
+	if code := e.status(nil); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "｜当前：worktree demo") {
+		t.Fatalf("legend must name the area we stand in:\n%s", out.String())
 	}
 }
 

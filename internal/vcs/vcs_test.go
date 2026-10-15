@@ -58,6 +58,60 @@ func TestDetectRejectsUnknownPreference(t *testing.T) {
 	}
 }
 
+// The repository root is found by walking up — the same anchoring config.Path
+// uses — so a subdirectory of a repository is never mistaken for "no repository".
+func TestDetectSearchesUpward(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, root, ".git")
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if kind, err := Detect(sub, "auto"); err != nil || kind != Git {
+		t.Fatalf("Detect(subdir) = %q, %v; want git", kind, err)
+	}
+	if _, err := Detect(sub, "jj"); err == nil {
+		t.Fatal("prefer=jj must still fail when only .git exists up the tree")
+	}
+}
+
+// Outside any repository the error says exactly that, and names where the search
+// started instead of the bare "." the caller typed.
+func TestDetectDoesNotReportARepositoryOutsideOne(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Detect(dir, "auto")
+	if err == nil {
+		t.Fatal("expected an error outside any repository")
+	}
+	if !strings.Contains(err.Error(), "不在仓库里") {
+		t.Fatalf("err = %v, want the no-repository wording", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(dir)) {
+		t.Fatalf("err = %v, want it to name the starting point %s", err, dir)
+	}
+}
+
+// AreaAt finds the area a directory sits in — main included — so a view can say
+// where the caller is standing, from any depth.
+func TestAreaAtFindsTheContainingArea(t *testing.T) {
+	main := filepath.Join("w", "kiln")
+	area := filepath.Join(main, StateDir, AreasDir, "t1")
+	areas := []WorkspaceInfo{{Path: main, Main: true}, {Path: area, Issue: "t1"}}
+
+	if got, ok := AreaAt(areas, filepath.Join(area, "internal")); !ok || got.Issue != "t1" {
+		t.Fatalf("AreaAt(inside the area) = %+v, %v; want t1", got, ok)
+	}
+	if got, ok := AreaAt(areas, filepath.Join(main, "docs")); !ok || !got.Main {
+		t.Fatalf("AreaAt(main) = %+v, %v; want the main checkout", got, ok)
+	}
+	if _, ok := AreaAt(areas, filepath.Join("w", "elsewhere")); ok {
+		t.Fatal("a directory outside every area must not match")
+	}
+	if _, ok := AreaAt(nil, main); ok {
+		t.Fatal("an empty area list matches nothing")
+	}
+}
+
 // An area lives inside the repository's state root, named after the issue, so
 // the name alone binds the two with no extra bookkeeping.
 func TestAreaPathNamesAreaAfterIssue(t *testing.T) {
