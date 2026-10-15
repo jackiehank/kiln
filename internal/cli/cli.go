@@ -331,7 +331,7 @@ func (e *env) write(args []string, commit bool) int {
 		return 1
 	}
 	if !f.has("force") {
-		if code := e.refuseInMain(backend); code != 0 {
+		if code := e.refuseInMain(backend, issue); code != 0 {
 			return code
 		}
 	}
@@ -347,7 +347,11 @@ func (e *env) write(args []string, commit bool) int {
 // only, so an action is recorded in a dedicated area instead. The test is purely
 // structural, so it needs no concurrency knowledge. Backends without workspace
 // support are left unchecked; --force bypasses the guard.
-func (e *env) refuseInMain(backend vcs.Repo) int {
+//
+// The refusal branches on whether main still holds uncommitted work, because in
+// that case "先建区" on its own is wrong advice: a new area is a clean checkout,
+// so the work would be left behind.
+func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 	if !e.isolated() {
 		return 0 // worktree: "off" — the repository opted out of isolation
 	}
@@ -364,8 +368,15 @@ func (e *env) refuseInMain(backend vcs.Repo) int {
 		return 0
 	}
 	fmt.Fprintln(e.errw, "拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。")
-	fmt.Fprintln(e.errw, "先 `kiln worktree new <issue>`，再 cd 到 worktree 提交；确要在 main 提交时加 --force（一次性豁免）。")
-	fmt.Fprintln(e.errw, "（想长期允许 main 提交，把配置里的 worktree 设为 off。）")
+	if dirty, err := ws.Dirty(); err == nil && dirty {
+		fmt.Fprintln(e.errw, "你已有未提交改动——新区是干净检出，直接建区会把改动留在 main：")
+		if recipe := e.carryRecipe(issue, ws); recipe != "" {
+			fmt.Fprintln(e.errw, recipe)
+		}
+	} else {
+		fmt.Fprintf(e.errw, "先 `kiln worktree new %s`，再 cd 到 worktree 提交。\n", issue)
+	}
+	fmt.Fprintln(e.errw, "确要在 main 提交时加 --force（一次性豁免）；（想长期允许 main 提交，把配置里的 worktree 设为 off。）")
 	return 1
 }
 

@@ -462,6 +462,40 @@ func TestCommitInMainIsRefused(t *testing.T) {
 	}
 }
 
+// In main with uncommitted work the refusal must change its advice: a new area is
+// a clean checkout, so "先建区" alone would leave that work behind on main.
+func TestCommitRefusalCarriesTheRecipeWhenMainIsDirty(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, false)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
+	e.kind = vcs.Git
+	if code := e.write([]string{"demo", "collect"}, true); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	got := errb.String()
+	if !strings.Contains(got, "你已有未提交改动") || !strings.Contains(got, "git stash -u") {
+		t.Fatalf("refusal must hand over the recipe:\n%s", got)
+	}
+	if strings.Contains(got, "先 `kiln worktree new demo`") {
+		t.Fatalf("with a dirty main the plain advice is the wrong one:\n%s", got)
+	}
+}
+
+// A clean main needs no recipe: "先建区" is exactly right there.
+func TestCommitRefusalPointsAtAnAreaWhenMainIsClean(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, true); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	got := errb.String()
+	if !strings.Contains(got, "先 `kiln worktree new demo`") {
+		t.Fatalf("refusal must name the area to create:\n%s", got)
+	}
+	if strings.Contains(got, "你已有未提交改动") {
+		t.Fatalf("nothing is dirty, so no warning belongs here:\n%s", got)
+	}
+}
+
 // --force is the explicit escape hatch for committing in the main area.
 func TestCommitInMainWithForce(t *testing.T) {
 	var out, errb bytes.Buffer

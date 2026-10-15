@@ -378,3 +378,43 @@ $ git log -1 --format=%B      → 只有那条消息，没有"提示"
 ### 6. 仍未做（切片二 B）
 
 `commit` 的**拒绝语按 main 脏 / 净分派**（含同样那两条配方）——`refuseInMain` 目前不分态，所以"我已经在 main 改了文件"时它仍只会说"先建区"。
+
+## test（切片二 B）：`commit` 拒绝语按 main 脏 / 净分派
+
+### 1. 为什么改
+
+现状的拒绝语在「我已经在 main 改了文件」这个场景里**是误导的**：它让你「先 `kiln worktree new <issue>`」，而新区是**干净检出**（collect 实测过），照做会把改动**晾在 main**。
+
+### 2. 落地
+
+`refuseInMain` 现在按 `ws.Dirty()` 分派，并接受 `issue` 参数（配方要用它）：
+
+```
+# main 净
+拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。
+先 `kiln worktree new demo`，再 cd 到 worktree 提交。
+确要在 main 提交时加 --force（一次性豁免）；（想长期允许 main 提交，把配置里的 worktree 设为 off。）
+
+# main 脏（git）
+拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。
+你已有未提交改动——新区是干净检出，直接建区会把改动留在 main：
+git：git stash -u → kiln worktree new demo → 进区后 git stash pop
+确要在 main 提交时加 --force（一次性豁免）；（…）
+
+# main 脏（jj）—— 同一位置换成 jj 的配方
+jj：先在仓库根 mkdir .kiln/ws，再 jj workspace add --name demo <区路径> -r @（新区即带上它），最后在 main 跑 jj edit @-
+```
+
+配方与 `do` 的提示**共用同一个 `carryRecipe`**——一处维护，两处出声。
+
+### 3. 真机
+
+三个场景逐条核过（git 净 / git 脏 / jj 脏），措辞与上面一致，**exit 1 不变**，且脏态那条**不再出现**"先建区"的错误指引。
+
+### 4. 测试
+
+`TestCommitRefusalCarriesTheRecipeWhenMainIsDirty`（脏 → 有配方，**且没有**"先建区"那句）、`TestCommitRefusalPointsAtAnAreaWhenMainIsClean`（净 → 有"先建区"、无脏警告）；既有的 `TestCommitInMainIsRefused` / `TestCommitInMainWithForce` 照旧通过。
+
+### 5. 切片二完成
+
+`do` 提示、`-h` 措辞、`commit` 拒绝语——**三件都落地了**。下一步是 conclude。
