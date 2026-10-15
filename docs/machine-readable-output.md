@@ -264,3 +264,51 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - **§7 的遗留"嵌套 vs 平铺"已销**（已就地标注）。
 - 这条取舍对 `path` / `show` 同样成立：**数据层一律平铺，视图（缩进 / 树线 / 分组标题）归视图**——将来给它们加 `--json` 时不必再议同一个问题。
 - `status` 与 `list` 的行 schema 从"重叠"变成**同一份契约**：共享 `id` / `domain` / `action` / `done`；`status` 多 `has-worktree` 与 `parent`，`list` 多 `tags`。一份解码器覆盖两个命令。
+
+## test：落地三个命令的 `--json`（含真仓端到端）
+
+> 按（续）定稿的 schema 落地：`engine` 只补给 `Diagnostic` 一个 rule 码，`cli` 加三组 DTO 与三个 `--json` 分支。
+> 默认文本视图**逐字节未变**——用改动前后的两个二进制对拍过（见验证表第 2 行）。
+
+### 落地内容
+
+| 文件 | 改动 |
+| --- | --- |
+| [internal/engine](file:///c:/Users/jacki/kiln/internal/engine/engine.go#L131-L156) | `Diagnostic` 增 `Rule` / `Action` / `Ref`，新增 5 个 rule 码常量；`Message` 一字未动 |
+| [internal/cli](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L832-L952) | `status` 的遍历重构成**一次走、两种渲染**（`statusRow` + `statusWalk`）；`worktreeWord` 抽出，文本段与 JSON 共用同一处判定 |
+| [internal/cli](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L1220-L1430) | 三个命令各加 `--json` 分支 + `writeJSON`（`encoding/json`，缩进 2 空格）；DTO：`issueCore`（两命令共用）+ `statusDoc` / `listDoc` / `checkDoc`，**不反射 `model.Issue`** |
+| [cli_test.go](file:///c:/Users/jacki/kiln/internal/cli/cli_test.go#L926-L1243) | 新增 9 个用例：三份 golden + 空仓 / prose 隔离 / 布尔恒显 / `parent` / 共享行 / verbose 不变形 / 退出码 |
+| [README.md](file:///c:/Users/jacki/kiln/README.md#L209-L235) | 新增「机器可读输出」一节；三条命令补 `[--json]`；改写「与 agent 协作」里"稳定文本就够了"那句；「已知边界」补一条 |
+| `kiln -h` | footer 补一行 `status / list / check 的 flags: --json …` |
+| [mvp-plan.md](file:///c:/Users/jacki/kiln/docs/mvp-plan.md#L312) §10 | 该条改记为"**已落地（三个命令）**"，其余命令与 `--toon` 标为仍待定 |
+
+### 验证
+
+| # | 做法 | 结果 |
+| --- | --- | --- |
+| 1 | `go vet ./...` + `go test ./...` | 全绿 |
+| 2 | **改前 / 改后二进制对拍**：`status`、`list`、`check` 的文本输出 | **逐行相同**——默认视图确实一字未变 |
+| 3 | 真仓 `status --json` | 30 行平铺；5 条跨域落位带 `parent`（`target-honesty ← action-diff` 等）；`mode=off`、`open=0` |
+| 4 | 真仓 `list --json --action hypothesize` | `filter` 回显、`count=9`、行与 `status` 同形 |
+| 5 | 真仓 `check --json` 与 `check` | 退出码同为 0；`ok=true`、`warn=9`、`error=0` |
+| 6 | `status --json 1>j.json 2>j.err` | **stderr 0 字节**——stdout 只有那一个文档 |
+| 7 | 空仓（无任何 kiln 动作） | `"issues": []` / `"results": []`（**不是 `null`**）；`check --json` 不吐文本视图那句"没有 kiln 动作"提示 |
+| 8 | `check --json --verbose` vs `check --json` | **逐字节相同**——schema 与 flag 无关 |
+| 9 | `--json` 与既有 flag 混用（`--domain` / `--tag` / `--action`） | 直接复用既有 `parse`，无需新的参数处理 |
+
+### 落地时才暴露的两个点
+
+1. **`check --json` 的退出码一开始漏了。** 第一版 `checkJSON` 直接 `return e.writeJSON(doc)`，于是**有 error 也退 0**——`ok` 字段与退出码当场脱钩，"同义"变成空话。是 golden 用例（期望 exit 1）抓到的。修法：**先写文档、再按 `ok` 决定退出码**——非零退出不能换来"报告丢了"。这条已写进函数的注释，因为它不是实现细节，是契约。
+2. **"行序同源"得是构造出来的，不能是约定出来的。** 文本视图原来把 `├──` / `│` 前缀直接拼进 `left`，JSON 里没有这层字符串。若两边各写一次遍历，迟早分叉。所以抽成 `statusRow` + 一次 `statusWalk`：**两种渲染都从同一份有序行读出**——文本渲染器按 `depth / isLast / indent` 拼前缀，JSON 只读 `parent`。golden 与文本用例因此互相锁住。
+3. （顺带）`-h` 的旗标说明走了既有的 footer 分行风格，**没有**往命令列里塞 `[--json]`：命令列里有 `kiln commit <issue> <action> [flags]` 这种长货，再拉宽会让整张表的说明列跟着后移。
+
+### 结论
+
+三个命令的 `--json` 与（续）的 schema 一致；**默认文本视图、`check` 的文本输出与退出码均未受影响**（对拍 + `Message` 原样保留）。`--json` 目前是**旁路**：它不改任何既有行为的默认值。
+
+### 遗留（与 §7 合并，未动）
+
+- `path` / `show` / `worktree list` 的 `--json`——原文块（patch / stat）口径待定；
+- `--toon`、紧凑输出；
+- 错误路径仍走 stderr prose（`打开仓库失败` 这类），未结构化；
+- `check` 结果里是否带提交 id。

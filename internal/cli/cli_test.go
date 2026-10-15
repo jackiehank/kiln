@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +127,7 @@ func TestStatusRendersDomainBlocks(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	e := &env{actions: model.DefaultActionSet(), out: &buf}
-	e.renderStatus(e.statusLines(groups, nil))
+	e.renderStatus(e.statusRows(groups, nil))
 	got := buf.String()
 
 	for _, want := range []string{"cli/help-alignment", "design/action-config", "└── cli/child"} {
@@ -920,5 +922,329 @@ func TestWorktreeRemoveRequiresAnIssue(t *testing.T) {
 	e := &env{actions: model.DefaultActionSet(), repo: workspaceRunner{}, out: &out, errw: &errb}
 	if code := e.workspace([]string{"remove"}); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Machine-readable output
+// ---------------------------------------------------------------------------
+
+// jsonRunner models a cross-domain pair plus an undomained stray: the smallest
+// history that exercises every row field — a domain, a nested placement, a
+// finished issue, an unfinished one, and an issue with a worktree open. Every
+// issue opens with `ask`, so the only findings are the missing terminal action.
+func jsonRunner() workspaceRunner {
+	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	return workspaceRunner{
+		fakeRunner: fakeRunner{commits: []vcs.Commit{
+			{ID: "d5", Date: base.Add(5 * time.Hour), Message: "子\n\nissue: child\naction: ask\ndomain: cli\nderived-from: parent\ntitle: 子"},
+			{ID: "d4", Date: base.Add(4 * time.Hour), Message: "父落地\n\nissue: parent\naction: apply\ndomain: design\ntitle: 父落地"},
+			{ID: "d3", Date: base.Add(3 * time.Hour), Message: "父开题\n\nissue: parent\naction: ask\ndomain: design\ntitle: 父开题"},
+			{ID: "d2", Date: base.Add(2 * time.Hour), Message: "游荡验证\n\nissue: stray\naction: test\ntags: [draft]\ntitle: 游荡验证"},
+			{ID: "d1", Date: base.Add(time.Hour), Message: "游荡开题\n\nissue: stray\naction: ask\ntags: [draft]\ntitle: 游荡开题"},
+		}},
+		areas: []vcs.WorkspaceInfo{
+			{Path: "C:/w/kiln", Main: true},
+			{Path: "C:/w/kiln/.kiln/ws/parent", Issue: "parent"},
+		},
+	}
+}
+
+// newJSONEnv builds an env over jsonRunner with a clean stderr.
+func newJSONEnv(out, errw *bytes.Buffer) *env {
+	return &env{actions: model.DefaultActionSet(), repo: jsonRunner(), out: out, errw: errw}
+}
+
+// `status --json` is one flat list of rows — no groups, no children — whose
+// order is the order the text view prints, and whose absent keys mean "none".
+func TestStatusJSONIsFlatAndOrdered(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).status([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	want := `{
+  "summary": {
+    "total": 3,
+    "complete": 1,
+    "in-progress": 2,
+    "actions": 5,
+    "domains": 1
+  },
+  "worktree": {
+    "mode": "on",
+    "open": 1
+  },
+  "issues": [
+    {
+      "id": "parent",
+      "domain": "design",
+      "action": "apply",
+      "done": true,
+      "has-worktree": true
+    },
+    {
+      "id": "child",
+      "domain": "cli",
+      "action": "ask",
+      "done": false,
+      "has-worktree": false,
+      "parent": "parent"
+    },
+    {
+      "id": "stray",
+      "action": "test",
+      "done": false,
+      "has-worktree": false
+    }
+  ]
+}
+`
+	if got := out.String(); got != want {
+		t.Fatalf("status --json =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// The document is the whole contract: nothing addressed to a human rides along
+// — no marker legend, no hint — even when the repository has an area open.
+func TestStatusJSONCarriesNoProse(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).status([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	for _, unwanted := range []string{AreaMark, "提示", "worktree list", "问题总数"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Fatalf("the machine view must carry no %q:\n%s", unwanted, out.String())
+		}
+	}
+}
+
+// An empty repository still gets a list, not a null: a decoder should never have
+// to tell two kinds of nothing apart.
+func TestStatusJSONEmitsAnEmptyArrayNotNil(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{}, out: &out, errw: &errb}
+	if code := e.status([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, `"issues": []`) {
+		t.Fatalf("empty repository must still emit a list:\n%s", got)
+	}
+	if !strings.Contains(got, `"total": 0`) {
+		t.Fatalf("counters must still be there:\n%s", got)
+	}
+
+	var listOut, listErr bytes.Buffer
+	e2 := &env{actions: model.DefaultActionSet(), repo: fakeRunner{}, out: &listOut, errw: &listErr}
+	if code := e2.list([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, listErr.String())
+	}
+	if !strings.Contains(listOut.String(), `"issues": []`) {
+		t.Fatalf("list on an empty repository must still emit a list:\n%s", listOut.String())
+	}
+}
+
+// The row names the area the caller stands in, so "where am I" needs no second
+// command.
+func TestStatusJSONNamesTheCurrentArea(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: workspaceRunner{
+			fakeRunner: jsonRunner().fakeRunner,
+			areas:      []vcs.WorkspaceInfo{{Path: cwd, Issue: "parent"}},
+		},
+		out: &out, errw: &errb,
+	}
+	if code := e.status([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), `"current": "parent"`) {
+		t.Fatalf("the document must name the area we stand in:\n%s", out.String())
+	}
+}
+
+// `list --json` echoes the conditions it applied and reports the same row core
+// `status` reports, so one decoder covers both commands.
+func TestListJSONSharesTheIssueRow(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--domain", "design"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	want := `{
+  "filter": {
+    "domain": "design"
+  },
+  "count": 1,
+  "issues": [
+    {
+      "id": "parent",
+      "domain": "design",
+      "action": "apply",
+      "done": true
+    }
+  ]
+}
+`
+	if got := out.String(); got != want {
+		t.Fatalf("list --json =\n%s\nwant\n%s", got, want)
+	}
+
+	var statusOut, statusErr bytes.Buffer
+	if code := newJSONEnv(&statusOut, &statusErr).status([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, statusErr.String())
+	}
+	var fromStatus, fromList struct {
+		Issues []issueCore `json:"issues"`
+	}
+	if err := json.Unmarshal(statusOut.Bytes(), &fromStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out.Bytes(), &fromList); err != nil {
+		t.Fatal(err)
+	}
+	if len(fromStatus.Issues) == 0 || len(fromList.Issues) == 0 {
+		t.Fatalf("both commands must report rows: %d / %d", len(fromStatus.Issues), len(fromList.Issues))
+	}
+	if !reflect.DeepEqual(fromStatus.Issues[0], fromList.Issues[0]) {
+		t.Fatalf("the shared row differs: status %+v vs list %+v", fromStatus.Issues[0], fromList.Issues[0])
+	}
+}
+
+// Tags belong to `list`, which is the one view that reports them.
+func TestListJSONReportsTagsAndOmitsUndomainedRows(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--tag", "draft"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{`"tag": "draft"`, `"id": "stray"`, `"tags": [`, `"draft"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("list --json missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `"domain"`) {
+		t.Fatalf("an issue without a domain must not claim one:\n%s", got)
+	}
+}
+
+// `check --json` names the rule rather than describing it, counts findings, and
+// keeps OK in step with the exit code.
+func TestCheckJSONNamesRulesAndMirrorsTheExitCode(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).check([]string{"--json"}); code != 0 {
+		t.Fatalf("warnings alone must not fail the check (exit %d, stderr %q)", code, errb.String())
+	}
+	want := `{
+  "ok": true,
+  "summary": {
+    "ok": 1,
+    "warn": 2,
+    "error": 0
+  },
+  "results": [
+    {
+      "issue": "child",
+      "level": "warn",
+      "rule": "terminal-action",
+      "action": "ask",
+      "actions": [
+        "ask"
+      ]
+    },
+    {
+      "issue": "parent",
+      "level": "ok",
+      "rule": "complete",
+      "actions": [
+        "ask",
+        "apply"
+      ]
+    },
+    {
+      "issue": "stray",
+      "level": "warn",
+      "rule": "terminal-action",
+      "action": "test",
+      "actions": [
+        "ask",
+        "test"
+      ]
+    }
+  ]
+}
+`
+	if got := out.String(); got != want {
+		t.Fatalf("check --json =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// The prose is the text view's; the machine view must not carry a single
+// sentence of it.
+func TestCheckJSONCarriesNoProse(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).check([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	for _, unwanted := range []string{"缺少", "完整（", "✓", "⚠"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Fatalf("the machine view must carry no %q:\n%s", unwanted, out.String())
+		}
+	}
+}
+
+// An error is both a finding and a non-zero exit, and OK says so without the
+// caller having to look at the code.
+func TestCheckJSONReportsErrorAndFails(t *testing.T) {
+	runner := fakeRunner{commits: []vcs.Commit{
+		{ID: "e1", Date: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Message: "父不存在\n\nissue: broken\naction: conclude\nderived-from: missing\ntitle: 父不存在"},
+	}}
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: runner, out: &out, errw: &errb}
+	if code := e.check([]string{"--json"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1 for an error", code)
+	}
+	got := out.String()
+	for _, want := range []string{`"ok": false`, `"rule": "derived-from"`, `"ref": "missing"`, `"level": "error"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("check --json missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// A repository with no actions has nothing to report, and says only that — the
+// text view's tip is not part of the document.
+func TestCheckJSONOnAnEmptyRepository(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{}, out: &out, errw: &errb}
+	if code := e.check([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, `"ok": true`) || !strings.Contains(got, `"results": []`) {
+		t.Fatalf("an empty repository is trivially fine:\n%s", got)
+	}
+	if strings.Contains(got, "没有 kiln 动作") {
+		t.Fatalf("the tip belongs to the text view:\n%s", got)
+	}
+}
+
+// One shape whatever the flags: --verbose changes the text view only, so a
+// caller never has to write a second decoder.
+func TestJSONKeepsOneShapeRegardlessOfVerbose(t *testing.T) {
+	var plain, plainErr, verbose, verboseErr bytes.Buffer
+	if code := newJSONEnv(&plain, &plainErr).check([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, plainErr.String())
+	}
+	if code := newJSONEnv(&verbose, &verboseErr).check([]string{"--json", "--verbose"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, verboseErr.String())
+	}
+	if plain.String() != verbose.String() {
+		t.Fatalf("--verbose changed the document:\n%s\nvs\n%s", plain.String(), verbose.String())
 	}
 }

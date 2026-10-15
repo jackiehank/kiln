@@ -128,11 +128,31 @@ const (
 	LevelErr
 )
 
+// Rule codes name the finding a diagnostic carries. They are the contract a
+// machine view reports, so the text view keeps its sentence and the machine
+// view binds to these words: a caller branches on `derived-from`, never on
+// Chinese prose. Each code doubles as the trailer it checks where one exists.
+const (
+	RuleStartAction    = "start-action"
+	RuleTerminalAction = "terminal-action"
+	RuleDerivedFrom    = "derived-from"
+	RuleSpawns         = "spawns"
+	RuleComplete       = "complete"
+)
+
 // Diagnostic is one finding from Check.
 type Diagnostic struct {
 	Level   Level
 	Issue   string
 	Message string
+
+	// Rule names the finding; Action and Ref carry the little bit of context the
+	// rule needs (the last action, the issue that is missing), so a machine view
+	// never has to re-derive it from the sentence. Both are empty when the rule
+	// has no such context.
+	Rule   string
+	Action string
+	Ref    string
 }
 
 // Symbol returns the ✓ / ⚠ / ✗ marker for the level.
@@ -162,30 +182,35 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 
 	// Rule 1: a issue must contain the start action (default ask).
 	if !hasKind(p, actions.Start()) {
-		diags = append(diags, Diagnostic{LevelErr, p.ID, "缺少 " + actions.Start() + "：问题没有起点动作"})
+		diags = append(diags, Diagnostic{Level: LevelErr, Issue: p.ID, Rule: RuleStartAction,
+			Message: "缺少 " + actions.Start() + "：问题没有起点动作"})
 	}
 
 	// Rule 2: the final action must be terminal. Order is not checked.
 	if last, ok := p.Last(); ok && !actions.IsTerminal(last.Kind) {
-		diags = append(diags, Diagnostic{LevelWarn, p.ID, "缺少终点动作（当前 " + last.Kind + "）"})
+		diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleTerminalAction, Action: last.Kind,
+			Message: "缺少终点动作（当前 " + last.Kind + "）"})
 	}
 
 	// Rule 3: every derived-from parent must exist.
 	for _, parent := range p.DerivedFrom {
 		if _, ok := repo.Issues[parent]; !ok {
-			diags = append(diags, Diagnostic{LevelErr, p.ID, "父问题不存在：derived-from 指向 " + parent})
+			diags = append(diags, Diagnostic{Level: LevelErr, Issue: p.ID, Rule: RuleDerivedFrom, Ref: parent,
+				Message: "父问题不存在：derived-from 指向 " + parent})
 		}
 	}
 
 	// Rule 4: every spawned child must exist.
 	for _, child := range p.Spawns {
 		if _, ok := repo.Issues[child]; !ok {
-			diags = append(diags, Diagnostic{LevelErr, p.ID, "子问题不存在：spawns 指向 " + child})
+			diags = append(diags, Diagnostic{Level: LevelErr, Issue: p.ID, Rule: RuleSpawns, Ref: child,
+				Message: "子问题不存在：spawns 指向 " + child})
 		}
 	}
 
 	if len(diags) == 0 {
-		diags = append(diags, Diagnostic{LevelOK, p.ID, "完整（" + strings.Join(kinds(p), ", ") + "）"})
+		diags = append(diags, Diagnostic{Level: LevelOK, Issue: p.ID, Rule: RuleComplete,
+			Message: "完整（" + strings.Join(kinds(p), ", ") + "）"})
 	}
 	return diags
 }

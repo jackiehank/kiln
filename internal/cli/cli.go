@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ do/commit 的 flags:
 
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
+status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档，见 docs/machine-readable-output.md）
 commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在 main 提交）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 `
@@ -829,12 +831,16 @@ func indentStat(stat string) string {
 func trimNewlines(s string) string { return strings.Trim(s, "\n") }
 
 func (e *env) status(args []string) int {
+	_, f := parse(args)
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
 	}
 	areas := e.knownAreas()
 	s := engine.Summarize(repo, e.actions)
+	if f.has("json") {
+		return e.statusJSON(repo, s, areas)
+	}
 	if s.Total == 0 {
 		fmt.Fprintf(e.out, "问题总数: 0（完成 0 / 进行中 0）｜%s\n", worktreeSegment(e.worktree, areasOpen(areas)))
 		fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
@@ -846,49 +852,55 @@ func (e *env) status(args []string) int {
 	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）｜domain %d 个｜%s\n",
 		s.Total, s.Complete, s.InProgress, engine.CountDomains(groups), worktreeSegment(e.worktree, areasOpen(areas)))
 	fmt.Fprintf(e.out, "kiln 动作数: %d\n\n", s.Actions)
-	e.renderStatus(e.statusLines(groups, areaIssues(areas)))
+	e.renderStatus(e.statusRows(groups, areaIssues(areas)))
 	e.renderWorktreeLegend(areas)
 	return 0
 }
 
-// statusLine is one rendered row of the domain view; an empty left is a blank
-// separator between domain blocks.
-type statusLine struct {
-	left  string
-	done  bool
-	state string
-	area  bool // this issue has a worktree open
+// statusRow is one issue in the domain view, in exactly the order the view
+// prints it. Both renderings — the text rows and the JSON array — come out of
+// this one walk, so they can never disagree about order or about where an issue
+// sits, which is what lets a test compare them row for row.
+type statusRow struct {
+	issue  *model.Issue
+	depth  int
+	isLast bool
+	indent string // ancestor continuation prefix (│ or blanks); text view only
+	parent string // the issue this row nests under; "" for a block's top level
+	area   bool   // this issue has a worktree open
+	block  bool   // first row of a domain block that follows another
 }
 
-func (e *env) statusLines(groups []engine.DomainGroup, areas map[string]bool) []statusLine {
-	var lines []statusLine
+// statusRows lays the domain blocks out as a flat, ordered list of rows.
+func (e *env) statusRows(groups []engine.DomainGroup, areas map[string]bool) []statusRow {
+	var w statusWalk
+	w.areas = areas
 	for gi, g := range groups {
-		if gi > 0 {
-			lines = append(lines, statusLine{})
-		}
 		for i, en := range g.Entries {
-			e.appendEntry(&lines, en, "", i == len(g.Entries)-1, 0, areas)
+			w.add(en, "", "", i == len(g.Entries)-1, 0, gi > 0 && i == 0)
 		}
 	}
-	return lines
+	return w.rows
 }
 
-// appendEntry walks an entry and its nested children. Depth 0 lines carry no
-// tree connector; deeper ones get ├── / └── with │ continuation.
-func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, isLast bool, depth int, areas map[string]bool) {
-	left := issueLabel(en.Issue)
-	if depth > 0 {
-		conn := "├── "
-		if isLast {
-			conn = "└── "
-		}
-		left = indent + conn + left
-	}
-	*lines = append(*lines, statusLine{
-		left:  left,
-		done:  e.isDone(en.Issue),
-		state: stateWord(en.Issue),
-		area:  areas[en.Issue.ID],
+// statusWalk accumulates rows in print order.
+type statusWalk struct {
+	rows  []statusRow
+	areas map[string]bool
+}
+
+// add appends one entry and then its children. Depth 0 rows carry no tree
+// connector; deeper ones get ├── / └── with │ continuation, which is accumulated
+// in indent rather than recomputed by the renderer.
+func (w *statusWalk) add(en engine.Entry, indent, parent string, isLast bool, depth int, block bool) {
+	w.rows = append(w.rows, statusRow{
+		issue:  en.Issue,
+		depth:  depth,
+		isLast: isLast,
+		indent: indent,
+		parent: parent,
+		area:   w.areas[en.Issue.ID],
+		block:  block,
 	})
 
 	nextIndent := indent
@@ -900,29 +912,44 @@ func (e *env) appendEntry(lines *[]statusLine, en engine.Entry, indent string, i
 		}
 	}
 	for i, c := range en.Children {
-		e.appendEntry(lines, c, nextIndent, i == len(en.Children)-1, depth+1, areas)
+		w.add(c, nextIndent, en.Issue.ID, i == len(en.Children)-1, depth+1, false)
 	}
 }
 
-// renderStatus prints the rows aligned by display width.
-func (e *env) renderStatus(lines []statusLine) {
+// renderStatus prints the rows aligned by display width, with a blank line
+// opening every domain block but the first.
+func (e *env) renderStatus(rows []statusRow) {
+	labels := make([]string, len(rows))
 	width := 0
-	for _, l := range lines {
-		if w := displayWidth(l.left); w > width {
+	for i, r := range rows {
+		labels[i] = statusLabel(r)
+		if w := displayWidth(labels[i]); w > width {
 			width = w
 		}
 	}
-	for _, l := range lines {
-		if l.left == "" {
+	for i, r := range rows {
+		if r.block {
 			fmt.Fprintln(e.out)
-			continue
 		}
 		mark := " "
-		if l.done {
+		if e.isDone(r.issue) {
 			mark = "✓"
 		}
-		fmt.Fprintf(e.out, "%s %s %s%s\n", pad(l.left, width), mark, l.state, areaMark(l.area))
+		fmt.Fprintf(e.out, "%s %s %s%s\n", pad(labels[i], width), mark, stateWord(r.issue), areaMark(r.area))
 	}
+}
+
+// statusLabel renders the left column: the issue's `<domain>/<id>` name, plus a
+// tree connector when the row nests under another issue.
+func statusLabel(r statusRow) string {
+	left := issueLabel(r.issue)
+	if r.depth == 0 {
+		return left
+	}
+	if r.isLast {
+		return r.indent + "└── " + left
+	}
+	return r.indent + "├── " + left
 }
 
 // AreaMark is the suffix that flags an issue as having a worktree open. U+25A0
@@ -990,11 +1017,17 @@ func (e *env) knownAreas() []vcs.WorkspaceInfo {
 // isolation", and a segment whose shape never changes reads better than one that
 // comes and goes.
 func worktreeSegment(mode string, areas int) string {
-	word := "on"
+	return fmt.Sprintf("worktree %s（已开 %d 个）", worktreeWord(mode), areas)
+}
+
+// worktreeWord is the effective isolation mode: an unset value means on, which is
+// the repository default. Both views state the mode from this one place, so the
+// text header and the JSON document cannot disagree about it.
+func worktreeWord(mode string) string {
 	if mode == config.WorktreeOff {
-		word = "off"
+		return "off"
 	}
-	return fmt.Sprintf("worktree %s（已开 %d 个）", word, areas)
+	return "on"
 }
 
 // renderWorktreeLegend explains the marker — and names the area the caller is
@@ -1033,6 +1066,9 @@ func (e *env) check(args []string) int {
 	if repo == nil {
 		return code
 	}
+	if f.has("json") {
+		return e.checkJSON(repo)
+	}
 	if len(repo.Issues) == 0 {
 		fmt.Fprintln(e.out, "没有 kiln 动作（检查提交信息是否同时带了 issue: 与 action:）")
 		return 0
@@ -1063,11 +1099,27 @@ func (e *env) list(args []string) int {
 	if repo == nil {
 		return code
 	}
-	ids := engine.Filter(repo, engine.FilterOptions{
+	opts := engine.FilterOptions{
 		Domain: f.get("domain"),
 		Tag:    f.get("tag"),
 		Action: f.get("action"),
-	})
+	}
+	ids := engine.Filter(repo, opts)
+	if f.has("json") {
+		doc := listDoc{
+			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action},
+			Count:  len(ids),
+			Issues: make([]listIssue, 0, len(ids)),
+		}
+		for _, id := range ids {
+			p := repo.Issues[id]
+			doc.Issues = append(doc.Issues, listIssue{
+				issueCore: issueCore{ID: p.ID, Domain: p.Domain, Action: p.State(), Done: e.isDone(p)},
+				Tags:      p.Tags,
+			})
+		}
+		return e.writeJSON(doc)
+	}
 	for _, id := range ids {
 		p := repo.Issues[id]
 		fmt.Fprintf(e.out, "%s %s %s\n", pad(p.ID, 30), pad(stateWord(p), 12), tagsSuffix(p))
@@ -1164,4 +1216,224 @@ func shortID(id string) string {
 		return id[:7]
 	}
 	return id
+}
+
+// ---------------------------------------------------------------------------
+// Machine-readable output (`--json`)
+//
+// The text views are the default; `--json` is a side road for agents and
+// scripts, whose schema lives in docs/machine-readable-output.md. Four rules
+// hold for all of it. (1) The document is always one object, never a bare
+// array, so a field can be added later without changing the type a caller
+// decodes. (2) Keys reuse the words kiln already speaks — trailer names where
+// the thing is the trailer's, view words (`parent`, `has-worktree`) where the
+// concept belongs to the view. (3) Nothing addressed to a human gets in: no
+// hints, no legends, no prose — a caller that wants those reads the text view.
+// (4) An absent key means "none", never `null`; booleans are the exception, since
+// `false` is a finding rather than an absence and is always written.
+// ---------------------------------------------------------------------------
+
+// writeJSON emits one document on stdout, which is the whole machine-readable
+// contract: stdout carries the document and nothing else, every failure stays on
+// stderr, and the exit code says what the text view says.
+func (e *env) writeJSON(v any) int {
+	enc := json.NewEncoder(e.out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintf(e.errw, "输出 JSON 失败: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// issueCore is the row `status` and `list` share, so one decoder covers the same
+// four fields in both and each command only adds what belongs to it.
+type issueCore struct {
+	ID     string `json:"id"`
+	Domain string `json:"domain,omitempty"`
+	Action string `json:"action"`
+	Done   bool   `json:"done"`
+}
+
+// statusDoc is the `kiln status --json` document: the three things the text view
+// states — repository counters, the isolation state, and the issues.
+type statusDoc struct {
+	Summary  statusSummary `json:"summary"`
+	Worktree worktreeState `json:"worktree"`
+	Issues   []statusIssue `json:"issues"`
+}
+
+type statusSummary struct {
+	Total      int `json:"total"`
+	Complete   int `json:"complete"`
+	InProgress int `json:"in-progress"`
+	Actions    int `json:"actions"`
+	Domains    int `json:"domains"`
+}
+
+type worktreeState struct {
+	Mode    string `json:"mode"`
+	Open    int    `json:"open"`
+	Current string `json:"current,omitempty"`
+}
+
+// statusIssue is one flat row of the domain view. It carries no action list —
+// that is `path`'s job — which keeps the document O(issues), not O(commits).
+//
+// Parent is a placement, not a relation: it is the issue this row was nested
+// under in the view, which may come from either side — `derived-from` on the
+// child or `spawns` on the parent — and only across domains. Calling it
+// `derived-from` would claim a relation this row does not carry.
+type statusIssue struct {
+	issueCore
+	HasWorktree bool   `json:"has-worktree"`
+	Parent      string `json:"parent,omitempty"`
+}
+
+// listDoc is the `kiln list --json` document.
+type listDoc struct {
+	Filter filterQuery `json:"filter"`
+	Count  int         `json:"count"`
+	Issues []listIssue `json:"issues"`
+}
+
+// filterQuery echoes the conditions that were asked for; an absent key means
+// that condition was not applied.
+type filterQuery struct {
+	Domain string `json:"domain,omitempty"`
+	Tag    string `json:"tag,omitempty"`
+	Action string `json:"action,omitempty"`
+}
+
+type listIssue struct {
+	issueCore
+	Tags []string `json:"tags,omitempty"`
+}
+
+// checkDoc is the `kiln check --json` document. OK mirrors the exit code — false
+// exactly when an error was found — so a caller that ignores exit codes still
+// gets the answer CI cares about.
+type checkDoc struct {
+	OK      bool          `json:"ok"`
+	Summary checkSummary  `json:"summary"`
+	Results []checkResult `json:"results"`
+}
+
+// checkSummary counts findings, not issues: one issue can fail twice.
+type checkSummary struct {
+	OK   int `json:"ok"`
+	Warn int `json:"warn"`
+	Err  int `json:"error"`
+}
+
+// checkResult is one finding, named by rule code rather than described in
+// prose. The sentence stays where it is read by a human.
+type checkResult struct {
+	Issue   string   `json:"issue"`
+	Level   string   `json:"level"`
+	Rule    string   `json:"rule"`
+	Action  string   `json:"action,omitempty"`
+	Ref     string   `json:"ref,omitempty"`
+	Actions []string `json:"actions"`
+}
+
+// statusJSON renders the domain view as a flat issue list, in the very order the
+// text view prints its rows — both renderings come from one walk, so row N means
+// the same issue in either.
+func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.WorkspaceInfo) int {
+	groups := engine.GroupByDomain(repo)
+	doc := statusDoc{
+		Summary: statusSummary{
+			Total:      s.Total,
+			Complete:   s.Complete,
+			InProgress: s.InProgress,
+			Actions:    s.Actions,
+			Domains:    engine.CountDomains(groups),
+		},
+		Worktree: e.worktreeState(areas),
+		Issues:   make([]statusIssue, 0, s.Total),
+	}
+	for _, r := range e.statusRows(groups, areaIssues(areas)) {
+		doc.Issues = append(doc.Issues, statusIssue{
+			issueCore: issueCore{
+				ID:     r.issue.ID,
+				Domain: r.issue.Domain,
+				Action: r.issue.State(),
+				Done:   e.isDone(r.issue),
+			},
+			HasWorktree: r.area,
+			Parent:      r.parent,
+		})
+	}
+	return e.writeJSON(doc)
+}
+
+// worktreeState states the repository-level isolation mode and how many areas are
+// open, plus the area the caller stands in when there is one.
+func (e *env) worktreeState(areas []vcs.WorkspaceInfo) worktreeState {
+	ws := worktreeState{Mode: worktreeWord(e.worktree), Open: areasOpen(areas)}
+	if here, ok := vcs.AreaAt(areas, "."); ok && !here.Main {
+		ws.Current = here.Issue
+	}
+	return ws
+}
+
+// checkJSON renders every finding with its rule code. The verbose flag changes
+// nothing here: the action list is always reported, so the document keeps one
+// shape and a caller needs one decoder whatever flags were passed.
+//
+// The document is written first and the exit code decided after: leaving with a
+// non-zero code must not cost the caller the report they ran the command for.
+func (e *env) checkJSON(repo *model.Repo) int {
+	diags := engine.Check(repo, e.actions)
+	doc := checkDoc{OK: true, Results: make([]checkResult, 0, len(diags))}
+	for _, d := range diags {
+		switch d.Level {
+		case engine.LevelWarn:
+			doc.Summary.Warn++
+		case engine.LevelErr:
+			doc.Summary.Err++
+			doc.OK = false
+		default:
+			doc.Summary.OK++
+		}
+		doc.Results = append(doc.Results, checkResult{
+			Issue:   d.Issue,
+			Level:   levelWord(d.Level),
+			Rule:    d.Rule,
+			Action:  d.Action,
+			Ref:     d.Ref,
+			Actions: kindsOf(repo.Issues[d.Issue]),
+		})
+	}
+	if code := e.writeJSON(doc); code != 0 {
+		return code
+	}
+	if !doc.OK {
+		return 1
+	}
+	return 0
+}
+
+// levelWord renders a diagnostic level as the word the machine view reports. The
+// internal ordering (LevelOK < LevelWarn < LevelErr) is an implementation
+// detail and must not leak into the contract.
+func levelWord(l engine.Level) string {
+	switch l {
+	case engine.LevelWarn:
+		return "warn"
+	case engine.LevelErr:
+		return "error"
+	default:
+		return "ok"
+	}
+}
+
+// kindsOf lists an issue's action kinds in path order.
+func kindsOf(p *model.Issue) []string {
+	out := make([]string, 0, len(p.Actions))
+	for _, a := range p.Actions {
+		out = append(out, a.Kind)
+	}
+	return out
 }
