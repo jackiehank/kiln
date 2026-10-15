@@ -121,7 +121,7 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	}
 	path, ok := vcs.AreaFor(areas, issue)
 	if !ok {
-		return fmt.Errorf("没有 issue 为 %q 的专用区", issue)
+		return fmt.Errorf("没有 issue 为 %q 的 worktree", issue)
 	}
 	branch := vcs.BranchPrefix + issue
 	if !force {

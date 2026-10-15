@@ -380,5 +380,60 @@ kiln 现在**强制**"**主干只读 / 只合并，动作只在专用区提交**
 
 ### 6. 待决（留 conclude）
 
-1. **用户可见名词是否全面统一为 `worktree`**：本轮只改了**这一行**；同屏兄弟文案仍说「专用工作区 / 专用区 / 主干」（`new` / `remove` 的输出、`list` 的「主干」「专用 x」行、`refuseInMain` 的拒绝语）。要不要一并统一（`worktree` / `main`），还是保留中文自述。
+1. ~~**用户可见名词是否全面统一为 `worktree`**~~ → **已定**（用户："统一术语"）：全部用户可见名词统一为 **`worktree` / `main`**，见 test（四续）。
 2. **这句提示要不要顺带指向 `.worktreeinclude`**：播种是 kiln 自己的功能（项目中立、可发现性好），提一句能让人知道"有清单可用"；代价是这行变长。
+
+## test（四续）：术语统一——用户可见名词全部改为 `worktree` / `main`
+
+> 用户："统一术语"。把 test（三续）里"只改了一行"的事**做全**。
+
+### 1. 映射
+
+| 旧 | 新 |
+| --- | --- |
+| 专用工作区 / 专用区 / 工作区 | **`worktree`** |
+| 主干 | **`main`** |
+
+### 2. 覆盖面（`grep 专用|主干|工作区` 命中 27 处，全查全改）
+
+- **CLI 输出与文案**：`worktree new` 首行（`worktree: <path>`）、`worktree list` 的两行角色（`main（只读/只合并）` / `worktree <issue>`）、`worktree remove` 的 `已删除 worktree: <issue>`、`refuseInMain` 的三行拒绝语。
+- **帮助 / usage**：三条 `worktree` 命令描述、`worktree 默认: on（强制 worktree）| off（允许在 main 提交）`、两句 `--force` 说明。
+- **报错**：`无法判定 worktree 类型`、`当前后端不支持 worktree`、`建立 / 读取 / 删除 worktree 失败`、`后端未列出 main`，以及**两个后端适配器**里的 `没有 issue 为 %q 的 worktree`、jj 的 `worktree 还有未提交的改动`、`jj workspace list 未列出当前 worktree`。
+- **配置面**（用户会读、会改）：**播种的默认配置注释**（`config.defaultFile`）、本仓 `.kilnconfig.jsonc` 的注释、[docs/mvp-plan.md](mvp-plan.md) §2.3 配置示例的注释——**三处改成同一句**，免得 spec 与种子说法不一。
+
+### 3. 不覆盖（有意）
+
+- **文档的说明性散文**：历史 issue 文档是**当时的记录**、不改写；它们用的"专用区 / 主干"是**中文自述**，与 CLI 术语的映射就记在本节。
+- **代码里的英文标识符**：`vcs.Workspace`、`WorkspaceInfo`、`.kiln/ws/<issue>`——按本 issue 早前的决定（"只改用户可见面"）**不动**。
+
+### 4. 验证（临时 git 仓，真机整套输出）
+
+```
+$ kiln worktree new t1
+worktree: <repo>/.kiln/ws/t1
+下一步: cd 到该目录，再用 `kiln commit t1 <action>` 记录动作
+提示: worktree 是一次性检出——被忽略的构建产物与依赖不在其中，请自行 build / 装依赖
+已写入默认配置: <repo>/.kilnconfig.jsonc
+
+$ kiln worktree list
+<repo>              main（只读/只合并）
+<repo>/.kiln/ws/t1  worktree t1
+
+$ kiln commit t2 ask            # 在 main
+拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。
+先 `kiln worktree new <issue>`，再 cd 到 worktree 提交；确要在 main 提交时加 --force（一次性豁免）。
+（想长期允许 main 提交，把配置里的 worktree 设为 off。）
+
+$ kiln worktree remove nope
+删除 worktree 失败: 没有 issue 为 "nope" 的 worktree
+
+$ kiln worktree remove t1
+已删除 worktree: t1
+```
+
+`kiln help` 里三条命令描述、`worktree 默认: …` 行与两句 `--force` 说明均已是新术语。单测断言同步（`当前是 main`、`main（只读/只合并）`、`worktree cli-necessity`、假后端的 `worktree 还有未提交的改动`）；`gofmt -l` 空、`go vet` / `go test ./...` **全绿**。
+
+### 5. 取舍
+
+- **`main` 而非「主干」**：与 `worktree` 同源的英文术语，且 `git worktree list` 的第一行就是主检出；中文散文里继续可用"主干"。
+- **别名一并消失**：`workspace`（命令）已硬切，`专用区` / `主干` 这两个**中文别名**也在用户可见面消失——**一个概念，一个词**。

@@ -364,7 +364,7 @@ func TestCommitInMainIsRefused(t *testing.T) {
 	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, true); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errb.String(), "主干") {
+	if !strings.Contains(errb.String(), "当前是 main") {
 		t.Fatalf("stderr = %q, want the main-area refusal", errb.String())
 	}
 	if out.String() != "" {
@@ -415,7 +415,7 @@ func TestWorkspaceListLabelsAreas(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	got := out.String()
-	for _, want := range []string{"C:/w/kiln ", "主干", "C:/w/kiln--cli-necessity", "专用 cli-necessity"} {
+	for _, want := range []string{"C:/w/kiln ", "main（只读/只合并）", "C:/w/kiln--cli-necessity", "worktree cli-necessity"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("workspace list missing %q:\n%s", want, got)
 		}
@@ -555,7 +555,7 @@ type needsForceRunner struct{ workspaceRunner }
 
 func (n needsForceRunner) RemoveWorkspace(issue string, force bool) error {
 	if !force {
-		return fmt.Errorf("专用区还有未提交的改动: %s（要丢弃请加 --force）", issue)
+		return fmt.Errorf("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
 	}
 	return nil
 }

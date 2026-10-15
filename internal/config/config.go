@@ -205,7 +205,7 @@ const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享），�
   },
   // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
   "vcs": "auto",
-  // 工作区模式：on（默认，动作只在专用区提交）| off（允许在主干提交）
+  // worktree 模式：on（默认，动作只在 worktree 提交）| off（允许在 main 提交）
   "worktree": "on"
 }
 `

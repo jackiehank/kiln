@@ -25,7 +25,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
-worktree 默认: on（强制专用区）| off（允许在主干提交）
+worktree 默认: on（强制 worktree）| off（允许在 main 提交）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
 
 do/commit 的 flags:
@@ -34,8 +34,8 @@ do/commit 的 flags:
 
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
-commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在主干提交）
-worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的区一起删）
+commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在 main 提交）
+worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 `
 
 // retiredCommands maps a name kiln no longer answers to its current spelling, so
@@ -52,9 +52,9 @@ var usageCommands = [][2]string{
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii]", "问题关系图"},
-	{"kiln worktree new <issue>", "建专用工作区（主干只读，动作只在专用区提交）"},
-	{"kiln worktree list", "列出全部工作区（主干 + 专用）"},
-	{"kiln worktree remove <issue>", "删除专用工作区（尚有工作的区默认拒绝，--force 强删）"},
+	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
+	{"kiln worktree list", "列出全部 worktree（含 main）"},
+	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 }
 
@@ -352,15 +352,15 @@ func (e *env) refuseInMain(backend vcs.Repo) int {
 	}
 	dedicated, err := ws.IsDedicated()
 	if err != nil {
-		fmt.Fprintf(e.errw, "无法判定工作区类型: %v\n", err)
+		fmt.Fprintf(e.errw, "无法判定 worktree 类型: %v\n", err)
 		return 1
 	}
 	if dedicated {
 		return 0
 	}
-	fmt.Fprintln(e.errw, "拒绝提交：当前是主干（只读/只合并），动作只在专用工作区提交。")
-	fmt.Fprintln(e.errw, "先 `kiln worktree new <issue>`，再 cd 到专用区提交；确要在主干提交时加 --force（一次性豁免）。")
-	fmt.Fprintln(e.errw, "（想长期允许主干提交，把配置里的 worktree 设为 off。）")
+	fmt.Fprintln(e.errw, "拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。")
+	fmt.Fprintln(e.errw, "先 `kiln worktree new <issue>`，再 cd 到 worktree 提交；确要在 main 提交时加 --force（一次性豁免）。")
+	fmt.Fprintln(e.errw, "（想长期允许 main 提交，把配置里的 worktree 设为 off。）")
 	return 1
 }
 
@@ -402,7 +402,7 @@ func (e *env) workspaceBackend() (vcs.Workspace, int) {
 	}
 	ws, ok := backend.(vcs.Workspace)
 	if !ok {
-		fmt.Fprintln(e.errw, "当前后端不支持工作区")
+		fmt.Fprintln(e.errw, "当前后端不支持 worktree")
 		return nil, 1
 	}
 	return ws, 0
@@ -424,10 +424,10 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	}
 	path, err := ws.NewWorkspace(issue)
 	if err != nil {
-		fmt.Fprintf(e.errw, "建立工作区失败: %v\n", err)
+		fmt.Fprintf(e.errw, "建立 worktree 失败: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(e.out, "专用工作区: %s\n", path)
+	fmt.Fprintf(e.out, "worktree: %s\n", path)
 	e.seedArea(ws, path)
 	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
 	// Project-neutral: an area is a bare checkout, whatever the project builds
@@ -475,7 +475,7 @@ func mainRootOf(ws vcs.Workspace) (string, error) {
 			return a.Path, nil
 		}
 	}
-	return "", fmt.Errorf("后端未列出主干")
+	return "", fmt.Errorf("后端未列出 main")
 }
 
 // config implements `kiln config path`: it prints where the repository config
@@ -505,7 +505,7 @@ func (e *env) config(args []string) int {
 func (e *env) workspaceList(ws vcs.Workspace) int {
 	areas, err := ws.ListWorkspaces()
 	if err != nil {
-		fmt.Fprintf(e.errw, "读取工作区失败: %v\n", err)
+		fmt.Fprintf(e.errw, "读取 worktree 失败: %v\n", err)
 		return 1
 	}
 	width := 0
@@ -531,22 +531,22 @@ func (e *env) workspaceRemove(ws vcs.Workspace, args []string) int {
 	}
 	issue := pos[0]
 	if err := ws.RemoveWorkspace(issue, f.has("force")); err != nil {
-		fmt.Fprintf(e.errw, "删除工作区失败: %v\n", err)
+		fmt.Fprintf(e.errw, "删除 worktree 失败: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(e.out, "已删除专用区: %s\n", issue)
+	fmt.Fprintf(e.out, "已删除 worktree: %s\n", issue)
 	return 0
 }
 
 // areaRole labels an area in `kiln workspace list`.
 func areaRole(a vcs.WorkspaceInfo) string {
 	if a.Main {
-		return "主干（只读/只合并）"
+		return "main（只读/只合并）"
 	}
 	if a.Issue == "" {
-		return "专用"
+		return "worktree"
 	}
-	return "专用 " + a.Issue
+	return "worktree " + a.Issue
 }
 
 func (e *env) path(args []string) int {

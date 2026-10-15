@@ -90,7 +90,7 @@ func (r ExecRunner) IsDedicated() (bool, error) {
 			return !a.Main, nil
 		}
 	}
-	return false, fmt.Errorf("jj workspace list 未列出当前工作区: %s", current)
+	return false, fmt.Errorf("jj workspace list 未列出当前 worktree: %s", current)
 }
 
 // NewWorkspace creates, or reuses, the jj workspace bound to issue and returns
@@ -145,7 +145,7 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	}
 	path, ok := vcs.AreaFor(areas, issue)
 	if !ok {
-		return fmt.Errorf("没有 issue 为 %q 的专用区", issue)
+		return fmt.Errorf("没有 issue 为 %q 的 worktree", issue)
 	}
 	if !force {
 		changed, err := r.hasChanges(path)
@@ -153,7 +153,7 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 			return err
 		}
 		if changed {
-			return fmt.Errorf("专用区还有未提交的改动: %s（要丢弃请加 --force）", issue)
+			return fmt.Errorf("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
 		}
 	}
 	if _, err := r.run("workspace", "forget", issue); err != nil {
