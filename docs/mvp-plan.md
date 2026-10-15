@@ -319,46 +319,48 @@ kiln/
 
 ## 11. `kiln status`：按 domain 分组的目录视图
 
-`status` 以 `domain` 为“目录”：同一 domain 的 issue 成块相邻，跨域派生的 issue 以树形嵌在父 issue 下。
+`status` 以 `domain` 为“目录”：同一 domain 的 issue 成块相邻，**块头写一次域名，行内只写裸 issue ID**。
 
 ```
 问题总数: 5（完成 4 / 进行中 1）｜domain 2 个
 kiln 动作数: 9
 
-cli/help-alignment     ✓ apply
-cli/status-by-domain     ask
+cli
+  help-alignment    ✓ apply
+  status-by-domain    ask
 
-design/action-config   ✓ apply
-design/commit-format   ✓ apply
-design/problem-naming  ✓ apply
+design
+  action-config     ✓ apply
+  commit-format     ✓ apply
+  problem-naming    ✓ apply
 ```
 
 规则：
 
-- 每行写作 `<domain>/<issue-id>`；**不设目录标题行**，块之间用空行分隔——域名由每行的前缀携带，所以跨域嵌套行的域名依然一眼可见。
-- 块按 domain 名升序；块内按 issue ID 升序；未声明 domain 的 issue 归入 `(未分类)` 块，固定最后（这些行不带前缀，只写 ID）。
+- **块头一行写域名，行内写裸 `issue-id`**（缩进两格）——块归属 = issue **自己的** `domain:`，一个 issue 只出现一次、只在一个块里。**没有树、没有前缀**：关系的渲染归 `path` / `graph`，`status` 只管目录。
+- 行里的名字**就是**命令能吃的名字：`kiln path <刚才复制的 id>` 直接可用。
+- 块按 domain 名升序；块内按 issue ID 升序；未声明 domain 的 issue 归入 `(未分类)` 块，固定最后。
 - 完成标记 `✓` 放在 ID 之后，进行中留空。
-- 列宽取全部行的**显示宽度**最大值，跨块统一对齐。
+- 列宽取 **issue 行**（不含块头）的**显示宽度**最大值，跨块统一对齐；块之间空一行。
 
-### 11.1 跨域派生（嵌套）
+### 11.1 落点
 
-若父 issue 的 `spawns:` 或子 issue 的 `derived-from:` 指向的 issue 处在**不同 domain**，则子 issue **移动**到父 issue 之下，以 `├──`/`└──` 呈现，**不在自己的 domain 块里重复**：
+- `engine.GroupByDomain(repo) []DomainGroup`：返回已排序、已分组的纯数据（`Domain` + `Issues`）；单测覆盖分组/排序/`(未分类)` 兜底/块内按 ID 排/跨域不搬动。
+- `cli`：`statusRows` + `renderStatus` 负责渲染（块头来自同一次遍历，所以文本与 `--json` 的 issue 行顺序同源）；`list`/`graph`/`check` 不受影响。
 
-```
-design/status-by-domain     ask
-└── cli/help-alignment    ✓ apply
-```
+### 11.2 往事：跨域嵌套（已废弃）
 
-- 只有跨域关系才嵌套；同域关系保持平铺（关系视图交给 `kiln graph`）。
-- 多个父声明同一个子时，按 ID 序取第一个；会成环的候选被跳过。
+早期版本会把**跨域**派生（父的 `spawns:` 或子的 `derived-from:`）的子 issue **搬到**父的块下、用 `├──`/`└──` 渲染。已废除（issue `qualified-issue-id`）：
 
-### 11.2 落点
+- 它让同一个块里出现**两个不同的 domain 前缀**（行是自己的 domain、块是别人的），而前缀本身又让行名**粘不回命令**。
+- 它把“关系”塞进了一个**目录视图**：关系会随研究变复杂，那是 `graph` 的活。
+- 它贵：`engine` 要多一份 parent 映射 + 环检测 + 递归构造，`cli` 要多一套深度/缩进/连接符，JSON 要多一个 `parent` 字段——全是为嵌套而存。
 
-- `engine.GroupByDomain(repo) []DomainGroup`：返回已排序、已嵌套的纯数据；单测覆盖分组/排序/`(未分类)` 兜底/跨域移动/同域平铺。
-- `cli`：`statusLines` + `renderStatus` 负责渲染；`list`/`graph`/`check` 不受影响。
+现在：**块归属 = issue 自己的 domain**；关系由 `kiln graph` / `kiln path` 渲染。
 
 ### 11.3 非目标
 
-- 不拆嵌套 domain（`a/b` 是一个不透明键）；不改 `list`/`graph`；不新增 `--flat` 开关；不新增 check 规则。
-- 兼容性：`status` 输出是**破坏性**变更（脚本可能依赖旧平铺格式），MVP 阶段无外部消费者。
+- 不拆 domain 键（`a/b` 是一个不透明键）；不改 `list`/`graph`；不新增 `--flat` 开关；不新增 check 规则。
+- `status` 不渲染任何关系（既不画树、也不画边）——关系视图见 `path` / `graph`。
+- 兼容性：`status` 输出是**破坏性**变更，MVP 阶段无外部消费者。
 

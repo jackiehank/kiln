@@ -149,39 +149,38 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
-// A cross-domain child is relocated under its parent and leaves its own block.
-func TestGroupByDomainRelocatesCrossDomainChild(t *testing.T) {
+// A cross-domain child stays in its own domain's block: the domain view is a
+// directory, not a relation view — cross-domain edges belong to `kiln graph`.
+func TestGroupByDomainKeepsCrossDomainFlat(t *testing.T) {
 	commits := []vcs.Commit{
 		mkCommit("k3", "子\nissue: child\naction: ask\ndomain: cli\nderived-from: parent", 3),
 		mkCommit("k2", "父\nissue: parent\naction: conclude\ndomain: design", 2),
 	}
 	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
-	if len(groups) != 1 || groups[0].Domain != "design" {
-		t.Fatalf("expected one design block, got %+v", groups)
+	if len(groups) != 2 || groups[0].Domain != "cli" || groups[1].Domain != "design" {
+		t.Fatalf("expected a cli block then a design block, got %+v", groups)
 	}
-	entries := groups[0].Entries
-	if len(entries) != 1 || entries[0].Issue.ID != "parent" {
-		t.Fatalf("unexpected entries: %+v", entries)
+	if len(groups[0].Issues) != 1 || groups[0].Issues[0].ID != "child" {
+		t.Fatalf("the child must stay in its own block: %+v", groups[0].Issues)
 	}
-	if len(entries[0].Children) != 1 || entries[0].Children[0].Issue.ID != "child" {
-		t.Fatalf("child not nested: %+v", entries[0].Children)
+	if len(groups[1].Issues) != 1 || groups[1].Issues[0].ID != "parent" {
+		t.Fatalf("unexpected design block: %+v", groups[1].Issues)
 	}
 }
 
-// Relations between issues of the same domain must not nest.
-func TestGroupByDomainKeepsSameDomainFlat(t *testing.T) {
+// An issue belongs to exactly one block — its own domain — so a relation that
+// points outside the block cannot move or duplicate the row.
+func TestGroupByDomainSortsIssuesInABlockByID(t *testing.T) {
 	commits := []vcs.Commit{
 		mkCommit("m2", "二\nissue: second\naction: ask\ndomain: design\nspawns: first", 2),
 		mkCommit("m1", "一\nissue: first\naction: ask\ndomain: design", 1),
 	}
 	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
-	if len(groups) != 1 || len(groups[0].Entries) != 2 {
-		t.Fatalf("same-domain relations must stay flat: %+v", groups)
+	if len(groups) != 1 || len(groups[0].Issues) != 2 {
+		t.Fatalf("one block with two issues: %+v", groups)
 	}
-	for _, en := range groups[0].Entries {
-		if len(en.Children) != 0 {
-			t.Fatalf("same-domain entry should not nest: %+v", en)
-		}
+	if groups[0].Issues[0].ID != "first" || groups[0].Issues[1].ID != "second" {
+		t.Fatalf("issues must be sorted by ID: %+v", groups[0].Issues)
 	}
 }
 

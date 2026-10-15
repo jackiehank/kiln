@@ -859,77 +859,53 @@ func (e *env) status(args []string) int {
 
 // statusRow is one issue in the domain view, in exactly the order the view
 // prints it. Both renderings — the text rows and the JSON array — come out of
-// this one walk, so they can never disagree about order or about where an issue
-// sits, which is what lets a test compare them row for row.
+// this one walk, so their issue rows can never disagree about order, which is
+// what lets a test compare them row for row.
 type statusRow struct {
-	issue  *model.Issue
-	depth  int
-	isLast bool
-	indent string // ancestor continuation prefix (│ or blanks); text view only
-	parent string // the issue this row nests under; "" for a block's top level
-	area   bool   // this issue has a worktree open
-	block  bool   // first row of a domain block that follows another
+	issue *model.Issue
+	head  string // the block header to print above this row; "" inside a block
+	area  bool   // this issue has a worktree open
 }
 
-// statusRows lays the domain blocks out as a flat, ordered list of rows.
+// statusRows lays the domain blocks out as a flat, ordered list of rows: one row
+// per issue, the first row of each block carrying that block's header. The header
+// is text only — the JSON rows carry their own `domain` — but it comes out of this
+// same walk, so neither view can disagree about where a block starts.
 func (e *env) statusRows(groups []engine.DomainGroup, areas map[string]bool) []statusRow {
-	var w statusWalk
-	w.areas = areas
-	for gi, g := range groups {
-		for i, en := range g.Entries {
-			w.add(en, "", "", i == len(g.Entries)-1, 0, gi > 0 && i == 0)
+	var rows []statusRow
+	for _, g := range groups {
+		for i, p := range g.Issues {
+			head := ""
+			if i == 0 {
+				head = g.Domain
+			}
+			rows = append(rows, statusRow{issue: p, head: head, area: areas[p.ID]})
 		}
 	}
-	return w.rows
-}
-
-// statusWalk accumulates rows in print order.
-type statusWalk struct {
-	rows  []statusRow
-	areas map[string]bool
-}
-
-// add appends one entry and then its children. Depth 0 rows carry no tree
-// connector; deeper ones get ├── / └── with │ continuation, which is accumulated
-// in indent rather than recomputed by the renderer.
-func (w *statusWalk) add(en engine.Entry, indent, parent string, isLast bool, depth int, block bool) {
-	w.rows = append(w.rows, statusRow{
-		issue:  en.Issue,
-		depth:  depth,
-		isLast: isLast,
-		indent: indent,
-		parent: parent,
-		area:   w.areas[en.Issue.ID],
-		block:  block,
-	})
-
-	nextIndent := indent
-	if depth > 0 {
-		if isLast {
-			nextIndent += "    "
-		} else {
-			nextIndent += "│   "
-		}
-	}
-	for i, c := range en.Children {
-		w.add(c, nextIndent, en.Issue.ID, i == len(en.Children)-1, depth+1, false)
-	}
+	return rows
 }
 
 // renderStatus prints the rows aligned by display width, with a blank line
-// opening every domain block but the first.
+// renderStatus prints the domain blocks: a header line naming the block, then one
+// row per issue, the rows aligned by display width across every block. Headers
+// stay out of that width calculation — one long domain name must not push the
+// whole table right — and a header opens its block, so it takes the place of the
+// blank line that used to sit between blocks.
 func (e *env) renderStatus(rows []statusRow) {
 	labels := make([]string, len(rows))
 	width := 0
 	for i, r := range rows {
-		labels[i] = statusLabel(r)
+		labels[i] = "  " + r.issue.ID
 		if w := displayWidth(labels[i]); w > width {
 			width = w
 		}
 	}
 	for i, r := range rows {
-		if r.block {
-			fmt.Fprintln(e.out)
+		if r.head != "" {
+			if i > 0 {
+				fmt.Fprintln(e.out)
+			}
+			fmt.Fprintln(e.out, r.head)
 		}
 		mark := " "
 		if e.isDone(r.issue) {
@@ -937,19 +913,6 @@ func (e *env) renderStatus(rows []statusRow) {
 		}
 		fmt.Fprintf(e.out, "%s %s %s%s\n", pad(labels[i], width), mark, stateWord(r.issue), areaMark(r.area))
 	}
-}
-
-// statusLabel renders the left column: the issue's `<domain>/<id>` name, plus a
-// tree connector when the row nests under another issue.
-func statusLabel(r statusRow) string {
-	left := issueLabel(r.issue)
-	if r.depth == 0 {
-		return left
-	}
-	if r.isLast {
-		return r.indent + "└── " + left
-	}
-	return r.indent + "├── " + left
 }
 
 // AreaMark is the suffix that flags an issue as having a worktree open. U+25A0
@@ -1048,15 +1011,6 @@ func (e *env) renderWorktreeLegend(areas []vcs.WorkspaceInfo) {
 func (e *env) isDone(p *model.Issue) bool {
 	last, ok := p.Last()
 	return ok && e.actions.IsTerminal(last.Kind)
-}
-
-// issueLabel renders an issue as `<domain>/<id>`; undomained issues show the bare
-// ID.
-func issueLabel(p *model.Issue) string {
-	if p.Domain == "" {
-		return p.ID
-	}
-	return p.Domain + "/" + p.ID
 }
 
 func (e *env) check(args []string) int {
@@ -1279,15 +1233,9 @@ type worktreeState struct {
 
 // statusIssue is one flat row of the domain view. It carries no action list —
 // that is `path`'s job — which keeps the document O(issues), not O(commits).
-//
-// Parent is a placement, not a relation: it is the issue this row was nested
-// under in the view, which may come from either side — `derived-from` on the
-// child or `spawns` on the parent — and only across domains. Calling it
-// `derived-from` would claim a relation this row does not carry.
 type statusIssue struct {
 	issueCore
-	HasWorktree bool   `json:"has-worktree"`
-	Parent      string `json:"parent,omitempty"`
+	HasWorktree bool `json:"has-worktree"`
 }
 
 // listDoc is the `kiln list --json` document.
@@ -1338,8 +1286,10 @@ type checkResult struct {
 }
 
 // statusJSON renders the domain view as a flat issue list, in the very order the
-// text view prints its rows — both renderings come from one walk, so row N means
-// the same issue in either.
+// text view prints its rows — both renderings come from one walk, so their issue
+// rows line up one for one. The text view's block headers have no counterpart
+// here: every row already carries its `domain`, and a heading would be a second
+// way to say the same thing.
 func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.WorkspaceInfo) int {
 	groups := engine.GroupByDomain(repo)
 	doc := statusDoc{
@@ -1362,7 +1312,6 @@ func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.Workspace
 				Done:   e.isDone(r.issue),
 			},
 			HasWorktree: r.area,
-			Parent:      r.parent,
 		})
 	}
 	return e.writeJSON(doc)

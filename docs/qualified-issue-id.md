@@ -39,15 +39,15 @@ cli/action-diff                 ✓ conclude
 
 ```
 cli
-  action-diff                        ✓ conclude
-  └── target-honesty  (design)         ask
-  qualified-issue-id                   ask
+  action-diff               ✓ conclude
+  qualified-issue-id          ask
 
 design
-  action-config                      ✓ apply
+  action-config             ✓ apply
+  target-honesty              ask
 ```
 
-（缩进与树形符号的具体画法留给 `test`；本轮的取舍只有一条：**domain 一块出现一次**。）
+（最终画法与缩进由 `test` 定案：见下方 `test` 一节——树形与 `(design)` 例外标记**都没要**，因为嵌套整体废除了。）
 
 ### 2. 为什么这个方向赢
 
@@ -165,6 +165,48 @@ design
 
 - **不动 `graph` / `path` 的关系渲染**（那是 `relation-rendering` 的地盘）；本轮只是**把 `status` 从关系渲染里摘出去**。
 - **不删 `engine` 的关系数据**（`DerivedFrom` / `Spawns` / … 照旧解析、`check` 照旧校验）：本轮只是不再拿它决定 `status` 的**摆位**。
+
+## test：落地——`status` 换画法、嵌套与 JSON 的 `parent` 一并退场
+
+> 本轮把 hypothesize（续）的裁定落成代码 + 文档。**净删代码**：`engine` 少一个类型、一个环检测、一个递归构造，`cli` 少一个遍历器、一个标签函数、三个字段，JSON 少一个字段。
+
+### 1. 代码
+
+| 文件 | 改动 |
+| --- | --- |
+| [engine.go](../internal/engine/engine.go) | `Entry` / `Children` / `loops` / `buildEntry` / parent 映射 / `spawnedBy` 全部删；`DomainGroup` 变成 `{Domain, Issues []*model.Issue}`；`GroupByDomain` 退化为**分组 + 排序 + `(未分类)` 兜底** |
+| [cli.go](../internal/cli/cli.go) | 删 `statusWalk` / `statusLabel` / `issueLabel`；`statusRow` 瘦成 `{issue, head, area}`；`renderStatus` 打**块头行 + 缩进两格的裸 id**（块头**不**参与列宽）；`statusIssue` 删 `parent` |
+
+### 2. 真仓输出（`kiln status`）
+
+```
+cli
+  action-diff               ✓ conclude
+  flag-value-leading-dashes   ask
+  qualified-issue-id          hypothesize
+  ...
+
+design
+  target-honesty              ask
+  ...
+```
+
+- 块头一行 + 两格缩进 + 列宽跨块对齐；块间一个空行。
+- 行名**可粘回**：`kiln path target-honesty` 直接可用（而以前 `kiln path design/target-honesty` 报「未找到问题」）。
+- `target-honesty` 回到了它**自己的** `design` 块（以前被搬进 `cli` 块）。
+
+### 3. 文档（spec 同步）
+
+- [mvp-plan](mvp-plan.md) §11：规则改成「块头携带 domain、行内裸 id」；旧的§11.1「跨域派生（嵌套）」→ 改为 §11.2“往事：跨域嵌套（已废弃）”并写明三道理由。
+- [machine-readable-output](machine-readable-output.md)：删 `parent` 字段行与它的“落位词”一节（标注已退役），§4 行序改成“块头只存在于文本，两边 issue 行相对顺序一致”。
+- [README](../README.md) 机器可读输出：去掉 `parent`，“逐行一致”→“**issue 行的相对顺序**一致”。
+- [domain-status.md](domain-status.md)：示例重画。
+
+### 4. 验证
+
+- `gofmt -l internal/` → 空；`go vet ./...` → 空；`go test ./...` → 全绿（`cli` / `engine` 各改/换了对应单测）。
+- 单测改动：`TestStatusRendersDomainBlocks` 断言改为“块头 + 裸 id”，并**反向**断言输出里不再有 `cli/` / `design/` / `├──` / `└──`；`engine` 的 `RelocatesCrossDomainChild` 换成 `KeepsCrossDomainFlat`；`status --json` 的 golden 里 `domains` 1→2、行序改为 `child`先、`parent` 字段删；`TestListJSONSharesTheIssueRow` 改成**按 ID 取行**比对（两个视图排序不同是刻意的）。
+- `kiln check` 不受影响（关系数据照旧解析、校不校验都不变）。
 
 ## collect：业内怎么编号，怎么处理重名
 

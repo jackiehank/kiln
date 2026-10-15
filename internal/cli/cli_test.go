@@ -110,19 +110,19 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
-// Domain blocks render as `<domain>/<id>` lines, separated by blank lines, with
-// cross-domain children nested under their parent.
+// Domain blocks render as a header line naming the domain, then one aligned row
+// per issue carrying the bare ID — the name you can paste straight back into a
+// command. Nothing nests, and no row carries a domain prefix: relations belong to
+// `kiln graph`.
 func TestStatusRendersDomainBlocks(t *testing.T) {
 	issue := func(id, domain, kind string) *model.Issue {
 		return &model.Issue{ID: id, Domain: domain, Actions: []model.Action{{Kind: kind}}}
 	}
 	groups := []engine.DomainGroup{
-		{Domain: "cli", Entries: []engine.Entry{{Issue: issue("help-alignment", "cli", "apply")}}},
-		{Domain: "design", Entries: []engine.Entry{
-			{Issue: issue("action-config", "design", "apply")},
-			{Issue: issue("status-by-domain", "design", "ask"), Children: []engine.Entry{
-				{Issue: issue("child", "cli", "apply")},
-			}},
+		{Domain: "cli", Issues: []*model.Issue{issue("help-alignment", "cli", "apply")}},
+		{Domain: "design", Issues: []*model.Issue{
+			issue("action-config", "design", "apply"),
+			issue("target-honesty", "design", "ask"),
 		}},
 	}
 	var buf bytes.Buffer
@@ -130,9 +130,17 @@ func TestStatusRendersDomainBlocks(t *testing.T) {
 	e.renderStatus(e.statusRows(groups, nil))
 	got := buf.String()
 
-	for _, want := range []string{"cli/help-alignment", "design/action-config", "└── cli/child"} {
+	if !strings.HasPrefix(got, "cli\n") {
+		t.Fatalf("the first block must open with its domain:\n%s", got)
+	}
+	for _, want := range []string{"  help-alignment", "\ndesign\n", "  target-honesty"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status output missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"cli/", "design/", "└──", "├──"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("the domain view must not carry %q any more:\n%s", unwanted, got)
 		}
 	}
 	if !strings.Contains(got, "\n\n") {
@@ -167,7 +175,7 @@ func TestStatusShowsWorktreeModeAndAreas(t *testing.T) {
 	}
 	marked := false
 	for _, line := range strings.Split(got, "\n") {
-		if strings.HasPrefix(line, "demo ") {
+		if strings.HasPrefix(strings.TrimSpace(line), "demo ") {
 			marked = strings.HasSuffix(line, AreaMark)
 		}
 	}
@@ -942,9 +950,10 @@ func TestWorktreeRemoveRequiresAnIssue(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // jsonRunner models a cross-domain pair plus an undomained stray: the smallest
-// history that exercises every row field — a domain, a nested placement, a
-// finished issue, an unfinished one, and an issue with a worktree open. Every
-// issue opens with `ask`, so the only findings are the missing terminal action.
+// history that exercises every row field — two domains (so the blocks have an
+// order to get right), a finished issue, an unfinished one, and an issue with a
+// worktree open. Every issue opens with `ask`, so the only findings are the
+// missing terminal action.
 func jsonRunner() workspaceRunner {
 	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	return workspaceRunner{
@@ -980,7 +989,7 @@ func TestStatusJSONIsFlatAndOrdered(t *testing.T) {
     "complete": 1,
     "in-progress": 2,
     "actions": 5,
-    "domains": 1
+    "domains": 2
   },
   "worktree": {
     "mode": "on",
@@ -988,19 +997,18 @@ func TestStatusJSONIsFlatAndOrdered(t *testing.T) {
   },
   "issues": [
     {
+      "id": "child",
+      "domain": "cli",
+      "action": "ask",
+      "done": false,
+      "has-worktree": false
+    },
+    {
       "id": "parent",
       "domain": "design",
       "action": "apply",
       "done": true,
       "has-worktree": true
-    },
-    {
-      "id": "child",
-      "domain": "cli",
-      "action": "ask",
-      "done": false,
-      "has-worktree": false,
-      "parent": "parent"
     },
     {
       "id": "stray",
@@ -1122,8 +1130,24 @@ func TestListJSONSharesTheIssueRow(t *testing.T) {
 	if len(fromStatus.Issues) == 0 || len(fromList.Issues) == 0 {
 		t.Fatalf("both commands must report rows: %d / %d", len(fromStatus.Issues), len(fromList.Issues))
 	}
-	if !reflect.DeepEqual(fromStatus.Issues[0], fromList.Issues[0]) {
-		t.Fatalf("the shared row differs: status %+v vs list %+v", fromStatus.Issues[0], fromList.Issues[0])
+	// The two views order rows differently on purpose — `status` walks domain
+	// blocks, `list` sorts by ID — so the shared contract is the row itself, not
+	// its position.
+	pick := func(rows []issueCore) (issueCore, bool) {
+		for _, r := range rows {
+			if r.ID == "parent" {
+				return r, true
+			}
+		}
+		return issueCore{}, false
+	}
+	fromStatusRow, okStatus := pick(fromStatus.Issues)
+	fromListRow, okList := pick(fromList.Issues)
+	if !okStatus || !okList {
+		t.Fatalf("both commands must report `parent`: %v / %v", okStatus, okList)
+	}
+	if !reflect.DeepEqual(fromStatusRow, fromListRow) {
+		t.Fatalf("the shared row differs: status %+v vs list %+v", fromStatusRow, fromListRow)
 	}
 }
 

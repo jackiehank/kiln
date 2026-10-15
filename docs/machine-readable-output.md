@@ -234,15 +234,18 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 | --- | --- |
 | `issues[].id` / `domain` / `action` / `done` | 同 §2，职责不变（`done` **恒显**） |
 | `issues[].has-worktree` | 同 §2（`status` 独有） |
-| `issues[].parent` | **只出现在**被跨域归位的 issue 上；**省略 = 本块的顶层项** |
+
+**修订（issue `qualified-issue-id`）**：`parent` 已**退场**。它是从“跨域嵌套”里长出来的字段——文本视图不再落位（见下 §2），它就没有可指的东西了。
 
 顺带少了一条判定：原来 `groups[].domain` 省略还要单独解释成"未分类块"，现在只剩行级一条——**`domain` 省略 = 没声明 domain**。
 
-### 2. `parent` 是什么——一个"落位"词，不是关系词
+### 2. ~~`parent` 是什么~~——已退役
 
-- 它的值由 `GroupByDomain` 算出的**规范化落位**给出，量的是**`status` 这个视图怎么摆**，**不是 `derived-from` 关系本身**。
-- 证据：那条边**可能来自两个不同的 trailer**——子上的 `derived-from`，或父上的 `spawns`（[GroupByDomain](file:///c:/Users/jacki/kiln/internal/engine/engine.go#L324-L353) 把两者并成候选，取排序后第一个**跨域**的）。且**只有跨域**才落位，同域关系不嵌。
-- 所以**不能叫 `derived-from`**：那等于声称一个它并不承载的关系。与 §5 第 2 条的分工划清：**复用 trailer 词，用于"就是那个东西"**（`domain` / `tags`）；**视图自己的概念另立其词**（`parent` / `has-worktree`）。两个词都只描述摆法。
+它原本是“**落位**词，不是关系词”：值由 `GroupByDomain` 的跨域落位给出，量的是**视图怎么摆**，不是 `derived-from` 本身（那条边还可能来自父上的 `spawns`）。
+
+**现已整体取消**（issue `qualified-issue-id`）：`status` 不再跨域嵌套、不再画树、每行也不再带 domain 前缀——**块归属 = issue 自己的 `domain`**，一个 issue 只出现一次。关系一律留给 `graph` / `path`。这也顺手答了 `cli/relation-rendering` 的“`status` 要不要显示关系”：**不显示**。
+
+对 §5 第 2 条的影响：`parent` 退出后，视图自造词只剩 `has-worktree`，而它是“**就是那个东西**”（那个 issue 有开着的区），与 `domain` / `tags` 同类——“视图自己的概念另立其词”这条分叉不再有实例。
 
 ### 3. 原来的反对理由为什么不成立了
 
@@ -251,9 +254,9 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - **嵌套里的"顶层项"是隐式的**，且消费方仍要按 `children` **递归**才能枚举全部 issue——并**没有更省**；
 - 平铺里"谁是顶层项" ⟺ **`parent` 缺失**：判一个字段的空，比递归更省。
 
-### 4. 行序：与文本视图**逐行同源**
+### 4. 行序：与文本视图**同源**
 
-`issues[]` 的次序 = 文本视图的行序（**pre-order**：本块的顶层项按 ID，紧接其子树，再到下一块；domain 块按名、未分类最后）。否则同一份信息两个视图各排各的，golden 测试就得写两套。
+`issues[]` 的次序 = 文本视图的 **issue 行**序（domain 块按名升序、未分类最后；块内按 ID 升序）。文本视图多一层**块头行**，JSON 不多——两者**相对顺序**一致即可；否则同一份信息两个视图各排各的，golden 测试就得写两套。
 
 ### 5. 对 §5 的修订
 
@@ -263,7 +266,7 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 - **§7 的遗留"嵌套 vs 平铺"已销**（已就地标注）。
 - 这条取舍对 `path` / `show` 同样成立：**数据层一律平铺，视图（缩进 / 树线 / 分组标题）归视图**——将来给它们加 `--json` 时不必再议同一个问题。
-- `status` 与 `list` 的行 schema 从"重叠"变成**同一份契约**：共享 `id` / `domain` / `action` / `done`；`status` 多 `has-worktree` 与 `parent`，`list` 多 `tags`。一份解码器覆盖两个命令。
+- `status` 与 `list` 的行 schema 从“重叠”变成**同一份契约**：共享 `id` / `domain` / `action` / `done`；`status` 多 `has-worktree`，`list` 多 `tags`。一份解码器覆盖两个命令。两个命令的**排序**不同是刻意的（`status` 走 domain 块，`list` 按 ID），所以共享的是**行本身**，测试按 ID 取行比对。
 
 ## test：落地三个命令的 `--json`（含真仓端到端）
 
