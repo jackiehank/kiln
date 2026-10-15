@@ -214,3 +214,64 @@ $ kiln show cli-necessity test
 - 实现：新增 `matchingOrdinals(p, kind)`（返回 1-based 位置数组）与 `ordinalNumbers(ns)`（渲染成 `4, 5, 6`）；单测 `TestShowTakesTheLastOfRepeatedActions` 改断言新文案 + 断言 recipe 存在。
 - 唯一匹配仍然**不出声**（`show worktree-adopt collect` → 只有内容，无提示）。
 
+## hypothesize（续）：把「action 是原子动作」写进 README，并钉清「终点之后还能提交」
+
+> 用户裁定：本轮**主要解决文档问题**：README 要写明 **action 是原子动作**（只有起点确定、终点负责标记完成，其余自由组合）；并且先**确认**终点动作之后还能不能继续提交。
+
+### 1. 先确认事实（沙盒实测，不是推断）
+
+临时 git 仓库（`/tmp/kiln-sandbox`，`worktree: off`，真跑 `kiln` 二进制）：
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| A | `ask → conclude` | `path` = 「已完成（当前 conclude）」；`check` = `✓ 完整`；`status` 打 `✓` |
+| B | 在 A 之后 `kiln commit demo test` | **提交成功，没有拒绝**（确认行 `已提交 f51506a · test · demo`）；随即 `path` = 「进行中（当前 test）」、`check` = `⚠ 缺少终点动作（当前 test）`、`status` 的 `✓` 消失 |
+| C | `collect → ask → conclude` | **`check` 判 `✓ 完整（collect, ask, conclude）`** —— 起点不在第一位也过 |
+| D | `ask → conclude → apply` | `✓ 完整（当前 apply）` —— 可以有多个终点，完成看最后一个 |
+
+**结论：能提交。** kiln 没有“关闭”这个状态——“完成”是 **“最后一个动作是终点”的函数**（`status` 的 `✓` 与 `check` 的第 2 条规则同一个判据：`isDone = 最后一个动作是终点`）。所以终点之后补动作**不是错误**，只是让这条 issue 回到进行中；想再收尾就再补一个终点动作。
+
+另外 C 还泄露一件事：结构纪律是「**含**起点动作 + **以**终点动作收尾」——起点只要存在，不要求排第一（但如今 `ask` 是新建的唯一入口，实际路径总是它先）。
+
+### 2. README 要改成什么样（§动作词表，草稿）
+
+```md
+**每个 action 是一条原子动作**——一次提问、一次采集、一次验证、一条结论，不是流水线上的一个阶段。
+
+- **只有两端是结构**：每个 issue **至少一个起点动作**（默认 `ask`）、**最后一个动作必须是终点动作**（默认 `conclude` / `apply`）。
+- **中间完全自由**：任意组合、任意次序、**可以重复**。没有“必须先 hypothesize 再 test”这类流水线要求。
+- **终点之后还能继续提交**：kiln 没有“关闭”这个状态——**“完成”= 最后一个动作是终点**（`status` 的 `✓` 与 `check` 第 2 条同源）。
+  所以 `ask → conclude → test` 之后这条 issue 会**回到进行中**，`check` 也会报 `缺少终点动作`：那是判定，不是错误。
+- **`path` 里的 `1.` `2.` `3.` 是动作出现的次序**（按时间），是索引，**不是阶段号**：`1. collect 2. ask 3. conclude` 也合法。
+```
+
+保留原有的 “`apply` 与 `conclude` 的区别” 与 “词表每个仓库可以不同” 两句。
+
+### 3. 顺手修一处**已被实现推翻的规格**
+
+[mvp-plan](mvp-plan.md) §2.3 还写着：「同一 issue ID 下再出现 `ask`，实际属于另一个 issue（**该识别留待后续迭代**）」——但 `issue-uniqueness` 已把它定为**写侧拒绝**（除非该 issue 还没有起点动作：那是修复而不是分叉）。不改就是 spec 与代码相反。
+
+### 4. 附带发现（同族，很小，建议一起做）
+
+**`kiln commit` 失败时看不到原因。** 沙盒里忘 `git add` → `提交失败: git commit: exit status 1`，而 git 自己的解释（`On branch master / Changes not staged for commit / use "git add"`）**被吞了**。
+
+诊断（已验证）：git 把这段写在 **stdout**，而 [`git.runIn`](../internal/vcs/git/git.go) 失败时**只取 stderr**，取空就退回 `err.Error()`，于是只剩 `exit status 1`。
+
+修法（几行）：失败时按 **stderr → stdout → err.Error()** 三级兜底，且只取**第一行非空**（避免把大段输出塞进错误）；jj 侧对称处理。
+→ 它与刚做的「`-h` 补提交范围」是同一件事的两半：**规矩说了，但犯规时的报错不说原因**。
+
+### 5. 非目标
+
+- 不改 `check` 的规则（“最后一个动作是终点”已够用，且它是 **warn 不阻断**）；**不加**“终点之后不许再有动作”的新规则——那会把实验 D 那种合法写法判死。
+- 不改 `isDone` 判定、不改 `path` 的编号（索引有用）。
+- 不动 `status` / `-h` 的结构：`-h` 已有 `action 词表默认: …`，且 help 带“不得引用文档”的测试约束；本轮只改 README 与 spec。
+
+### 6. 落地清单（供 test）
+
+| 位置 | 改动 |
+| --- | --- |
+| README §动作词表 | 按 §2 草稿重写（原子动作 + 两端是结构 + 中间自由 + 终点之后可继续 + 编号是索引） |
+| [mvp-plan](mvp-plan.md) §2.3 | `ask` 那句改成“写侧拒绝 + 例外（补起点是修复）” |
+| [`git`](../internal/vcs/git/git.go) / [`jj`](../internal/vcs/jj/jj.go) 的 `run` | 失败信息三级兜底（stderr → stdout → err.Error()），取首行非空 |
+| 测试 | 文字改动无单测；适配器兜底加一条真仓测试（干净仓 `commit` 无暂存 → 错误里应含 git 的解释，而不只是 `exit status 1`） |
+
