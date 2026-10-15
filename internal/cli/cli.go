@@ -35,6 +35,7 @@ do/commit 的 flags:
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
 commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在主干提交）
+worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的区一起删）
 `
 
 // usageCommands is the command surface rendered by usageText.
@@ -49,6 +50,7 @@ var usageCommands = [][2]string{
 	{"kiln graph [--format=ascii]", "问题关系图"},
 	{"kiln worktree new <issue>", "建专用工作区（主干只读，动作只在专用区提交）"},
 	{"kiln worktree list", "列出全部工作区（主干 + 专用）"},
+	{"kiln worktree remove <issue>", "删除专用工作区（尚有工作的区默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 }
 
@@ -375,8 +377,10 @@ func (e *env) workspace(args []string) int {
 		return e.workspaceNew(ws, rest)
 	case "list":
 		return e.workspaceList(ws)
+	case "remove":
+		return e.workspaceRemove(ws, rest)
 	default:
-		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue> | kiln worktree list")
+		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue> | kiln worktree list | kiln worktree remove <issue> [--force]")
 		return 2
 	}
 }
@@ -500,6 +504,24 @@ func (e *env) workspaceList(ws vcs.Workspace) int {
 	for _, a := range areas {
 		fmt.Fprintf(e.out, "%s  %s\n", pad(a.Path, width), areaRole(a))
 	}
+	return 0
+}
+
+// workspaceRemove deletes the dedicated area bound to an issue. The name is the
+// binding, so the issue alone identifies the area; an area that still holds work
+// is refused by the backend unless --force says to lose it.
+func (e *env) workspaceRemove(ws vcs.Workspace, args []string) int {
+	pos, f := parse(args)
+	if len(pos) < 1 {
+		fmt.Fprintln(e.errw, "用法: kiln worktree remove <issue> [--force]")
+		return 2
+	}
+	issue := pos[0]
+	if err := ws.RemoveWorkspace(issue, f.has("force")); err != nil {
+		fmt.Fprintf(e.errw, "删除工作区失败: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(e.out, "已删除专用区: %s\n", issue)
 	return 0
 }
 

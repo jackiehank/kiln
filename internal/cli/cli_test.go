@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -344,6 +345,7 @@ func (w workspaceRunner) NewWorkspace(issue string) (string, error) {
 	return "/ws/repo--" + issue, nil
 }
 func (w workspaceRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) { return w.areas, nil }
+func (w workspaceRunner) RemoveWorkspace(string, bool) error           { return nil }
 
 // newWorkspaceEnv builds an env whose backend reports the given layout.
 func newWorkspaceEnv(out, errw *bytes.Buffer, dedicated bool) *env {
@@ -521,7 +523,7 @@ func TestCommitInMainAllowedWhenWorktreeOff(t *testing.T) {
 // The command surface speaks one word for isolation: worktree.
 func TestUsageNamesTheWorktreeCommand(t *testing.T) {
 	text := usageText()
-	for _, want := range []string{"kiln worktree new", "kiln worktree list"} {
+	for _, want := range []string{"kiln worktree new", "kiln worktree list", "kiln worktree remove"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage must name %q:\n%s", want, text)
 		}
@@ -539,5 +541,56 @@ func TestRetiredWorkspaceCommandIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "未知命令") {
 		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// needsForceRunner is a fake whose RemoveWorkspace refuses until force is set, so
+// a test can prove the flag actually reaches the backend.
+type needsForceRunner struct{ workspaceRunner }
+
+func (n needsForceRunner) RemoveWorkspace(issue string, force bool) error {
+	if !force {
+		return fmt.Errorf("专用区还有未提交的改动: %s（要丢弃请加 --force）", issue)
+	}
+	return nil
+}
+
+// `worktree remove` names the issue to the backend and reports the deletion.
+func TestWorktreeRemoveDeletesTheArea(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: workspaceRunner{}, out: &out, errw: &errb}
+	if code := e.workspace([]string{"remove", "cli-necessity"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "cli-necessity") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+// A backend refusal becomes a non-zero exit carrying its message, and --force is
+// the way through it.
+func TestWorktreeRemoveForwardsForce(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: needsForceRunner{}, out: &out, errw: &errb}
+	if code := e.workspace([]string{"remove", "x"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "未提交的改动") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	var out2, errb2 bytes.Buffer
+	e2 := &env{actions: model.DefaultActionSet(), repo: needsForceRunner{}, out: &out2, errw: &errb2}
+	if code := e2.workspace([]string{"remove", "x", "--force"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb2.String())
+	}
+}
+
+// Removing without naming an issue is a usage error.
+func TestWorktreeRemoveRequiresAnIssue(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: workspaceRunner{}, out: &out, errw: &errb}
+	if code := e.workspace([]string{"remove"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
 	}
 }

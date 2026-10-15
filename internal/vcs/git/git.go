@@ -4,6 +4,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -104,6 +105,61 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 		return nil, err
 	}
 	return parseWorktrees(out), nil
+}
+
+// RemoveWorkspace deletes the linked worktree bound to issue and the branch that
+// carried it. Both halves matter: a worktree removed while its kiln/<issue>
+// branch survives makes the next NewWorkspace trip over `-b`. "Still holds work"
+// has two halves too, and each is checked before anything is deleted — git
+// refuses a worktree with uncommitted changes on its own, and an unmerged branch
+// is refused here, because dropping the worktree first would strand it. force
+// loses both.
+func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
+	areas, err := r.ListWorkspaces()
+	if err != nil {
+		return err
+	}
+	path, ok := vcs.AreaFor(areas, issue)
+	if !ok {
+		return fmt.Errorf("没有 issue 为 %q 的专用区", issue)
+	}
+	branch := vcs.BranchPrefix + issue
+	if !force {
+		merged, err := r.branchMerged(branch)
+		if err != nil {
+			return err
+		}
+		if !merged {
+			return fmt.Errorf("分支 %s 还有未合并的提交（要丢弃请加 --force）", branch)
+		}
+	}
+	remove := []string{"worktree", "remove", path}
+	drop := "-d"
+	if force {
+		remove = append(remove, "--force")
+		drop = "-D"
+	}
+	if _, err := r.run(remove...); err != nil {
+		return err
+	}
+	_, err = r.run("branch", drop, branch)
+	return err
+}
+
+// branchMerged reports whether branch is already reachable from the current
+// checkout's HEAD — a branch git can drop without losing commits.
+func (r ExecRunner) branchMerged(branch string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", branch, "HEAD")
+	cmd.Dir = r.Dir
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil // exit 1 is git's "not an ancestor", not a failure
+	}
+	return false, fmt.Errorf("git merge-base: %w", err)
 }
 
 // root returns the working directory of the current checkout.

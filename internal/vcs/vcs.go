@@ -81,6 +81,10 @@ type Workspace interface {
 	NewWorkspace(issue string) (string, error)
 	// ListWorkspaces lists every known area, the main checkout first.
 	ListWorkspaces() ([]WorkspaceInfo, error)
+	// RemoveWorkspace deletes the dedicated area bound to issue. force lets an
+	// area that still holds work go — uncommitted changes, or a branch that was
+	// never merged; without it a backend refuses rather than losing work.
+	RemoveWorkspace(issue string, force bool) error
 }
 
 // AreaPath returns the dedicated area for issue: <mainRoot>/.kiln/ws/<issue>.
@@ -88,6 +92,22 @@ type Workspace interface {
 // an area created from inside another area from nesting inside it.
 func AreaPath(mainRoot, issue string) string {
 	return filepath.Join(filepath.Clean(mainRoot), StateDir, AreasDir, issue)
+}
+
+// AreaFor returns the dedicated area bound to issue from a backend's area list.
+// The binding is the name itself, so this is a search of the backend's own
+// registry rather than a lookup in a stored index.
+func AreaFor(areas []WorkspaceInfo, issue string) (path string, ok bool) {
+	if len(areas) == 0 {
+		return "", false
+	}
+	want := AreaPath(areas[0].Path, issue)
+	for _, a := range areas {
+		if SamePath(a.Path, want) {
+			return a.Path, true
+		}
+	}
+	return "", false
 }
 
 // PrepareAreas makes the state root ready for a new area: it creates

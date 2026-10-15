@@ -9,6 +9,7 @@ package jj
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -131,6 +132,44 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 		return areas[i].Path < areas[j].Path
 	})
 	return areas, nil
+}
+
+// RemoveWorkspace forgets the workspace bound to issue and deletes its
+// directory. jj's `workspace forget` only unregisters the workspace — the files
+// stay on disk — and it asks no questions about them, so an area that still
+// holds changes is refused here and the directory is removed explicitly.
+func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
+	areas, err := r.ListWorkspaces()
+	if err != nil {
+		return err
+	}
+	path, ok := vcs.AreaFor(areas, issue)
+	if !ok {
+		return fmt.Errorf("没有 issue 为 %q 的专用区", issue)
+	}
+	if !force {
+		changed, err := r.hasChanges(path)
+		if err != nil {
+			return err
+		}
+		if changed {
+			return fmt.Errorf("专用区还有未提交的改动: %s（要丢弃请加 --force）", issue)
+		}
+	}
+	if _, err := r.run("workspace", "forget", issue); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
+}
+
+// hasChanges reports whether the workspace rooted at root holds working-copy
+// changes — the jj-side answer to "is this area still holding work".
+func (r ExecRunner) hasChanges(root string) (bool, error) {
+	out, err := r.run("-R", root, "diff", "--summary")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 // workspaceRoot returns the root of the workspace the runner operates in.

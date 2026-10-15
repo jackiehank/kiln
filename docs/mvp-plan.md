@@ -280,7 +280,7 @@ kiln/
 - issue ID 唯一性：去掉 namespace 后靠什么避免重名——命名约定 + `kiln check` 检测是否够用，是否需要跨仓库引用前缀
 - **kiln CLI 的存在必要性**：agent 手握 `git` + 约定文档时，哪些命令是"git 做不到的"（`check` 不变量 / `status`·`graph` 综合 / `path` 重建）、哪些只是方便包装——见 [docs/cli-necessity.md](cli-necessity.md)
 - 专用区**播种已落地**：`kiln worktree new` 读仓库根的 `.worktreeinclude`（沿用厂商标准键名与语义），把**被忽略的本地小文件**带进新区；git 与 jj（colocated）均生效，只带"匹配且被忽略"、已存在跳过、单向进区——见 [docs/worktree-include.md](worktree-include.md)
-- 工作区模式**可配已落地**：顶层 `worktree`（默认 `on`：主干只读、动作只在专用区；`off`：允许在主干提交），命令统一为 `kiln worktree`，`--force` = 一次性豁免——见 [docs/worktree-mode.md](worktree-mode.md)
+- 工作区模式**可配已落地**：顶层 `worktree`（默认 `on`：主干只读、动作只在专用区；`off`：允许在主干提交），命令统一为 `kiln worktree`（`new` / `list` / `remove`），`--force` = 一次性豁免——见 [docs/worktree-mode.md](worktree-mode.md)
 - 动作「证据」可被改写 / 删除（jj 的流体历史）与「记录」取向的张力：**阻塞 cli-necessity**——见 [docs/evidence-fluidity.md](evidence-fluidity.md)
 - 关系渲染不一致：`graph` / `status` 未渲染 `blocks` / `supersedes`（而 `path` 有）——见 [docs/relation-rendering.md](relation-rendering.md)
 - 动作的**作者归属**：**已定"不做"**——现状 1 人 + 1 agent 共用同一 git 身份，且无消费场景；重启触发条件与理由见 [docs/author-attribution.md](author-attribution.md)

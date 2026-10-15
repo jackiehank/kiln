@@ -243,3 +243,49 @@ kiln 现在**强制**"**主干只读 / 只合并，动作只在专用区提交**
 
 - **`warn` 中间档未采纳**（collect 里的 ESLint / rustc 先例）——用户定的是两态"可关闭"。
 - **历史文档里的旧命令名未改写**（见取舍 4）；若要统一，可在 conclude 决定。
+
+## test（续）：`worktree` 命令补上 `remove`——三件套齐了
+
+> 用户问"worktree 命令是不是还缺一个 remove"→ 确认缺，并**并入本 issue**（同一"命令面统一"议题）。
+
+### 1. 缺口与现状
+
+- 原命令面只有 `new | list`——**没有任何在 kiln 里拆区的动作**；每轮收尾都退回**后端方言**手工两步（`git worktree remove …` + `git branch -d kiln/<issue>`；jj 则 `jj workspace forget`）。
+- 这正是 `cli-necessity` 说"该由 `vcs.Workspace` 吞掉"的东西——`new` / `list` 已吞，`remove` 没吞。
+- **顺带堵坑**：[cli-necessity.md](cli-necessity.md) 记的「区删了而 `kiln/<issue>` 分支尚存 → 下次 `new` 因 `-b` 冲突失败」——**连分支一起删的 `remove` 正是这条坑的解**。
+
+### 2. 设计（本轮定，可再调）
+
+| 决定 | 取值 |
+| --- | --- |
+| **命名** | **`remove`**——对齐 git 与既有措辞（不为 `rm` / `delete` 另起名） |
+| **寻址** | **按 issue**（`kiln worktree remove <issue>`），不是按路径——"命名即绑定" |
+| **接口** | `vcs.Workspace` 增 `RemoveWorkspace(issue, force)`；共用 `vcs.AreaFor(areas, issue)` 查找（**查后端注册表，不是存索引**） |
+| **git 的两半** | `worktree remove` **且** `branch -d` / `-D` `kiln/<issue>`——只删区不删分支会留下 `-b` 冲突坑 |
+| **jj 的两半** | `jj workspace forget <issue>` **且** `os.RemoveAll(<区目录>)`——实测 `forget` **只注销、不删目录**（区里文件仍在） |
+| **护栏（"还有工作"）** | **默认拒绝，`--force` 才丢**：git 侧 = `worktree remove` 自带的脏区检查 **+** 我们前置的**分支未合并**检查；jj 侧 = 我们查 `jj -R <区> diff --summary`（非空即脏），因为 `forget` 自己**不问任何问题** |
+| **前置检查（git）** | 未合并检查**放在删之前**：先删区再删分支会**把未合并分支搁浅**（正是上面那条坑），所以不 `--force` 时**先拒、不删** |
+
+### 3. 真机验证
+
+| 后端 | 实验 | 结果 |
+| --- | --- | --- |
+| **git** | 干净且已合并 → `remove t1` | exit 0；**区没了、`kiln/t1` 也没了** |
+| **git** | 区里有未提交改动 → `remove t2` | **拒绝**（git 原话 "contains modified or untracked files, use --force to delete it"），区**完好** |
+| **git** | 同上 + `--force` | exit 0，区已删 |
+| **git** | 分支**未合并**（`git rev-list --count kiln/t3 --not master` = 1）→ `remove t3` | **拒绝**：`分支 kiln/t3 还有未合并的提交（要丢弃请加 --force）`，区**完好**（未搁浅） |
+| **git** | 同上 + `--force` | exit 0，区与分支**都**清掉 |
+| **git** | 不存在的 issue → `remove nope` | exit 1：`没有 issue 为 "nope" 的专用区` |
+| **jj（colocated）** | 干净 → `remove t1` | exit 0；区目录已删、`jj workspace list` **不再列出 t1** |
+| **jj** | 区里有改动 → `remove t2` | **拒绝**：`专用区还有未提交的改动: t2（要丢弃请加 --force）`，目录完好 |
+| **jj** | 同上 + `--force` | exit 0，目录已删 |
+
+### 4. 测试
+
+- **单测**（`internal/cli/cli_test.go`）：`worktree remove` 把 issue 交给后端并报告（`TestWorktreeRemoveDeletesTheArea`）；**`--force` 确实抵达后端**（`TestWorktreeRemoveForwardsForce`，用一个"force 前必拒"的假后端）；缺 issue 是用法错误（`TestWorktreeRemoveRequiresAnIssue`）；`usage` 断言补上 `kiln worktree remove`；假后端 `workspaceRunner` 补上新接口方法。`gofmt -l` 空、`go vet` / `go test ./...` **全绿**。
+
+### 5. 取舍
+
+1. **`--force` 一词两用**：`commit --force`（一次性豁免主干护栏）与 `worktree remove --force`（丢弃区里的工作）——都是"我知道后果、放行当次"，语义一致，故**同名、不另造**。
+2. **护栏的两半各自归属**：git 的脏区护栏**白拿**（git 自己有），未合并护栏**必须我们前置**；jj 则**两半都要我们做**（`forget` 既不问、也不删）。→ 正是 `vcs.Workspace` 该吸收的差异。
+3. **仍未做**：`worktree new --adopt`（搬未提交改动）——`cli-necessity` 提过、一直未落地，仍是独立缺口。
