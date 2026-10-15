@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"kiln/internal/config"
 	"kiln/internal/engine"
 	"kiln/internal/model"
 	"kiln/internal/vcs"
@@ -448,6 +451,55 @@ func TestWorkspaceNewRejectsLooseIssueID(t *testing.T) {
 func TestWorkspaceUnknownSubcommand(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := newWorkspaceEnv(&out, &errb, true).workspace(nil); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+}
+
+// `config path` names the repository's state root and seeds a commented default
+// there, so a fresh repository has something to edit.
+func TestConfigPathSeedsTheFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), dir: root, out: &out, errw: &errb}
+	if code := e.config([]string{"path"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	want := filepath.Join(root, vcs.StateDir, config.FileName)
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("stdout = %q, want it to name %s", out.String(), want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("config was not seeded: %v", err)
+	}
+}
+
+// The second run reports the same path without rewriting anything.
+func TestConfigPathKeepsAnExistingFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := config.Ensure(root); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), dir: root, out: &out, errw: &errb}
+	if code := e.config([]string{"path"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(out.String(), "原本不存在") {
+		t.Fatalf("second run claimed to seed: %q", out.String())
+	}
+}
+
+// A missing or unknown subcommand is a usage error.
+func TestConfigUnknownSubcommand(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), dir: ".", out: &out, errw: &errb}
+	if code := e.config(nil); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 }

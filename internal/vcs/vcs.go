@@ -47,7 +47,8 @@ type Repo interface {
 const BranchPrefix = "kiln/"
 
 // StateDir is the in-repo state root: everything kiln keeps for itself lives
-// under it, and it hides itself with its own .gitignore (see PrepareAreas).
+// here. Its areas are local state and stay ignored; the rest — the config —
+// is project content that travels with the checkout.
 const StateDir = ".kiln"
 
 // AreasDir is the StateDir child holding one area per issue. The name is
@@ -55,9 +56,10 @@ const StateDir = ".kiln"
 // paid for on every path below it.
 const AreasDir = "ws"
 
-// ignoreBody is what kiln writes into <StateDir>/.gitignore — the same trick jj
-// uses for .jj, so the state root never shows up as untracked content.
-const ignoreBody = "/*\n"
+// ignoreBody is what kiln writes into <StateDir>/.gitignore: only the areas are
+// local state, so only they are ignored — the config beside them is committed
+// like any other project file.
+const ignoreBody = "/" + AreasDir + "\n"
 
 // WorkspaceInfo describes one working area a backend knows about.
 type WorkspaceInfo struct {
@@ -88,10 +90,10 @@ func AreaPath(mainRoot, issue string) string {
 }
 
 // PrepareAreas makes the state root ready for a new area: it creates
-// <mainRoot>/.kiln/ws and, when absent, writes the self-ignoring .gitignore.
-// Both halves are load-bearing: jj creates no intermediate directories, and the
-// ignore entry has to exist before the first area does, or git reports the area
-// as untracked content in the main checkout.
+// <mainRoot>/.kiln/ws and, when absent, writes the .gitignore that keeps areas
+// out of the checkout. Both halves are load-bearing: jj creates no intermediate
+// directories, and the ignore entry has to exist before the first area does, or
+// git reports the area as untracked content in the main checkout.
 func PrepareAreas(mainRoot string) error {
 	root := filepath.Clean(mainRoot)
 	if err := os.MkdirAll(filepath.Join(root, StateDir, AreasDir), 0o755); err != nil {

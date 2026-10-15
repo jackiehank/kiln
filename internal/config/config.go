@@ -1,8 +1,15 @@
-// Package config resolves kiln's action vocabulary from an optional .kiln.json
-// in the current directory, falling back to the built-in defaults.
+// Package config resolves kiln's per-repository configuration. It lives at one
+// place: <repo>/.kiln/config.jsonc, the repository's state root. The config is
+// project-shared — it travels with the checkout and is meant to be committed,
+// so every collaborator reads the same vocabulary.
+//
+// The file is JSONC: JSON plus // and /* */ comments, because a config that can
+// say why each entry is set is worth more than one that cannot. Only comments
+// are added on top of JSON — no trailing commas — so the payload stays strict.
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,69 +18,217 @@ import (
 	"strings"
 
 	"kiln/internal/model"
+	"kiln/internal/vcs"
 )
 
-// FileName is the optional config file kiln looks for in the current directory.
-const FileName = ".kiln.json"
+// FileName is the config file, inside the state root.
+const FileName = "config.jsonc"
 
-// file mirrors the on-disk schema.
+// file mirrors the on-disk schema. The vocabulary is grouped so later settings
+// can sit beside it instead of competing for the top-level keys.
 type file struct {
-	Actions  []string `json:"actions"`
-	Start    string   `json:"start"`
-	Terminal []string `json:"terminal"`
+	Actions struct {
+		Names    []string `json:"names"`
+		Start    string   `json:"start"`
+		Terminal []string `json:"terminal"`
+	} `json:"actions"`
+	VCS string `json:"vcs"`
 }
 
-// VCS returns the configured backend preference from dir/FileName. It is
-// "auto" when the file is absent or the key is unset.
-func VCS(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, FileName))
-	if errors.Is(err, os.ErrNotExist) {
-		return "auto", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("读取 %s: %w", FileName, err)
-	}
-	var f struct {
-		VCS string `json:"vcs"`
-	}
-	if err := json.Unmarshal(data, &f); err != nil {
-		return "", fmt.Errorf("解析 %s: %w", FileName, err)
-	}
-	if strings.TrimSpace(f.VCS) == "" {
-		return "auto", nil
-	}
-	return f.VCS, nil
+// Config is everything kiln reads from a repository's config file.
+type Config struct {
+	Path    string           // the file kiln used ("" outside a repository)
+	Actions *model.ActionSet // the vocabulary (built-in defaults when unset)
+	VCS     string           // backend preference: auto | git | jj
 }
 
-// Load returns the action vocabulary from dir/FileName, or the built-in defaults
-// when the file is absent. A present-but-invalid file is an error.
-//
-// When `start` or `terminal` are omitted they default to the first and the last
-// entry of `actions`, so a minimal file only needs to list the vocabulary.
-func Load(dir string) (*model.ActionSet, error) {
-	data, err := os.ReadFile(filepath.Join(dir, FileName))
+// Read resolves and parses the configuration for startDir. A missing file is not
+// an error: kiln falls back to the built-in vocabulary and "auto". A file that
+// exists but does not parse is an error, so a misspelled key is never silently
+// ignored.
+func Read(startDir string) (Config, error) {
+	cfg := Config{Actions: model.DefaultActionSet(), VCS: "auto"}
+	path, ok := Path(startDir)
+	if !ok {
+		return cfg, nil // outside a repository: do still works, on the defaults
+	}
+	cfg.Path = path
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return model.DefaultActionSet(), nil
+		return cfg, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("读取 %s: %w", FileName, err)
+		return Config{}, fmt.Errorf("读取 %s: %w", path, err)
+	}
+	stripped, err := stripComments(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 	var f file
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("解析 %s: %w", FileName, err)
+	dec := json.NewDecoder(bytes.NewReader(stripped))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil {
+		return Config{}, fmt.Errorf("解析 %s: %w", path, err)
 	}
-	if len(f.Actions) == 0 {
+	if v := strings.TrimSpace(f.VCS); v != "" {
+		cfg.VCS = v
+	}
+	set, err := actionSet(f)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", path, err)
+	}
+	cfg.Actions = set
+	return cfg, nil
+}
+
+// actionSet turns the actions group into a vocabulary, staying lenient about
+// what may be omitted: start defaults to the first name, terminal to the last,
+// and an empty group means "keep the built-in defaults".
+func actionSet(f file) (*model.ActionSet, error) {
+	names := f.Actions.Names
+	if len(names) == 0 {
 		return model.DefaultActionSet(), nil
 	}
-	if f.Start == "" {
-		f.Start = f.Actions[0]
+	start := f.Actions.Start
+	if strings.TrimSpace(start) == "" {
+		start = names[0]
 	}
-	if len(f.Terminal) == 0 {
-		f.Terminal = []string{f.Actions[len(f.Actions)-1]}
+	terminal := f.Actions.Terminal
+	if len(terminal) == 0 {
+		terminal = []string{names[len(names)-1]}
 	}
-	set, err := model.NewActionSet(f.Actions, f.Start, f.Terminal)
+	return model.NewActionSet(names, start, terminal)
+}
+
+// Path resolves the config file for startDir by walking up from it: the first
+// <dir>/.kiln/config.jsonc wins, and the nearest repository root — a directory
+// holding .git or .jj — stops the walk and names the canonical location when no
+// file exists yet. ok is false outside a repository.
+func Path(startDir string) (path string, ok bool) {
+	dir, err := filepath.Abs(startDir)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", FileName, err)
+		dir = filepath.Clean(startDir)
 	}
-	return set, nil
+	for {
+		candidate := filepath.Join(dir, vcs.StateDir, FileName)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+		if isRepoRoot(dir) {
+			return candidate, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// isRepoRoot reports whether dir holds a repository marker: .git (a directory in
+// the main checkout, a file in a linked worktree) or .jj.
+func isRepoRoot(dir string) bool {
+	for _, marker := range []string{".git", ".jj"} {
+		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Ensure writes the commented default config at the repository's state root when
+// none exists yet, so a fresh repository has something to edit. An existing file
+// is never touched. created reports whether it wrote one.
+func Ensure(startDir string) (path string, created bool, err error) {
+	path, ok := Path(startDir)
+	if !ok {
+		return "", false, fmt.Errorf("不在仓库里，定位不到 %s/%s", vcs.StateDir, FileName)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", false, err
+	}
+	if err := os.WriteFile(path, []byte(defaultFile), 0o644); err != nil {
+		return "", false, err
+	}
+	return path, true, nil
+}
+
+// defaultFile is the seeded config: the built-in vocabulary spelled out, with
+// the comments JSONC exists for.
+const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享）。
+// 位置：<仓库根>/.kiln/config.jsonc（kiln config path 打印路径）
+// 格式：JSONC（JSON + 注释）；除注释外是严格 JSON，不支持尾逗号。
+{
+  // action 词表：每个项目可以不同 —— 这是 kiln 的自定义点。
+  // 顺序不是约束；只需含起点动作，并以终点动作收尾。
+  "actions": {
+    "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+    "start": "ask",
+    "terminal": ["conclude", "apply"]
+  },
+  // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
+  "vcs": "auto"
+}
+`
+
+// stripComments blanks out // line comments and /* */ block comments while
+// leaving string literals untouched. Comment bytes become spaces, so byte
+// offsets — and therefore json's error positions — still line up with the file
+// the user is looking at.
+func stripComments(src []byte) ([]byte, error) {
+	out := make([]byte, len(src))
+	for i := 0; i < len(src); {
+		switch c := src[i]; {
+		case c == '"':
+			// Copy a whole string literal verbatim, escapes and all.
+			j := i + 1
+			for j < len(src) && src[j] != '\n' {
+				if src[j] == '\\' {
+					j += 2
+					continue
+				}
+				if src[j] == '"' {
+					j++
+					break
+				}
+				j++
+			}
+			if j > len(src) {
+				j = len(src)
+			}
+			copy(out[i:j], src[i:j])
+			i = j
+		case c == '/' && i+1 < len(src) && src[i+1] == '/':
+			j := i
+			for j < len(src) && src[j] != '\n' {
+				out[j] = ' '
+				j++
+			}
+			i = j
+		case c == '/' && i+1 < len(src) && src[i+1] == '*':
+			end := bytes.Index(src[i+2:], []byte("*/"))
+			if end < 0 {
+				line := 1 + bytes.Count(src[:i], []byte("\n"))
+				return nil, fmt.Errorf("第 %d 行: 块注释没有闭合的 */", line)
+			}
+			j := i + 2 + end + 2
+			for k := i; k < j; k++ {
+				if src[k] == '\n' {
+					out[k] = '\n' // keep the line count intact
+				} else {
+					out[k] = ' '
+				}
+			}
+			i = j
+		default:
+			out[i] = c
+			i++
+		}
+	}
+	return out, nil
 }

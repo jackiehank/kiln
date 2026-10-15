@@ -3,84 +3,211 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"kiln/internal/vcs"
 )
 
-func write(t *testing.T, dir, body string) {
+// writeConfig puts body at <root>/.kiln/config.jsonc, creating the state root.
+func writeConfig(t *testing.T, root, body string) {
 	t.Helper()
+	dir := filepath.Join(root, vcs.StateDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestLoadFallsBackToDefaults(t *testing.T) {
-	set, err := Load(t.TempDir())
+// mkRepo returns a directory that looks like a repository root.
+func mkRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// Comments are blanked out, but a `//` inside a string literal is data, not a
+// comment — and the bytes that remain must still parse as strict JSON.
+func TestStripCommentsLeavesStringsAlone(t *testing.T) {
+	src := []byte("{\n  // a line comment\n  \"vcs\": \"auto // not a comment\",\n" +
+		"  /* block\n     comment */\n  \"note\": \"/* also data */\"\n}\n")
+	got, err := stripComments(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.Start() != "ask" || !set.IsValid("hypothesize") || !set.IsTerminal("apply") {
-		t.Fatalf("unexpected defaults: %v", set.Names())
+	if len(got) != len(src) {
+		t.Fatalf("length changed: %d -> %d (offsets must stay aligned)", len(src), len(got))
+	}
+	if !strings.Contains(string(got), `"vcs": "auto // not a comment"`) {
+		t.Fatalf("string literal was damaged:\n%s", got)
+	}
+	if !strings.Contains(string(got), `"/* also data */"`) {
+		t.Fatalf("comment-looking string was damaged:\n%s", got)
+	}
+	// Newlines survive so error positions keep their line numbers.
+	if n := strings.Count(string(got), "\n"); n != strings.Count(string(src), "\n") {
+		t.Fatalf("newlines = %d, want %d", n, strings.Count(string(src), "\n"))
 	}
 }
 
-func TestLoadOverrides(t *testing.T) {
-	dir := t.TempDir()
-	write(t, dir, `{"actions":["ask","probe","done"],"start":"ask","terminal":["done"]}`)
-	set, err := Load(dir)
+func TestStripCommentsRejectsUnterminatedBlock(t *testing.T) {
+	_, err := stripComments([]byte("{\n  /* never closed\n}\n"))
+	if err == nil {
+		t.Fatal("expected an error for an unterminated block comment")
+	}
+	if !strings.Contains(err.Error(), "第 2 行") {
+		t.Fatalf("error should name the line: %v", err)
+	}
+}
+
+// Outside a repository there is no config to read, and kiln falls back to the
+// built-in vocabulary so `do` keeps working.
+func TestReadFallsBackToDefaultsOutsideRepo(t *testing.T) {
+	cfg, err := Read(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !set.IsValid("probe") || set.IsValid("hypothesize") {
-		t.Fatalf("vocabulary not replaced: %v", set.Names())
+	if cfg.Path != "" || cfg.VCS != "auto" {
+		t.Fatalf("cfg = %+v, want no path and auto", cfg)
 	}
-	if set.IsTerminal("probe") || !set.IsTerminal("done") {
-		t.Fatalf("terminal not replaced: %v", set.Names())
+	if cfg.Actions.Start() != "ask" || !cfg.Actions.IsTerminal("apply") {
+		t.Fatalf("unexpected defaults: %v", cfg.Actions.Names())
 	}
 }
 
-func TestLoadDerivesStartAndTerminal(t *testing.T) {
-	dir := t.TempDir()
-	write(t, dir, `{"actions":["ask","plan","do","done"]}`)
-	set, err := Load(dir)
+func TestReadParsesGroupedJSONC(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{
+  // 词表
+  "actions": { "names": ["ask", "probe", "done"], "start": "ask", "terminal": ["done"] },
+  "vcs": "jj" // 后端
+}`)
+	cfg, err := Read(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.Start() != "ask" {
-		t.Fatalf("start = %q", set.Start())
+	if !cfg.Actions.IsValid("probe") || cfg.Actions.IsValid("hypothesize") {
+		t.Fatalf("vocabulary not replaced: %v", cfg.Actions.Names())
 	}
-	if !set.IsTerminal("done") || set.IsTerminal("plan") {
-		t.Fatalf("terminal not derived from the last entry: %v", set.Names())
+	if cfg.Actions.IsTerminal("probe") || !cfg.Actions.IsTerminal("done") {
+		t.Fatalf("terminal not replaced: %v", cfg.Actions.Names())
+	}
+	if cfg.VCS != "jj" {
+		t.Fatalf("VCS = %q, want jj", cfg.VCS)
 	}
 }
 
-func TestLoadRejectsInconsistentConfig(t *testing.T) {
-	dir := t.TempDir()
-	write(t, dir, `{"actions":["a","b"],"start":"zzz","terminal":["b"]}`)
-	if _, err := Load(dir); err == nil {
+func TestReadDerivesStartAndTerminal(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"actions": {"names": ["ask", "plan", "do", "done"]}}`)
+	cfg, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Actions.Start() != "ask" {
+		t.Fatalf("start = %q", cfg.Actions.Start())
+	}
+	if !cfg.Actions.IsTerminal("done") || cfg.Actions.IsTerminal("plan") {
+		t.Fatalf("terminal not derived from the last entry: %v", cfg.Actions.Names())
+	}
+	if cfg.VCS != "auto" {
+		t.Fatalf("VCS = %q, want auto", cfg.VCS)
+	}
+}
+
+// A misspelled key is an error rather than a silently ignored setting.
+func TestReadRejectsUnknownKey(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"actions": {"nams": ["ask", "done"]}}`)
+	if _, err := Read(root); err == nil {
+		t.Fatal("expected an error for an unknown field")
+	}
+}
+
+func TestReadRejectsInconsistentConfig(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"actions": {"names": ["a", "b"], "start": "zzz", "terminal": ["b"]}}`)
+	if _, err := Read(root); err == nil {
 		t.Fatal("expected an error for a start outside the vocabulary")
 	}
 }
 
-func TestLoadRejectsMalformedJSON(t *testing.T) {
-	dir := t.TempDir()
-	write(t, dir, `{"actions":`)
-	if _, err := Load(dir); err == nil {
+func TestReadRejectsMalformedJSON(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"actions":`)
+	if _, err := Read(root); err == nil {
 		t.Fatal("expected an error for malformed JSON")
 	}
 }
 
-func TestVCSDefaultsToAuto(t *testing.T) {
-	v, err := VCS(t.TempDir())
-	if err != nil || v != "auto" {
-		t.Fatalf("VCS = %q, %v; want auto", v, err)
+// The config is anchored on the repository root: running from a subdirectory
+// must find the same file rather than silently falling back to defaults.
+func TestReadFindsConfigFromSubdirectory(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"vcs": "jj"}`)
+	sub := filepath.Join(root, "internal", "cli")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Read(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VCS != "jj" || cfg.Path != filepath.Join(root, ".kiln", FileName) {
+		t.Fatalf("cfg = %+v, want the repo-root file", cfg)
 	}
 }
 
-func TestVCSReadsConfig(t *testing.T) {
-	dir := t.TempDir()
-	write(t, dir, `{"vcs":"jj"}`)
-	v, err := VCS(dir)
-	if err != nil || v != "jj" {
-		t.Fatalf("VCS = %q, %v; want jj", v, err)
+func TestEnsureWritesCommentedDefaults(t *testing.T) {
+	root := mkRepo(t)
+	path, created, err := Ensure(root)
+	if err != nil || !created {
+		t.Fatalf("Ensure = %q, %v, %v; want a fresh file", path, created, err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "//") {
+		t.Fatalf("seeded config carries no comments:\n%s", body)
+	}
+	// The seed must be a valid config that reproduces the built-in defaults —
+	// otherwise editing it would change behaviour before the user touches it.
+	cfg, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Actions.Start() != "ask" || !cfg.Actions.IsTerminal("conclude") || !cfg.Actions.IsTerminal("apply") {
+		t.Fatalf("seeded vocabulary is not the default: %v", cfg.Actions.Names())
+	}
+	if cfg.VCS != "auto" {
+		t.Fatalf("seeded VCS = %q, want auto", cfg.VCS)
+	}
+}
+
+func TestEnsureKeepsAnExistingFile(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"vcs": "jj"}`)
+	path, created, err := Ensure(root)
+	if err != nil || created {
+		t.Fatalf("Ensure = %q, %v, %v; want it left alone", path, created, err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"vcs": "jj"}` {
+		t.Fatalf("file was clobbered: %q", body)
+	}
+}
+
+func TestEnsureOutsideRepoFails(t *testing.T) {
+	if _, _, err := Ensure(t.TempDir()); err == nil {
+		t.Fatal("expected an error when there is no repository root to write to")
 	}
 }

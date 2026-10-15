@@ -25,7 +25,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
-（可用当前目录的 .kiln.json 覆盖，见 docs/mvp-plan.md §2.3）
+（配置：<仓库根>/.kiln/config.jsonc，JSONC；用 kiln config path 打印路径，见 docs/mvp-plan.md §2.3）
 
 do/commit 的 flags:
   --title  --refs  --target  --scope  --domain  --tag
@@ -48,6 +48,7 @@ var usageCommands = [][2]string{
 	{"kiln graph [--format=ascii]", "问题关系图"},
 	{"kiln workspace new <issue>", "建专用工作区（主干只读，动作只在专用区提交）"},
 	{"kiln workspace list", "列出全部工作区（主干 + 专用）"},
+	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 }
 
 // usageText renders the help text, aligning descriptions by terminal display
@@ -176,24 +177,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText())
 		return 0
-	case "do", "commit", "path", "status", "check", "list", "graph", "show", "workspace":
+	case "do", "commit", "path", "status", "check", "list", "graph", "show", "workspace", "config":
 		// handled below, once the vocabulary is loaded
 	default:
 		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
 		return 2
 	}
 
-	actions, err := config.Load(".")
+	cfg, err := config.Read(".")
 	if err != nil {
 		fmt.Fprintf(stderr, "配置错误: %v\n", err)
 		return 1
 	}
-	pref, err := config.VCS(".")
-	if err != nil {
-		fmt.Fprintf(stderr, "配置错误: %v\n", err)
-		return 1
-	}
-	e := &env{actions: actions, dir: ".", vcsPref: pref, out: stdout, errw: stderr}
+	e := &env{actions: cfg.Actions, dir: ".", vcsPref: cfg.VCS, out: stdout, errw: stderr}
 	switch cmd {
 	case "do":
 		return e.write(rest, false)
@@ -213,6 +209,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.graph(rest)
 	case "workspace":
 		return e.workspace(rest)
+	case "config":
+		return e.config(rest)
 	}
 	return 2
 }
@@ -408,6 +406,34 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	}
 	fmt.Fprintf(e.out, "专用工作区: %s\n", path)
 	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
+	if cfgPath, created, err := config.Ensure(e.dir); err != nil {
+		fmt.Fprintf(e.errw, "提示: 未能写入默认配置: %v\n", err)
+	} else if created {
+		fmt.Fprintf(e.out, "已写入默认配置: %s\n", cfgPath)
+	}
+	return 0
+}
+
+// config implements `kiln config path`: it prints where the repository config
+// lives, seeding it when missing so there is always something to edit.
+func (e *env) config(args []string) int {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	if sub != "path" {
+		fmt.Fprintln(e.errw, "用法: kiln config path")
+		return 2
+	}
+	path, created, err := config.Ensure(e.dir)
+	if err != nil {
+		fmt.Fprintf(e.errw, "定位配置失败: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(e.out, path)
+	if created {
+		fmt.Fprintln(e.out, "（原本不存在，已写入一份带注释的默认配置）")
+	}
 	return 0
 }
 

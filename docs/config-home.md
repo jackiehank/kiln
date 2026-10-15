@@ -149,13 +149,57 @@
 - 本仓自身：`.kiln/.gitignore` 从 `/*` 改成 `/ws` 并**提交**（引导动作需在专用区做）；
 - 成文规格与帮助文本同步：`docs/mvp-plan.md` §2.3、`kiln -h` 里"可用 `.kiln.json` 覆盖"那句。
 
-## 待定
+## test：落地配置——`.kiln/config.jsonc`（JSONC + 分组 + 锚定仓库根 + `config path`）
 
-- 旧 `.kiln.json` 兼容的**移除时间点**（当前留一行提示过渡）。
-- 是否随 test 一起补 **`kiln config path`**（collect 的建议：自述配置路径，对齐 `jj config path`）。
+### 落地内容
+
+- **`internal/config` 重写**：
+  - **位置**：`<仓库根>/.kiln/config.jsonc`，**向上搜索**定位——第一个 `<dir>/.kiln/config.jsonc` 命中；最近的仓库根（`.git` / `.jj`）既终止搜索，又给出"还没有文件时该写哪"。
+  - **格式**：**JSONC**——自写 `stripComments`（约 40 行，**零依赖**）：剥 `//` 与 `/* */`，**字符串感知**（`"auto // not a comment"` 是数据）；注释字节**替换成空格**，使字节偏移与行号与原文对齐，json 的报错位置可直接对着文件读。只加注释，**不引入尾逗号**。
+  - **schema 分组**：`actions.{names,start,terminal}` + 顶层 `vcs`；**只认这一种形态**。
+  - **`DisallowUnknownFields`**：键拼错**报错**，不再静默忽略。
+  - **旧 `.kiln.json` 已移除**：硬切，无回落、无兼容层。
+  - `Ensure(startDir)`：缺失时在仓库根写入**带注释的默认配置**（内容即内置默认，可原样编辑）。
+- **`kiln config path`**（新命令）：打印配置路径；不存在则播种并明说。
+- **`kiln workspace new` 也会播种**：写命令把仓库的"家"布置好（幂等、不覆盖已有配置）。
+- **`vcs` 的忽略规则 `/*` → `/ws`**：`.kiln/` 语义随之清爽——**`ws/` 是本地状态（忽略），其余是项目共享（随版本）**。
+- 帮助文本与成文规格同步：`kiln -h` 的配置说明、`docs/mvp-plan.md` §2.3。
+
+### 验证
+
+- `gofmt -l` 干净、`go vet` / `go test ./...` **全绿**。
+- 新增单测 **15 例**：`config` 12 例（剥注释 2、解析 6、锚定 1、`Ensure` 3）+ `cli` 3 例（`config path` 播种 / 二次不重写 / 未知子命令）。
+
+真机（临时仓，新二进制）：
+
+| # | 实验 | 结果 |
+| --- | --- | --- |
+| 1 | 干净 git 仓跑 `kiln config path` | 打印 `<repo>/.kiln/config.jsonc`，并写入**带注释的默认配置**（头几行就是注释） |
+| 2 | 再跑一次 | 只打印路径，**不再播种** |
+| 3 | `kiln workspace new u-test` | 建区（`.kiln/ws/u-test`）+ 顺带"已写入默认配置"；`.kiln/.gitignore` = **`/ws`** |
+| 4 | `git check-ignore -v .kiln/ws/u-test` | `.kiln/.gitignore:1:/ws` → **区被忽略**；而 `config.jsonc` 与 `.gitignore` 在 `git status` 里**可见**（待提交的项目文件） |
+| 5 | 写入**带注释 + 自定义词表**（`["ask","probe","done"]`） | `kiln do u-test probe` 正常；`kiln do u-test hypothesize` → **非法 action**（exit 2）→ 词表确实被替换 |
+| 6 | 子目录 `sub/deep` 里 `kiln config path` | 仍解析到**仓库根那一份** → 修掉了"子目录里静默回落默认值" |
+| 7 | 把键拼错（`"action"`） | `配置错误: … unknown field "action"`，exit 1 → **不静默** |
+| 8 | 只放旧 `.kiln.json`（老扁平 schema，含 `zzz`） | `zzz` → **非法 action（列出的是内置默认词表）**，而 `hypothesize` 正常 → **旧文件已失效** |
+| 9 | colocated jj 仓：`config path` + `workspace new` | 播种在 `<repo>/.kiln/config.jsonc`；`git status` 只列两个项目文件，**区不出现** |
+
+### 发现 / 取舍
+
+1. **`/*` → `/ws` 是对 cli-necessity 布局决策的修订**：那条当时以"零改动受控文件"为由选了自我忽略；"词表算项目共享"一旦成立，自忽略就必须让位——配置得进版本。已回填一行修订注记到 `docs/cli-necessity.md`。
+2. **播种用仓库根，读用最先命中的那份**：因此从某个区里跑，读到的是**该区自己检出出来的那份**（随版本的文件天然如此）——不再有第二个真相源。
+3. **"想要注释"与"stdlib-only"不再冲突**：JSONC 的代价只是一段剥注释代码，不是一个第三方库。
+4. **播种是 `config path` 的既定语义**（"给我一份可编辑的配置"），因此**读命令依旧无副作用**：`status` / `path` 不会悄悄写文件。
+5. 环境提醒（沿用上轮）：`core.autocrlf=true` 让新区 checkout 出 CRLF → `gofmt -l` 会误报整棵树；归一为 LF 后干净，且 `git diff --cached` 证实**无伪改动**。
+
+### 未做 / 待定
+
+- 旧 `.kiln.json` 的**硬切**是否要在用户可见处（如启动时的 stderr）再提醒一次——现在只在 `docs/mvp-plan.md` 说明新位置。
+- 配置的只读视图（如 `config list` / `--json`）本轮未做，只做了 `config path`。
+- 区里那份配置与主干那份**理论上可分叉**（各自是检出副本，且被忽略的 `.kiln/ws` 不进区）；目前靠"配置随版本"自然收敛，没有额外同步机制。
 
 ## 非目标
 
-- 本轮不改代码、不动 `.kiln.json` 的读取位置；只把问题与候选记下来。
 - 不评估"配置放到仓库之外"（与本项目 in-repo 的取向冲突）。
 - 不动 action 词表的**语义**（顺序非约束、起点/终点规则），只谈文件的位置与形态。
+- 暂无用户级 / 系统级配置层——只有"仓库这一层"。

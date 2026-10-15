@@ -66,10 +66,11 @@ func TestAreaPathNamesAreaAfterIssue(t *testing.T) {
 	}
 }
 
-// The state root must exist, and hide itself, before the first area does: jj
-// creates no intermediate directories, and an unignored area would show up as
-// untracked content in the main checkout.
-func TestPrepareAreasCreatesStateRootAndSelfIgnore(t *testing.T) {
+// The state root must exist, and ignore its areas, before the first area does:
+// jj creates no intermediate directories, and an unignored area would show up
+// as untracked content in the main checkout. Only the areas are ignored — the
+// config sitting beside them is project content.
+func TestPrepareAreasCreatesStateRootAndIgnoreFile(t *testing.T) {
 	root := t.TempDir()
 	if err := PrepareAreas(root); err != nil {
 		t.Fatal(err)
@@ -81,8 +82,8 @@ func TestPrepareAreasCreatesStateRootAndSelfIgnore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != ignoreBody {
-		t.Fatalf(".gitignore = %q, want %q", body, ignoreBody)
+	if string(body) != "/ws\n" {
+		t.Fatalf(".gitignore = %q, want only the areas dir ignored", body)
 	}
 }
 
