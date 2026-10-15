@@ -107,7 +107,7 @@ func (r ExecRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
 	return parseWorktrees(out), nil
 }
 
-// AreaState reports what the linked worktree still holds. Both halves mirror
+// AreaState reports what the linked worktree still holds. Every half mirrors
 // what RemoveWorkspace refuses on, so a listing and a removal can never disagree
 // about whether an area is safe to let go. The main checkout carries no issue's
 // work and a detached worktree names no branch, so both report nothing.
@@ -115,26 +115,39 @@ func (r ExecRunner) AreaState(area vcs.WorkspaceInfo) (vcs.AreaState, error) {
 	if area.Main || area.Issue == "" {
 		return vcs.AreaState{}, nil
 	}
-	dirty, err := r.dirty(area.Path)
-	if err != nil {
-		return vcs.AreaState{}, err
-	}
 	merged, err := r.branchMerged(vcs.BranchPrefix + area.Issue)
 	if err != nil {
 		return vcs.AreaState{}, err
 	}
-	return vcs.AreaState{Dirty: dirty, Unmerged: !merged}, nil
+	state := vcs.AreaState{Unmerged: !merged}
+	dirty, gone, err := r.dirty(area.Path)
+	if err != nil {
+		return vcs.AreaState{}, err
+	}
+	state.Dirty, state.Gone = dirty, gone
+	return state, nil
 }
 
 // dirty reports whether the worktree at root still holds uncommitted or
 // untracked changes — the reading behind git's own refusal to drop a dirty
-// worktree.
-func (r ExecRunner) dirty(root string) (bool, error) {
+// worktree — and whether root is gone altogether. Gone is a state of its own,
+// not a failure: git keeps a worktree registered after its directory is deleted
+// by hand, and a listing has to be able to say so instead of dying on the read.
+func (r ExecRunner) dirty(root string) (dirty, gone bool, err error) {
 	out, err := r.runIn(root, "status", "--porcelain")
 	if err != nil {
-		return false, err
+		if !dirExists(root) {
+			return false, true, nil
+		}
+		return false, false, err
 	}
-	return strings.TrimSpace(out) != "", nil
+	return strings.TrimSpace(out) != "", false, nil
+}
+
+// dirExists reports whether path is an existing directory.
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // RemoveWorkspace deletes the linked worktree bound to issue and the branch that

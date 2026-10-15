@@ -83,7 +83,7 @@
 
 | # | 决定 | 依据 |
 | --- | --- | --- |
-| **档位** | **`干净` / `有改动` / `未合并`**；两者同时成立写 **`有改动，未合并`**（一列里并列，不拆多列） | 三档正好是"能不能安全删"的三个答案；一格里写完，读表不会看错列 |
+| **档位** | **`干净` / `有改动` / `未合并`**；两者同时成立写 **`有改动，未合并`**（一列里并列，不拆多列）。**分支后补第四档 `目录已删`**，见 test（续） | 三档正好是"能不能安全删"的三个答案；一格里写完，读表不会看错列 |
 | **main 一行** | **`—`** | main 不是专用区、没有 issue 分支可判；**留空就会被读成"干净"** |
 | **jj 侧** | **少一档**——jj 只会出 `干净` / `有改动` | `workspace forget` 既不问、也不丢提交（工作副本的提交留在同一对象库里），"未合并"在 jj 侧**不是"会丢东西"的理由**，报出来反而误导 |
 | **输出形态（P）** | 三列 `<路径>  <角色>  <状态>`，路径与角色各自按显示宽度对齐 | 顺着现输出尾上加一列，改动最小 |
@@ -140,6 +140,76 @@ $ kiln worktree remove a1                                                  exit 
 
 - **`--status` / `--no-status` 开关**（候选 Y / Z）本轮未做——X 已定。
 - **与 `kiln status`（全库概览）联动**：未做。
-- **`jj` 的"未合回 main"若要成为第四档**：需先有"jj 侧丢不丢"的正例，现在没有。
+- **`jj` 的"未合回 main"若要再补一档**：需先有"jj 侧丢不丢"的正例，现在没有。
 - **状态列的颜色 / 记号**（候选 Q 的紧凑记号）未做。
 - **main 工作树的行尾刷不刷**（见取舍 4）——需 conclude 定。
+
+## test（续）：目录被删的区（prunable）——补第四档「目录已删」
+
+> 起因：A（判定与 `remove` 同源）让 `list` **第一次真的去读每个区**，于是撞出一个 `ask` 问题 1 里列过、上一轮先按三档答掉的边角：**注册还在、目录没了**。
+
+### 1. 撞到的现场
+
+`kiln worktree new a1` 之后**手删区目录** `.kiln/ws/a1`，git 仍登记着它：
+
+```
+$ git worktree list
+<repo>              ...
+<repo>/.kiln/ws/a1  ... [kiln/a1] prunable
+
+$ kiln worktree list          # 三档版本
+读取 worktree 状态失败: git status: chdir <区>: The system cannot find the file specified.
+                                                                              exit 1
+```
+
+**整条 `list` 挂掉**——而"区还在不在"恰恰是这时最想知道的事。三档版本把"读不到"一刀切成"失败"，撞在这里就过头了：它是一个**已知事实**（目录没了），不是读失败。
+
+### 2. 顺带证伪一条旧结论：`git clean -xdf` 并不会删掉区
+
+`cli-necessity` 的取舍里写过"区放在 `.kiln/` 下 → 主干跑 `git clean -xdf` 会把全部区一起删掉"。**本机实测不成立**：
+
+```
+$ git clean -xdf -n
+Would skip repository .kiln/ws/a1      ← git 把区当嵌套仓库，跳过
+Would remove .kiln/.gitignore
+Would remove .kilnconfig.jsonc
+
+$ git clean -xffd -n
+Would remove .kiln/                    ← 要 -ff 才会连区一起抹
+```
+
+于是"目录被删"的真实入口是**手删**（或 `-xffd`）；而三档版本偏偏在这个入口上把整条命令弄挂了。（附带更正：`-xdf` 会删掉 `.kiln/.gitignore`——不过 `worktree new` 下次会把它写回，自愈。**旧结论该改**。）
+
+### 3. 补丁：第四档 `目录已删`
+
+- **`AreaState` 加 `Gone`**：git 侧 `status --porcelain` 失败**且目录确实不存在** → 报 `Gone`；**读得出错但目录还在**仍照旧报错（上表"答不出就退 1"不变）。
+- **渲染**：`目录已删`；与未合并并存写 **`目录已删，未合并`**（分支照样在，删它仍会丢提交）。
+- **jj 侧天然没有这一档**：区目录没了之后 `jj workspace list` 干脆不再列它（`-T` 取 `root` 为空 → 该记录被跳过），故 jj 不受影响。
+- **`remove` 不动**：这种区本来就删不掉（`git worktree remove` 拒绝一个目录已不在的 worktree），三档版本同样失败，**非本轮引入**；要"能清掉它"得让 `remove` 先跑 `git worktree prune`，记在未做。
+
+### 4. 真机验证（新二进制）
+
+```
+$ git worktree list                     # 手删 a1 / a2 的目录后
+<repo>/.kiln/ws/a1  ... [kiln/a1] prunable
+<repo>/.kiln/ws/a2  ... [kiln/a2] prunable
+
+$ kiln worktree list                    # 不再整条挂掉
+<repo>              main（只读/只合并）  —
+<repo>/.kiln/ws/a1  worktree a1          目录已删
+<repo>/.kiln/ws/a2  worktree a2          目录已删，未合并
+                                                                              exit 0
+```
+
+（a2 是"目录已删"与"未合并"并存的活例：目录没了，可 `kiln/a2` 分支仍在、还带着 main 没拿到的提交。）
+
+### 5. 测试
+
+- **`internal/vcs/git/git_test.go`**：`TestAreaStateMatchesWhyRemoveRefuses` 追加一段——建区、`os.RemoveAll(区)`，断言 `AreaState` 报 `Gone` 而**不报错**。
+- **`internal/cli/cli_test.go`**：状态列表补 `目录已删` 与 `目录已删，未合并` 两行。
+- `go vet ./...` / `go test ./...` **全绿**；`gofmt -l` 空（LF 镜像上验）。
+
+### 6. 未做（留给 conclude）
+
+- **`remove` 清不掉这种区**：目录已删的区要清掉，得先 `git worktree prune`（我们目前只"按 issue 找区 → `worktree remove`"，对 prunable 直接报错）。要不要让 `remove` 顺手 prune，留给 conclude。
+- **`.kiln/.gitignore` 被 `-xdf` 删掉后的自愈**（第 2 节）未做验证以外的事——`worktree new` 会重写，够用。

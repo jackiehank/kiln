@@ -137,6 +137,25 @@ func TestAreaStateMatchesWhyRemoveRefuses(t *testing.T) {
 		t.Fatalf("--force must drop it: %v", err)
 	}
 
+	// An area whose directory was deleted by hand stays registered: git calls it
+	// prunable and keeps listing it, so the state must report it rather than fail
+	// the whole listing. A plain `git clean -xdf` spares the areas — git skips a
+	// nested worktree as a nested repository — but a hand delete or `-xffd` does not.
+	path, err = r.NewWorkspace("gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err = r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: "gone"})
+	if err != nil {
+		t.Fatalf("a missing directory must be reported, not raised: %v", err)
+	}
+	if !got.Gone || got.Dirty {
+		t.Fatalf("gone area state = %+v; want Gone alone", got)
+	}
+
 	// The main checkout holds no issue's work, so it reports nothing.
 	if got, err := r.AreaState(vcs.WorkspaceInfo{Main: true}); err != nil || got != (vcs.AreaState{}) {
 		t.Fatalf("main state = %+v, %v; want the zero value", got, err)

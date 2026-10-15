@@ -441,6 +441,8 @@ func TestWorktreeListShowsAreaState(t *testing.T) {
 		{"dirty", vcs.AreaState{Dirty: true}, "有改动"},
 		{"unmerged", vcs.AreaState{Unmerged: true}, "未合并"},
 		{"dirty and unmerged", vcs.AreaState{Dirty: true, Unmerged: true}, "有改动，未合并"},
+		{"gone", vcs.AreaState{Gone: true}, "目录已删"},
+		{"gone and unmerged", vcs.AreaState{Gone: true, Unmerged: true}, "目录已删，未合并"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -69,10 +69,12 @@ type WorkspaceInfo struct {
 	Main  bool   // the main checkout, which kiln keeps read/merge-only
 }
 
-// AreaState is what an area still holds: the two reasons a backend refuses to
-// drop it without force, and nothing else. A listing and a removal read this one
-// answer, so they can never disagree about whether an area is safe to let go.
+// AreaState is what an area still holds: the reasons a backend refuses to drop
+// it without force, plus the case of an area whose directory is gone while the
+// backend still registers it. A listing and a removal read this one answer, so
+// they can never disagree about whether an area is safe to let go.
 type AreaState struct {
+	Gone     bool // the directory is missing while the backend still lists the area
 	Dirty    bool // the area holds uncommitted or untracked changes
 	Unmerged bool // its commits are not reachable from the main checkout
 }

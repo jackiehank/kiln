@@ -544,6 +544,9 @@ func areaStateWord(a vcs.WorkspaceInfo, s vcs.AreaState) string {
 		return "—"
 	}
 	var parts []string
+	if s.Gone {
+		parts = append(parts, "目录已删")
+	}
 	if s.Dirty {
 		parts = append(parts, "有改动")
 	}
