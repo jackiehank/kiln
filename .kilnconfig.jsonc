@@ -11,6 +11,7 @@
   },
   // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
   "vcs": "auto",
-  // worktree 模式：on（默认，动作只在 worktree 提交）| off（允许在 main 提交）
+  // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交，开工前先 kiln worktree new <issue>）
+  // 本仓显式写 off：单人顺序推进时不加隔离，只在并行跑多个 agent 时才改 on。
   "worktree": "off"
 }

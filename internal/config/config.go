@@ -41,27 +41,27 @@ type Config struct {
 	Path     string           // the file kiln used ("" outside a repository)
 	Actions  *model.ActionSet // the vocabulary (built-in defaults when unset)
 	VCS      string           // backend preference: auto | git | jj
-	Worktree string           // isolation mode: on (default) | off
+	Worktree string           // isolation mode: off (default) | on
 }
 
 // Worktree modes answer one question: may an action be recorded in the main
 // checkout, or must it go through a dedicated area?
 const (
-	WorktreeOn  = "on"  // default: the main checkout refuses actions
-	WorktreeOff = "off" // the repository explicitly opted out of isolation
+	WorktreeOn  = "on"  // the repository asked for isolation: the main checkout refuses actions
+	WorktreeOff = "off" // default: the main checkout accepts actions
 )
 
 // Isolated reports whether actions must go through a dedicated area. The zero
-// value — an unset config — means on, so the guard holds unless a repository
-// turns it off by name.
-func (c Config) Isolated() bool { return c.Worktree != WorktreeOff }
+// value — an unset config — means off, so isolation is opt-in: the guard engages
+// only when a repository asks for it by name.
+func (c Config) Isolated() bool { return c.Worktree == WorktreeOn }
 
 // Read resolves and parses the configuration for startDir. A missing file is not
 // an error: kiln falls back to the built-in vocabulary and "auto". A file that
 // exists but does not parse is an error, so a misspelled key is never silently
 // ignored.
 func Read(startDir string) (Config, error) {
-	cfg := Config{Actions: model.DefaultActionSet(), VCS: "auto", Worktree: WorktreeOn}
+	cfg := Config{Actions: model.DefaultActionSet(), VCS: "auto", Worktree: WorktreeOff}
 	path, ok := Path(startDir)
 	if !ok {
 		return cfg, nil // outside a repository: do still works, on the defaults
@@ -121,13 +121,13 @@ func actionSet(f file) (*model.ActionSet, error) {
 
 // worktreeMode normalizes the isolation mode, tolerating case and spacing so a
 // hand-edited file reads the same as one kiln wrote. An unknown value is an error
-// rather than a silent fallback to the safe default.
+// rather than a silent fallback to the default.
 func worktreeMode(v string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", WorktreeOn:
-		return WorktreeOn, nil
-	case WorktreeOff:
+	case "", WorktreeOff:
 		return WorktreeOff, nil
+	case WorktreeOn:
+		return WorktreeOn, nil
 	}
 	return "", fmt.Errorf("非法 worktree: %q（可选 on / off）", v)
 }
@@ -205,8 +205,8 @@ const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享），�
   },
   // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
   "vcs": "auto",
-  // worktree 模式：on（默认，动作只在 worktree 提交）| off（允许在 main 提交）
-  "worktree": "on"
+  // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交——开工前先 kiln worktree new <issue>）
+  "worktree": "off"
 }
 `
 

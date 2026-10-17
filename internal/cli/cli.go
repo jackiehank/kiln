@@ -27,7 +27,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 
 const usageFooter = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
-worktree 默认: on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）| off（允许在 main 提交）
+worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）
 提交范围: git 后端只提交已暂存的改动（kiln 不碰 index，先 git add）| jj 后端固定整个工作副本（无暂存区，无需 add）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
 
@@ -375,7 +375,7 @@ func (e *env) write(args []string, commit bool) int {
 // file documents the option itself.
 func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 	if !e.isolated() {
-		return 0 // worktree: "off" — the repository opted out of isolation
+		return 0 // worktree off (the default) — the repository records actions in main
 	}
 	ws, ok := backend.(vcs.Workspace)
 	if !ok {
@@ -408,10 +408,10 @@ func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 	return 1
 }
 
-// isolated reports whether the repository still requires a dedicated area for
-// actions. An unset value means on: the guard holds unless a repository turned
-// it off by name.
-func (e *env) isolated() bool { return e.worktree != config.WorktreeOff }
+// isolated reports whether the repository requires a dedicated area for actions.
+// An unset value means off: isolation is opt-in, so the guard engages only when a
+// repository asked for it by name.
+func (e *env) isolated() bool { return e.worktree == config.WorktreeOn }
 
 // worktreeTip returns the isolation hint `do` prints on stderr, or "" when there
 // is nothing worth saying. It is best effort on purpose — `do` only prints a

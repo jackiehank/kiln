@@ -159,8 +159,8 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
   },
   // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
   "vcs": "auto",
-  // worktree 模式：on（默认，动作只在 worktree 提交）| off（允许在 main 提交）
-  "worktree": "on"
+  // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交，开工前先 kiln worktree new <issue>）
+  "worktree": "off"
 }
 ```
 
@@ -178,7 +178,7 @@ cd .kiln/ws/cli-necessity            # 进去干活
 kiln commit cli-necessity test ...   # 在这里提交
 ```
 
-- **`worktree` 键默认 `on`**：此时在 main 上直接 `kiln commit` 会被**结构性拒绝**，并提示你先建区。想"就这一次在 main 提交"→ 加 `--force`（**一次性豁免**，不改配置、不留状态）；想长期允许 → 把配置里的 `worktree` 设为 `off`。
+- **`worktree` 键默认 `off`**：开箱即用，在 main 上直接 `kiln commit` 就是允许的。要隔离就在配置里显式写 `"worktree": "on"`：此时在 main 上直接 `kiln commit` 会被**结构性拒绝**，并提示你先建区；想“就这一次在 main 提交”→ 加 `--force`（**一次性豁免**，不改配置、不留状态）。
 - **动手前就会被提醒**：`kiln do` 会先看你站在哪——不在仓库、已关隔离（`off`）、**已经站在区内**，它都闭嘴；在 main 就提醒你"先建区"，而 **main 还有未提交改动时，它直接给出把改动搬进区的现成命令**（git 与 jj 各有一条）。提示只走 stderr，**不会弄脏提交信息**，退出码也不变。
 - **看状态**：`kiln status` 头行报 `｜worktree on（已开 N 个）`；有区的 issue 行尾带 `■`；有区时末行 legend 说明记号，并告诉你**当前站在哪个 worktree**。
 - **被拦下时它给的是出路不是墙**：拒绝语按 main **脏 / 净**分派——净了就只说"先建区"；脏了会先提醒"新区是干净检出，直接建区会把改动留在 main"，再给后端配方。

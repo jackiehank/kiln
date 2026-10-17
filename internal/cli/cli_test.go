@@ -627,13 +627,16 @@ func (w workspaceRunner) AreaState(area vcs.WorkspaceInfo) (vcs.AreaState, error
 }
 func (w workspaceRunner) RemoveWorkspace(string, bool) error { return nil }
 
-// newWorkspaceEnv builds an env whose backend reports the given layout.
+// newWorkspaceEnv builds an env whose backend reports the given layout, with
+// isolation on: these tests exercise the guard a repository asks for by name,
+// which is now opt-in rather than the zero-value default.
 func newWorkspaceEnv(out, errw *bytes.Buffer, dedicated bool) *env {
 	return &env{
-		actions: model.DefaultActionSet(),
-		repo:    workspaceRunner{fakeRunner: demoRunner(), dedicated: dedicated},
-		out:     out,
-		errw:    errw,
+		actions:  model.DefaultActionSet(),
+		repo:     workspaceRunner{fakeRunner: demoRunner(), dedicated: dedicated},
+		worktree: config.WorktreeOn,
+		out:      out,
+		errw:     errw,
 	}
 }
 
@@ -759,10 +762,11 @@ func TestDoTipCarriesTheBackendRecipe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
 			e := &env{
-				actions: model.DefaultActionSet(),
-				repo:    workspaceRunner{fakeRunner: demoRunner(), dirty: true},
-				kind:    tc.kind,
-				out:     &out, errw: &errb,
+				actions:  model.DefaultActionSet(),
+				repo:     workspaceRunner{fakeRunner: demoRunner(), dirty: true},
+				worktree: config.WorktreeOn,
+				kind:     tc.kind,
+				out:      &out, errw: &errb,
 			}
 			if code := e.write([]string{"demo", "test"}, false); code != 0 {
 				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
