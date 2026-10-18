@@ -124,7 +124,7 @@ func usageText(rel *model.RelationSet) string {
 	b.WriteString("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n")
 	writeGroup("  元数据:", meta)
 	writeGroup("  关系:  （均可重复、逗号分隔）", relations)
-	b.WriteString("  说明: <> 必填占位；[] 选填；[,<…>] 可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n")
+	b.WriteString("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n")
 	b.WriteString(usageOtherFlags)
 	return b.String()
 }
