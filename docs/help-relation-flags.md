@@ -169,3 +169,51 @@ do/commit 的 flags:
 - 形态：**flat 逐名（词表生成，别名兼容）+ `--relate` 逃生口 + `--unrelate`**。
 - 帮助：**动态关系小节**（`usageText(rel)`）。
 - 必须一并修：**alias flag 兼容** + **未知 flag ⚠**。
+
+## hypothesize（续）：取消 `--relate` 逃生口 + 核实 `--target`
+
+> 用户指示（2026-10-18）：① 取消逃生口，防止乱改；② 核实 `--target` 现状。
+
+### 1. 取消 `--relate`（逃生口）
+
+- **理由**：逃生口允许写**词表外的关系名**，而这些名没有槽 / 强度定义 → 读侧只能当“未知关系”存着，等于开了个绕过**结构层**的后门。
+- **后果**：写侧关系名的**唯一来源**是词表（canonical + 别名）；词表外的名**无法写入**。需要新关系名就改 `relations.names`（配置），而不是临时 flag。
+- 前文的 `--relate` 相关项（§1.3 / §2 / §3 / §4 / §5 / §6）**作废**。最终形态：
+  1. **flat 逐名 flag**（词表生成；接受别名，归一）；
+  2. **`--unrelate T`**。
+- **未知 `--<key>` flag → ⚠** 仍保留（防拼错）；原“`--relate` 未知名 ⚠”项删去。
+
+### 2. `--target` 核实（现状）
+
+- **语义**：`target:` = “本动作**涉及的文件**”，**不是关系**（README 例：`--target internal/session/lock.go`）。
+- **形态：标量**（`f.get("target")` + `writeScalar`）。实测：
+  - `--target a.go,b.go,c.go` → `target: a.go,b.go,c.go`（**整串，不拆**）
+  - 对照 `--refs a,b,c` → `refs: a, b, c`（拆）
+- **校验：无**。`check` 不核对；渲染也不出错。
+- **已在跟的 issue**：
+  - `target-honesty`（ask）：用 diff 反查 `target:` 是否属实；它 的 Q5 正是“单值还是列表”。
+  - `refs-flag-splitting`：flag 形态（标量 vs 列表）——`--target` 是该族一员。
+  - `agent-ux-review`：已点名“`--target` 标量 vs `--refs`/`--tag` 列表却在同一行，flag 形状不自证”。
+- **对本 issue 的影响**：
+  - `--target` 仍归**元数据**组（不是关系）。
+  - 本 issue 可顺手在帮助里**标注元数**（`--target FILE`（单个）vs `--refs LIST`）——这是“帮助形状”的事；但“要不要让 `target` 变列表”归 `refs-flag-splitting` / `target-honesty`，**本 issue 不动**。
+
+### 3. 更新后的最终形态
+
+```
+do/commit 的 flags:
+  元数据:  --title <文本>  --refs <列表>  --target <单个文件>  --scope <文本>  --domain <文本>  --tag <列表>
+  关系:    --caused-by <issue>  --causes <issue>  ...（词表生成，按槽排序）
+           --unrelate <issue>          撤销与该 issue 的关系
+```
+
+（`--relate` 已删；元数据的“单个 / 列表”标注待定，可与 `agent-ux-review` 对齐。）
+
+### 4. 验收（更新）
+
+1. `--caused-by X` / `--part-of X` / `--relates-to X` 可写。
+2. **`--derived-from X` → `caused-by: X`**（alias 兼容）。
+3. **未知 `--bogus` → ⚠**。
+4. **词表外的关系名无法写**（无 `--relate`）。
+5. `-h` 关系小节从词表生成。
+6. `--target` 行为**不变**（仍标量、不拆、不校验）。
