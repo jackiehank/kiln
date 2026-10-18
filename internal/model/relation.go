@@ -179,6 +179,16 @@ func (rs *RelationSet) Keys() map[string]bool {
 	return out
 }
 
+// Aliases lists the read-compat aliases in sorted order.
+func (rs *RelationSet) Aliases() []string {
+	out := make([]string, 0, len(rs.alias))
+	for k := range rs.alias {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // IsBlocking reports whether the name's slot carries an ordering (must be
 // acyclic).
 func (rs *RelationSet) IsBlocking(name string) bool {

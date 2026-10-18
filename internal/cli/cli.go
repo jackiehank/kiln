@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -25,17 +26,15 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 用法:
 `
 
-const usageFooter = `
+const usagePrologue = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
 worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）
 提交范围: git 后端只提交已暂存的改动（kiln 不碰 index，先 git add）| jj 后端固定整个工作副本（无暂存区，无需 add）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
+`
 
-do/commit 的 flags:
-  --title  --refs  --target  --scope  --domain  --tag
-  --causes  --caused-by  --blocks  --blocked-by  --part-of  --has-part
-  --supersedes  --superseded-by  --relates-to  --unrelate
-
+// usageOtherFlags are the per-command flags that are not the do/commit surface.
+const usageOtherFlags = `
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
@@ -63,9 +62,33 @@ var usageCommands = [][2]string{
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 }
 
+// flagHelp is one row of the do/commit flag help: the flag, its value shape
+// ("<issue>[,<issue>]" for a repeatable comma-separated list), and a gloss.
+type flagHelp struct{ flag, shape, gloss string }
+
+// doCommitFlagGroups builds the do/commit flag help from a fixed metadata group
+// and a relation group generated from the vocabulary.
+func doCommitFlagGroups(rel *model.RelationSet) (meta, relations []flagHelp) {
+	meta = []flagHelp{
+		{"--title", "<文本>", "动作标题"},
+		{"--refs", "<条目>[,<条目>]", "引用"},
+		{"--target", "<文件>", "涉及的文件（单个）"},
+		{"--scope", "<文本>", "范围"},
+		{"--domain", "<名字>", "分类"},
+		{"--tag", "<标签>[,<标签>]", "标签"},
+	}
+	for _, name := range rel.Names() {
+		relations = append(relations, flagHelp{"--" + name, "<issue>[,<issue>]", ""})
+	}
+	relations = append(relations, flagHelp{"--unrelate", "<issue>[,<issue>]", "撤销与该 issue 的关系"})
+	return meta, relations
+}
+
 // usageText renders the help text, aligning descriptions by terminal display
-// width so full-width CJK text does not skew the columns.
-func usageText() string {
+// width so full-width CJK text does not skew the columns. The do/commit flag
+// section is generated from the relation vocabulary, so it never drifts from
+// what the parser actually accepts.
+func usageText(rel *model.RelationSet) string {
 	width := 0
 	for _, c := range usageCommands {
 		if w := displayWidth(c[0]); w > width {
@@ -77,7 +100,32 @@ func usageText() string {
 	for _, c := range usageCommands {
 		b.WriteString("  " + pad(c[0], width) + "  " + c[1] + "\n")
 	}
-	b.WriteString(usageFooter)
+	b.WriteString(usagePrologue)
+
+	meta, relations := doCommitFlagGroups(rel)
+	flagWidth := 0
+	for _, rows := range [][]flagHelp{meta, relations} {
+		for _, r := range rows {
+			if w := displayWidth(r.flag + " " + r.shape); w > flagWidth {
+				flagWidth = w
+			}
+		}
+	}
+	writeGroup := func(title string, rows []flagHelp) {
+		b.WriteString(title + "\n")
+		for _, r := range rows {
+			line := "    " + pad(r.flag+" "+r.shape, flagWidth)
+			if r.gloss != "" {
+				line += "  " + r.gloss
+			}
+			b.WriteString(strings.TrimRight(line, " ") + "\n")
+		}
+	}
+	b.WriteString("\ndo/commit 的 flags:\n")
+	writeGroup("  元数据:", meta)
+	writeGroup("  关系:  （均可重复、逗号分隔）", relations)
+	b.WriteString("  说明: <> 是占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n")
+	b.WriteString(usageOtherFlags)
 	return b.String()
 }
 
@@ -159,6 +207,50 @@ func (e *env) rel() *model.RelationSet {
 	return e.relations
 }
 
+// fixedFlags are the do/commit flags that are not relation names.
+var fixedFlags = map[string]bool{
+	"title": true, "refs": true, "target": true, "scope": true,
+	"domain": true, "tag": true, "unrelate": true,
+}
+
+// relationsFromFlags reads relation declarations from the parsed flags. It
+// accepts canonical names and aliases (resolved to canonical) and warns about
+// unknown flags instead of dropping them silently.
+func (e *env) relationsFromFlags(f flags) []model.Rel {
+	rel := e.rel()
+	var out []model.Rel
+	add := func(key string) {
+		n, ok := rel.Resolve(key)
+		if !ok {
+			return
+		}
+		for _, t := range f.list(key) {
+			out = append(out, model.Rel{Name: n.Name, Target: t})
+		}
+	}
+	for _, name := range rel.Names() {
+		add(name)
+	}
+	for _, alias := range rel.Aliases() {
+		add(alias)
+	}
+	var unknown []string
+	for key := range f {
+		if fixedFlags[key] {
+			continue
+		}
+		if _, ok := rel.Resolve(key); ok {
+			continue
+		}
+		unknown = append(unknown, key)
+	}
+	sort.Strings(unknown)
+	for _, key := range unknown {
+		fmt.Fprintf(e.errw, "警告: 未知 flag --%s（关系名见 -h；别名 derived-from / spawns 亦可）\n", key)
+	}
+	return out
+}
+
 // backend returns the repository backend, opening it from dir/config on first
 // use and caching it. Tests inject one via repo.
 func (e *env) backend() (vcs.Repo, error) {
@@ -192,29 +284,35 @@ func openRepo(dir, prefer string) (vcs.Repo, vcs.Kind, error) {
 
 // Run executes one command and returns the process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
+	// Load config before help so `-h` reflects the project's relation vocabulary.
+	// Help must not fail on a broken config: fall back to the built-in default.
+	cfg, cfgErr := config.Read(".")
+	rel := model.DefaultRelationSet()
+	if cfgErr == nil && cfg.Relations != nil {
+		rel = cfg.Relations
+	}
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usageText())
+		fmt.Fprint(stderr, usageText(rel))
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usageText())
+		fmt.Fprint(stdout, usageText(rel))
 		return 0
 	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config":
-		// handled below, once the vocabulary is loaded
+		// handled below
 	default:
 		if now, ok := retiredCommands[cmd]; ok {
-			fmt.Fprintf(stderr, "未知命令: %s（已改名为 `%s`）\n\n%s", cmd, now, usageText())
+			fmt.Fprintf(stderr, "未知命令: %s（已改名为 `%s`）\n\n%s", cmd, now, usageText(rel))
 			return 2
 		}
-		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText())
+		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText(rel))
 		return 2
 	}
 
-	cfg, err := config.Read(".")
-	if err != nil {
-		fmt.Fprintf(stderr, "配置错误: %v\n", err)
+	if cfgErr != nil {
+		fmt.Fprintf(stderr, "配置错误: %v\n", cfgErr)
 		return 1
 	}
 	e := &env{actions: cfg.Actions, relations: cfg.Relations, dir: ".", vcsPref: cfg.VCS, worktree: cfg.Worktree, out: stdout, errw: stderr}
@@ -322,12 +420,7 @@ func (e *env) write(args []string, commit bool) int {
 		}
 	}
 
-	rels := make([]model.Rel, 0)
-	for _, name := range e.rel().Names() {
-		for _, t := range f.list(name) {
-			rels = append(rels, model.Rel{Name: name, Target: t})
-		}
-	}
+	rels := e.relationsFromFlags(f)
 	msg := trailer.Format(trailer.Fields{
 		Issue:     issue,
 		Action:    action,

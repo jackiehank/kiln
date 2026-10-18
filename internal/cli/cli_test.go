@@ -332,7 +332,7 @@ func TestPadUsesDisplayWidth(t *testing.T) {
 // Every command line must place its description at the same display column,
 // even though the commands differ in length.
 func TestUsageTextAlignsDescriptions(t *testing.T) {
-	text := usageText()
+	text := usageText(model.DefaultRelationSet())
 	col := -1
 	for _, c := range usageCommands {
 		i := strings.Index(text, "  "+c[0])
@@ -355,7 +355,7 @@ func TestUsageTextAlignsDescriptions(t *testing.T) {
 // help cannot point at documents that live in one particular repository — the
 // reader may not have them.
 func TestUsageTextCitesNoRepositoryDocument(t *testing.T) {
-	text := usageText()
+	text := usageText(model.DefaultRelationSet())
 	for _, unwanted := range []string{"docs/", ".md"} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("help must not cite a document (%q):\n%s", unwanted, text)
@@ -1058,7 +1058,7 @@ func TestCommitInMainAllowedWhenWorktreeOff(t *testing.T) {
 
 // The command surface speaks one word for isolation: worktree.
 func TestUsageNamesTheWorktreeCommand(t *testing.T) {
-	text := usageText()
+	text := usageText(model.DefaultRelationSet())
 	for _, want := range []string{"kiln worktree new", "kiln worktree list", "kiln worktree remove"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage must name %q:\n%s", want, text)

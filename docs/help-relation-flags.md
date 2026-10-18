@@ -343,3 +343,41 @@ do/commit 的 flags:
 - **处置**：三续里的**第 3 条（`--json` help）标为暂缓、不在本轮**；其余三条（分命令帮助 `kiln <cmd> -h`、`kiln help [cmd]`、单一真源）保留。
 - **理由 / 影响**：`--json` help 要与 `status`/`list`/`check` 的 `--json` 契约对齐，并且会**把“命令 / flag 结构化表”的 schema 过早冻结**；先不定，保留重构余地。
 - **仍待定**：分命令 / 单一真源的**框架**是否另开一个 issue（还是并入 `help-alignment`）。
+
+## apply：落地与验证（2026-10-18）
+
+### 0. 先确认：本 issue 不依赖分命令帮助
+
+- 各命令的 flag 小节**本来就在全局 `-h`**（`usageFooter`）；→ 改 `do/commit` 小节**不需要** `kiln do -h`。
+- 唯一小耦合：`usageText` 需要词表→ 已把 `config.Read` 提到 help 分支**之前**，且**容错**（坏配置不让 `-h` 失败，回退默认词表）。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `model/relation.go` | 新增 `RelationSet.Aliases()`（排序） |
+| `cli.go` 帮助 | `usageText(rel)`；`usageFooter` 拆成 `usagePrologue` + `usageOtherFlags`；`do/commit 的 flags` 改为**分组 + 从词表生成 + 值形状**（`flagHelp` / `doCommitFlagGroups`）；行尾去空 |
+| `cli.go` `Run` | 先读配置（容错），help/未知命令都用 `rel` |
+| `cli.go` `write` | 新增 `relationsFromFlags`：canonical 名 + **别名（归一）**；未知 `--key` → **⚠** |
+| 测试 | `usageText(model.DefaultRelationSet())` 调用点同步 |
+
+### 2. 验收（实测）
+
+| # | 项 | 结果 |
+| --- | --- | --- |
+| 1 | `--causes` / `--part-of` / `--relates-to` 可写 | ✓ |
+| 2 | **`--derived-from X` → `caused-by: X`**（alias 兼容） | ✓ |
+| 3 | 未知 `--bogus` → ⚠ | ✓ |
+| 4 | `--relate`（已删）→ ⚠ | ✓ |
+| 5 | `-h` 关系小节从词表生成、带值形状 | ✓ |
+| 6 | `--target` 行为不变 | ✓ |
+
+- `go build ./...` / `go test ./...` 全过。
+
+### 3. 未做（框架期）
+
+- **分命令帮助** `kiln <cmd> -h` / `kiln help [cmd]`；
+- **`--json` help**（暂缓）；
+- **单一真源**（命令 / flag 结构化表，文本与 JSON 同源）。
+
+→ 建议另开一个 issue（或并入 `help-alignment`）承接这三项。
