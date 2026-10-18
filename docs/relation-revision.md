@@ -745,3 +745,69 @@ K4 的收益，恰好回应「名字还不成熟」：
 4. **`silent-flag-drop` 的担忧被实测坐实**：未知 trailer 键既不入模型也不报错。
 5. **未做**：端到端的槽/LWW/反向推导行为（需先实现）；最小仓目前只能验“当前实现”。
 6. **`-h` 也硬编码**：`usageFooter`（`cli.go:34-36`）直接把 5 个关系 flag 列在静态字符串里；一旦词表可配置，`-h` 也必须改成**从 `relations.names` 生成**，否则帮助与实际能力脱节（这是 `cli.go` 三处硬编码中的一处）。
+
+## conclude：结论（2026-10-18）
+
+### 0. 一句话
+
+关系的修正是**读侧 LWW + 单值槽 + 强度格**，**不改历史**；`unrelate` 作墓碑；**词表可配置、结构引擎固定**。
+
+### 1. 取向（ask Q1）
+
+关系是**当前事实的描述**，不是证据。→ 写错可改，且改它不碰动作内容；历史仍是证据（提交不可变）。
+
+### 2. 机制（ask Q2）
+
+- **键 = `(无序对, 槽)`**；槽 = **阻塞 / 非阻塞**。
+- **槽内是强度格**，读侧**取强**（LWW）：
+  - 非阻塞槽：`relates-to` 弱于 `causes`/`caused-by` 弱于 `supersedes`
+  - 阻塞槽：`blocks` 弱于 `part-of`
+- **有向 / 无向是值的一部分，不进键**；键用**无序对** → 双向声明 / 反向共存自动折叠。
+- **不需要多重边**：真实 48 边里 `(对,槽)` 重数>1 只 3 例，全是“重复”或“应折叠”。
+- 硬约束：**槽内全序；不可比者分槽**。
+
+### 3. 反向推导（ask Q3）
+
+**必需（硬依赖）**：单侧声明 + 读侧推导反向 + **入边索引**。真实数据里出现双侧都写（test 例 3），靠读侧去重 + `check` ⚠。
+
+### 4. 历史改写（ask Q4）
+
+**不需要**；官方答案 = 追加 **`unrelate: X`**（作废该 pair 全槽；同动作内**声明优先于 unrelate**）。
+
+### 5. 检出（ask Q5）
+
+默认**只显当前态**（读侧 LWW 覆盖）；被撤销的边仍在提交里，由 `show` 看。
+
+### 6. `check`（ask Q6）
+
+补齐：**全键目标存在** ⚠ + **双侧声明冗余** ⚠ + **`part-of` AND** ⚠。
+
+### 7. 词表可配置（结构固定）
+
+- **可配（名字层）**：`relations.slots` / `relations.names`（名字、释义、slot、rank、directed）/ `relations.aliases`。
+- **固定（结构层）**：键 `(对,槽)`、`slot.blocking`、槽内强度全序、`directed`。
+- **默认词表 = 9 个可写名**（`relation-vocabulary` 定稿）：`causes`/`caused-by`、`part-of`/`has-part`、`blocks`/`blocked-by`、`supersedes`/`superseded-by`、`relates-to`。
+- **aliases**：`derived-from`→`caused-by`、`spawns`→`causes`（实测 16 条旧边无损可读）。
+
+### 8. 渲染接口（与 `relation-rendering` 对齐）
+
+**写 9 / 句渲 2（正反，主语=X）/ 图渲 1（声明源箭头）**。
+
+### 9. 依据
+
+- **collect**：六种机制；同类工具无“并集只增”。
+- **test 1（真实仓）**：42 issue / 48 边；K4 获支持；强度格非空转；单侧声明靠不住；dangling 0；`relates-to` 56%。
+- **test 2（改动面 + 最小仓）**：新名 / tombstone 当前**静默丢弃**；改动面集中 model / trailer / engine；`-h` 三处硬编码；别名无损。
+
+### 10. 遗留 / 转出
+
+1. **实现（另开 `apply`）**：`model` 字段→map；`trailer` 配置驱动；`engine` 取强 + 入边索引；`config` 新增 `relations`；`cli` 三处。
+2. **`help-relation-flags`**（已新开）：`-h` 关系 flag 分组 + 动态生成。
+3. **`silent-flag-drop`**：未知 trailer 键的处置（实测确认静默丢弃）。
+4. **未做**：端到端的槽 / LWW / 反向推导行为（需先实现）。
+
+### 11. 非目标
+
+- 不改关系词表本身（`relation-vocabulary`）。
+- 不改渲染的**全部**规格（`relation-rendering`）。
+- 不实现代码（本 issue 只定机制；实现另开 `apply`）。
