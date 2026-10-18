@@ -85,3 +85,87 @@
 - Jira CLI 通用 `--link`：`jira --action linkIssue --issue X --toIssue Y --link "Relates"`（[Appfire JCLI linkIssue](https://appfire.atlassian.net/wiki/spaces/SUPPORT/pages/89147359/How+to+use+linkIssue)）（一手 / 厂商文档）。
 - 子命令式关系管理：`jira issue link`（[matcra587/jira-cli](https://pkg.go.dev/github.com/matcra587/jira-cli@v0.9.1/internal/cli/issue)）、`jtk links create ... --type`（[atlassian-cli #148](https://github.com/open-cli-collective/atlassian-cli/issues/148)）（二手 / 提案）。
 - Cobra flag groups： [entireio/cli flaggroups.go](https://github.com/entireio/cli/blob/v0.11.3/cmd/entire/cli/flaggroups.go)（一手）。
+
+## hypothesize：参数形态 + 帮助分组设计（采纳方案 3）
+
+> 用户倾向方案 3（flat 逐名 flag + 通用逃生口 + `-h` 关系小节）。本节把它设计到可实现。
+
+### 0. 先修一个既有缺陷（实测）
+
+`relations-impl` 之后，`write` 只从 `e.rel().Names()`（canonical 名）取 flag，于是：
+
+| 命令 | 现状 |
+| --- | --- |
+| `kiln do i1 ask --caused-by i2` | 输出 `caused-by: i2` ✓ |
+| `kiln do i1 ask --derived-from i2` | **静默丢弃**（无 `caused-by`）✗ |
+| `kiln do i1 ask --bogus i2` | 静默丢弃 |
+
+→ 本设计必须同时解决：**alias flag 兼容** + **未知 flag 不再沉默**。
+
+### 1. 参数形态（三层）
+
+1. **flat 逐名 flag（主，词表生成）**——canonical 名 + **别名也接受**（归一）：
+   `--causes` / `--caused-by` / `--part-of` / `--has-part` / `--blocks` / `--blocked-by` / `--supersedes` / `--superseded-by` / `--relates-to`；
+   别名（仅写侧兼容，不出现在 `-h`）：`--derived-from`→`caused-by`、`--spawns`→`causes`。
+   可重复 + 逗号分隔（与 `refs`/`tag` 一致）。
+2. **`--unrelate T`**：墓碑。
+3. **通用逃生口 `--relate NAME=TARGET`**（可重复；也接受 `NAME:TARGET`，贴 `git --trailer`）：
+   - 用途：① 词表外的自定义名；② 脚本 / 一次性。
+   - 解析时过 `rel.Resolve(NAME)`；未知名**不沉默**（见 §2）。
+
+### 2. 校验与“不沉默”（与 `silent-flag-drop` 的接口）
+
+- **未知 `--<key>` flag**：现在全静默。设计：`do`/`commit` 对不在 `{固定 flag} ∪ {词表名 ∪ 别名} ∪ {relate, unrelate}` 的 `--key` 给 **⚠ 提示**（可能拼错），但**不拦**（宽容输入）。
+- **`--relate` 未知名**：同上 ⚠。
+- 具体“报错还是提示”与 `silent-flag-drop` 保持一致（该 issue 正在 `ask`）。
+
+### 3. 帮助分组（`-h`，动态生成）
+
+```
+do/commit 的 flags:
+  元数据:  --title  --refs  --target  --scope  --domain  --tag
+  关系:    --caused-by  --causes  --part-of  --has-part  --blocks  --blocked-by
+           --supersedes  --superseded-by  --relates-to
+           --unrelate X            撤销与该 issue 的关系
+           --relate NAME=TARGET    通用关系（词表外的名走这条）
+```
+
+- **关系行由 `rel.Names()` 生成**（按槽 / rank 排序）；**别名不列出**。
+- `usageText()` → `usageText(rel *model.RelationSet)`；调用点传 `e.rel()`（无仓库时用默认词表）。
+- 可选：再按**槽**分两组（阻塞 / 谱系），贴 Cobra flag groups。
+
+### 4. 实现落点
+
+| 位置 | 改动 |
+| --- | --- |
+| `cli.go write` | rels 来源 = canonical 名 + 别名（`Resolve` 归一） + `--relate` |
+| `cli.go usageFooter` / `usageText` | 关系小节**动态生成**；`usageText` 加 `rel` 参数 |
+| `cli.go` 调用点（`-h` / 未知命令） | 传 `e.rel()` 或默认词表 |
+| `do`/`commit` 校验 | 未知 flag / 未知名 → ⚠（§2） |
+
+### 5. 取舍
+
+- **flat + 别名都写**：兼容旧脚本（`--derived-from`）；但 `-h` 只列 canonical → **不教别名**（符合 `relation-vocabulary` 的“别名只读”）。
+- **`--relate` 用 `=`（也收 `:`）**：贴 git，且 shell 友好（不用引号）。
+- 不给 `--relate` 短形式（无必要）。
+
+### 6. 验收
+
+1. `--caused-by X`、`--causes X`、`--part-of X`、`--relates-to X` 可写。
+2. **`--derived-from X` → 输出 `caused-by: X`**（alias 兼容）。
+3. `--relate part-of=X` → `part-of: X`；`--relate nonsense=X` → ⚠。
+4. 未知 `--bogus` → ⚠。
+5. `-h` 关系小节从词表生成（改 `relations.names` 会变）。
+6. 全在 `do`（不提交）下即可验。
+
+### 7. 非目标
+
+- 不做子命令 `kiln relate ...`（collect 已否）。
+- 不改关系机制 / 词表本身。
+- 不动 `-h` 其它段落（除非为分组）。
+
+### 结论（设计，待确认）
+
+- 形态：**flat 逐名（词表生成，别名兼容）+ `--relate` 逃生口 + `--unrelate`**。
+- 帮助：**动态关系小节**（`usageText(rel)`）。
+- 必须一并修：**alias flag 兼容** + **未知 flag ⚠**。
