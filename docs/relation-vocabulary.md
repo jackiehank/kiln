@@ -376,18 +376,19 @@
 | **D3** | 反名 `spawns` | 保留 / 改 `spawned-by` / `branches-into` | 与 `derived-from` 对称性 |
 | **D4** | 反名 `has-part` | 保留 / 改 `has-sub-issue` / `contains` | 与 `part-of` 对称性 |
 | **D5** | `part-of` 一族的名 | `part-of`/`has-part` vs `sub-issue-of`/`has-sub-issue` | `relation-types` 待选 |
-| **D6** | `derived-from` | 保留 | 实验三已证读得对；不建议再动 |
+| **D6** | `derived-from` 的名字 | 保留 / 改名 | **不在本 issue**——归 `derived-from-direction`：读侧已证清白（2/2），但 wsl-agent owner 提过改名，且「写反了没人管」待验 |
 | **D7** | 同源名 | 新造 | 归 `common-origin` |
 
 ### 3. 已定、不动的部分
 
 - **两条命名原则**：有向关系的键名必须含**介词**；**主语恒为声明方**。
 - **`relates-to` 保留**（第四轮：在有干扰项下未被滥用）。
-- **`derived-from` 保留**（第三轮裸名字：2/2 读对、清晰度 5/5、零迁移成本）。
+- **`derived-from` 读侧已证清白**（第三轮裸名字：2/2 读对、清晰度 5/5）——但**名字是否保留归 `derived-from-direction`**（wsl-agent owner 提过改名；写侧方向与“写反了没人管”未验）。
 - **数量结构**：非对称关系写侧正反各一；对称关系一名，无反向。
 
 ### 4. 影响面（定了之后要回写的）
 
+- **`derived-from` 的命名与写侧方向**归 `derived-from-direction`（后者在本仓已存在：wsl-agent 反馈 + 「写反了没人管」未验）；其非目标里「写侧 5 个名字已定稿」的前提已因本节点过期，需一并更新。
 - `relation-rendering` 的结论已假定「写 9 / 句渲 2 / 图渲 1」与反名可渲；**若 D2 改主名，箭头规范方向随之变**。
 - `relation-types` 的「9 个名字」需与 D1–D5 同步。
 - 默认词表（模板）在 D1–D5 定了之后才能冻结。
