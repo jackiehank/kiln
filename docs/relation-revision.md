@@ -703,3 +703,44 @@ K4 的收益，恰好回应「名字还不成熟」：
 3. **检出**：默认只显当前态；历史由 `show`（未来 `--history`）看。
 4. **check**：先补齐“全键目标存在”，再分批加“双侧声明冗余”与“part-of AND”两条 ⚠。
 5. 至此本 issue 的机制设计无未定项；剩下的都是 `test`（量改动面 / 最小仓）与 `conclude`。
+
+## test：改动面盘点 + 最小仓实测——新名与 tombstone 会被静默丢弃（2026-10-18）
+
+### 1. 改动面（代码盘点）
+
+| 文件 | 现状 | 设计要改成 |
+| --- | --- | --- |
+| `internal/model/model.go` | `Action` 与 `Issue` 两个结构**各有 5 个关系字段**（共 10 处声明） | `map[(对,槽)] → (name,dir)` |
+| `internal/trailer/trailer.go` | 解析/输出 **5 个硬编码键** | 配置驱动（`relations.names`） |
+| `internal/engine/engine.go` | 5 行 `appendUnique` 并集（`:71-75`）；`relationLines` 硬编码三族（`:302-313`）；`checkIssue` | 取强（单值槽）+ **入边索引** + 按槽分组 |
+| `internal/cli/cli.go` | 5 个 flag（`--derived-from` 等）+ `relationSummary` | 配置驱动 |
+| `internal/config/config.go` | **只有 `actions`，没有 `relations`** | 新增 `relations.slots/names/aliases` |
+| 测试 | `trailer_test` / `engine_test` / `cli_test` 引用旧名 | 同步 |
+
+→ **改动面集中在 model / trailer / engine 三处**；cli / config 次之。
+
+### 2. 最小仓实测（用当前 `kiln.exe`）
+
+造一个 4 issue 的临时 git 仓（`/tmp/...`），分别写入不同 trailer，看 `path` 是否读得出：
+
+| 写入的 trailer | `path` 结果 | 结论 |
+| --- | --- | --- |
+| `causes: i1`（新名） | **不显示任何关系** | **新名被静默丢弃** |
+| `derived-from: i1`（旧名） | 显示 `关系: derived-from i1` | 旧名正常 |
+| `unrelate: i1`（tombstone） | **不显示、也无报错** | tombstone 未识别 |
+
+- `check` 也只报“缺少终点动作”，**没有报未知 trailer 键** → **静默丢弃坐实**（`silent-flag-drop` 的风险是真的）。
+
+### 3. 别名实测（真实数据）
+
+- 本仓现有 **16 条 `derived-from`、0 条 `spawns`**。
+- 映射：`derived-from: X` → `caused-by: X`（方向一致）；`spawns: X` → `causes: X`。
+- → **16 条旧边全部可由 alias 无损读出**；改动是纯“读侧改名”。
+
+### 4. 结论
+
+1. **改名 + tombstone 的落地前置 = trailer 解析改成配置驱动**；现在硬编码 5 键，新名一律静默丢。
+2. **改动面**集中在 model / trailer / engine；config 需新增 `relations` 段。
+3. **别名无损**：16 条 `derived-from` 可安全映射到 `caused-by`。
+4. **`silent-flag-drop` 的担忧被实测坐实**：未知 trailer 键既不入模型也不报错。
+5. **未做**：端到端的槽/LWW/反向推导行为（需先实现）；最小仓目前只能验“当前实现”。
