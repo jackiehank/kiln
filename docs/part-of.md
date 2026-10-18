@@ -317,3 +317,31 @@
 
 - **命名**：建议 `sub-issue-of`/`has-sub-issue`（零迁移改）；否则保留 `part-of`/`has-part`。
 - **AND**：不靠名字，靠三层（释义 / 进度 / `check` 警告）。
+
+## hypothesize：命名改按「领域无关」定——保留 `part-of` / `has-part`
+
+> 用户观点（2026-10-18）：kiln 之后要用于**想法管理**，不只是编程领域；而对象**已经叫 issue**，再加一个 `sub-issue` 差不多。
+
+### 1. 接受，并据此改建议
+
+- **`sub-issue-of` = “issue 的 issue”**：当对象已统一叫 issue 时，这个名把**对象类型又写了一遍**——在想法管理场景里更别扭（“这个想法是那个想法的 sub-issue”）。
+- **`part-of` 是领域无关的 part–whole 术语**：对 issue、对想法、对未来任何对象都成立。
+- 实验本来就没分出高下（主判据平手；头对头 4:3 未达偏好阈）→ **没有证据支撑为编程场景换名**。
+
+→ **推荐：保留 `part-of` / `has-part`。** `sub-issue-of` / `has-sub-issue` 降为“编程场景替代名”，随时可由 `relations` 配置覆盖（`relation-revision` 已定词表可自定义）。
+
+### 2. 唯一的软代价及缓解
+
+- 实验里 `part-of` 的软代价只有一条：**自报**“更易被读成依赖”。但**实测消歧题（D1/D2）两臂 100% 全对**——没有任何 agent 真的把引发/依赖误写成 `part-of`。→ 那是“judgment 印象”，不是“实测错误”。
+- 缓解（写进 Skill 释义）：`part-of = 结构组成，**不是**先后依赖；依赖用 `blocks`/`blocked-by``。
+
+### 3. 结论
+
+- **命名：保留 `part-of` / `has-part`。** 领域无关优先于单一场景自然度。
+- AND 载体仍按三层（释义 / 进度 / `check` 软警告）。
+- 本 issue 的 `sub-issue-of` 讨论保留为记录（不删）。
+
+### 4. 回写清单（因保留而缩水）
+
+- `relation-types` / `relation-vocabulary` **无需改名**（本来就定的 `part-of`）。
+- 只需新增：§2 的消歧释义 + AND 三层载体（分别归 Skill / `relation-rendering` / `check`）。
