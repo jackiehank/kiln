@@ -345,3 +345,29 @@
 
 - `relation-types` / `relation-vocabulary` **无需改名**（本来就定的 `part-of`）。
 - 只需新增：§2 的消歧释义 + AND 三层载体（分别归 Skill / `relation-rendering` / `check`）。
+
+## hypothesize（续）：更正——“`part-of` 易被读成依赖”是设计意图，不是缺陷
+
+> 用户指出（2026-10-18）：按最新的关系分类，`part-of` **本来就是 `blocks` 的加强**。
+
+### 1. 更正
+
+- 按 `relation-revision` 的槽模型：**阻塞槽**的强度格是 `blocks ≺ part-of`；`part-of` 是**强档**，**蕴含** `blocks`（子阻塞母，母等子）。
+- 因此 agent 把 `part-of` 读成“带依赖含义”是**对的**。
+- → 实验 head-to-head 第 4 项（“**最不易与依赖混淆**”）按最新分类是**问错了**：它把“该带的含义”当成了“要避免的混淆”。这删掉了 `sub-issue-of` 最后一条实验论据。
+
+### 2. 写作时的消歧规则（写进 Skill）
+
+| 事实 | 写什么 |
+| --- | --- |
+| Q 是 R 的一部分（结构包含） | `part-of: R`（**同时蕴含** `Q blocks R`） |
+| Q 必须等 R、但 Q **不是** R 的一部分 | `blocked-by: R` |
+| Q 阻塞 R、Q **不是** R 的一部分 | `blocks: R` |
+
+→ 分解是依赖的**强档**，同槽两档；同一对顶点只能存一条，**强档胜**。
+
+### 3. 效果
+
+- 保留 `part-of`/`has-part` 的决定**更稳**：它现在连“软代价”都没了。
+- 实验的 **D1/D2 消歧题仍然有效**（那两道问的是“不是一部分的纯依赖”，预期 `blocked-by`，两臂 100%）；只有 head-to-head 第 4 项作废。
+- 遗留不变：AND 三层载体、`check` 判定细节、`part-of` 落地。
