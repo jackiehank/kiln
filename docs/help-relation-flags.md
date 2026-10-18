@@ -335,3 +335,11 @@ do/commit 的 flags:
 
 - 分命令 + JSON help 正是 agent 想要的（可自省、无散文）；代价是要把帮助重构成**单一真源**。
 - `kiln do help` 不采纳（与 issue 名冲突）。
+
+## hypothesize（四续）：`--json` help 暂缓
+
+> 用户（2026-10-18）：`--json` help 先不做，再想。
+
+- **处置**：三续里的**第 3 条（`--json` help）标为暂缓、不在本轮**；其余三条（分命令帮助 `kiln <cmd> -h`、`kiln help [cmd]`、单一真源）保留。
+- **理由 / 影响**：`--json` help 要与 `status`/`list`/`check` 的 `--json` 契约对齐，并且会**把“命令 / flag 结构化表”的 schema 过早冻结**；先不定，保留重构余地。
+- **仍待定**：分命令 / 单一真源的**框架**是否另开一个 issue（还是并入 `help-alignment`）。
