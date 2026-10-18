@@ -440,3 +440,127 @@
 - 需求工程术语：[NIST CSRC「derived requirement」（引 ISO/IEC/IEEE 29148:2018）](https://csrc.nist.gov/glossary/term/derived_requirement)（一手）。
 - Jira split：[SplitIssueLinkTypeServiceImpl](https://docs.atlassian.com/jira-software/10.0.0/com/atlassian/greenhopper/service/issuelink/SplitIssueLinkTypeServiceImpl.html)（一手/API 文档）。
 - RE trace-link 分类学（`derives-from`/`gives-rise-to`）：[chwezi-sdlc-documentation trace-link-types](https://github.com/peterbamuhigire/chwezi-sdlc-documentation/blob/main/02-requirements-engineering/fundamentals/after/09-traceability-engineering/references/trace-link-types.md)（二手，社区整理）。
+
+## hypothesize：对比实验设计——`derived-from`/`spawns` vs `causes`/`caused-by`（含 `blocks`/`blocked-by` 对照）
+
+> 用户要求（2026-10-18）：设计一个对比实验，比“现状名”与 `causes`/`caused-by` 这一对；并把 `blocks`/`blocked-by` 也放进实验作对照。本节点只**设计**，不跑（跑是下一个 `test`）。
+
+### 1. 要回答的问题
+
+- **主问题**：引发族的名字，`derived-from`/`spawns` 与 `caused-by`/`causes`，哪个对 agent **更不易错、更清晰**？
+- **对照问题**：已定的 `blocks`/`blocked-by` 在两臂里表现是否一致（若不一致，说明实验有偏）。
+
+### 2. 变量隔离
+
+| 项 | 处理 |
+| --- | --- |
+| 只变 | **引发族**一对名（N/C 两臂不同） |
+| 固定作对照 | **依赖族** `blocks`/`blocked-by`（两臂相同） |
+| 完全固定 | `part-of`/`has-part`、`supersedes`/`superseded-by`、`relates-to` |
+| 渲染形态 | 用 `relation-rendering` 已 conclude 的**视角化句子（主语=X）** |
+| 命名原则 | 两臂都遵守“含介词”+“主语=声明方” |
+
+### 3. 臂与条件
+
+| 臂 | 引发族（效果→来源 / 来源→效果） | 依赖族（对照） |
+| --- | --- | --- |
+| **N（现状）** | `derived-from` / `spawns` | `blocks` / `blocked-by` |
+| **C（causes）** | `caused-by` / `causes` | `blocks` / `blocked-by` |
+| （可选 **R（RE）**） | `derives-from` / `gives-rise-to` | `blocks` / `blocked-by` |
+
+两种条件：
+
+- **条件 1（带释义）**：每个名给一句 **主语=声明方** 的释义（模拟 Skill）。两臂释义力度相同，以隔离“名字本身的可读性”。
+- **条件 2（裸名字）**：不给释义，只问方向（测**先验**；复现 `relation-vocabulary` 第三轮）。
+
+### 4. 实验材料（只含引发 + 依赖，隔离变量）
+
+声明侧（写在哪个 issue 里）：
+
+| 边 | 声明内容 |
+| --- | --- |
+| e1 | P2 声明 `derived-from: P1`（P1 引发 P2） |
+| e2 | P3 声明 `derived-from: P1` |
+| e3 | P1 声明 `blocks: P4` |
+| e4 | P5 声明 `blocks: P1` |
+
+两个观察页（两臂的渲染）：
+
+| 事实 | N 臂在 P1 页 | C 臂在 P1 页 |
+| --- | --- | --- |
+| P1 引发 P2 | `P1 spawns P2` | `P1 causes P2` |
+| P1 引发 P3 | `P1 spawns P3` | `P1 causes P3` |
+| P1 阻塞 P4 | `P1 blocks P4` | `P1 blocks P4` |
+| P5 阻塞 P1 | `P1 blocked-by P5` | `P1 blocked-by P5` |
+
+额外观测页 **P2**（用来展示“效果侧”主名）：N 臂 `P2 derived-from P1` / C 臂 `P2 caused-by P1`。
+
+→ 变量只剩一处：**当 X 是“来源”时，X 页上那个名是 `spawns` 还是 `causes`**；以及 P2 页上是 `derived-from` 还是 `caused-by`。
+
+### 5. 题库（含预期答案）
+
+**读向（D1–D4）**
+| # | 页 | 题 | 预期 |
+| --- | --- | --- | --- |
+| D1 | P1 | P1 与 P2 谁引发了谁？ | P1 引发 P2 |
+| D2 | P2 | 同上（换一页再问同一事实） | P1 引发 P2 |
+| D3 | P1 | P1 与 P4 谁先完成？ | P1（P1 blocks P4） |
+| D4 | P1 | P1 与 P5 谁先完成？ | P5（P5 blocks P1） |
+
+**写侧（W1–W4）** — 都是“新建 issue，引用已有 issue”
+| # | 场景 | N 臂预期 | C 臂预期 |
+| --- | --- | --- | --- |
+| W1 | 新建 Q，Q 由已有 R 引发 | `derived-from: R` | `caused-by: R` |
+| W2 | 新建 Q，Q 引发了已有 R | `spawns: R` | `causes: R` |
+| W3 | 新建 Q，Q 阻塞已有 R | `blocks: R` | `blocks: R` |
+| W4 | 新建 Q，Q 被已有 R 阻塞 | `blocked-by: R` | `blocked-by: R` |
+
+**词对（P1–P2）**
+| # | 题 | 预期 |
+| --- | --- | --- |
+| P1 | 名 `<效果侧>` 与 `<来源侧>` 是什么关系？ | 同一关系的正/反两面 |
+| P2 | `blocks` 与 `blocked-by` 呢？ | 同上 |
+
+**跨页同一（I1）**
+| # | 题 | 预期 |
+| --- | --- | --- |
+| I1 | P1 页的 `<来源侧名> P2` 与 P2 页的 `<效果侧名> P1`，几条关系？ | **1** |
+
+最后一行自由文本：`困惑: …`（哪一行最不确定）。
+
+### 6. 假设
+
+| # | 假设 |
+| --- | --- |
+| **H1** | C 臂的读向正确率 ≥ N 臂（`causes`/`caused-by` 英语因果常识强） |
+| **H2** | C 臂的写侧正确率 ≥ N 臂（同词根主动/被动，对称好推） |
+| **H3** | 两臂对 `blocks`/`blocked-by` 的表现一致（对照组，证明实验无偏） |
+| **H4** | 裸名字条件下，`derived-from` 仍读得对（复现第三轮 2/2） |
+
+### 7. 预登记判据（先定，避免事后挑数）
+
+1. **否决项**：某臂读向 D1–D4 正确率 < 3/4 → 该臂淘汰（不管写侧多好）。
+2. **主判据**：写侧 W1–W4 正确率高者胜；**差 ≤1 题视为平手**。
+3. **平手裁定顺序**：① 与 `blocks`/`blocked-by` 的**形态一致性**（`causes`/`caused-by` 与 `blocks`/`blocked-by` 同为“同词根·主动/被动”）；② 自报困惑总条数；③ 业内地位（Jira 用 `causes`；RE 用 `derived-from`）。
+4. **控制失败**：若 H3 不成立（两臂对 `blocks`/`blocked-by` 差异 ≥2 题）→ 判实验设计有问题，本轮作废。
+
+### 8. 样本与隔离
+
+- **2 臂 × 2 agent × 2 条件 = 8 个 subagent**（可选 R 臂则 +4）。
+- 隔离按 `relation-rendering` 已实测定稿的配方：`--no-tools` + 中性临时目录 + `-nc -ns -np -na` + `--no-session`；两臂 prompt 分开放。
+- 隔离探针（先跑一次关键词探针）确认无泄漏后再开。
+
+### 9. 预期陷阱
+
+1. **`causes` 太通用**：英语里“causes”日常就是“导致”，可能被读成泛因果而丢掉“可各自处理”的语义（与 `blocks` 混）。→ 由 D3/D4 与 P2 题监控。
+2. **`derived-from` 太“需求工程”腔**：可能让 agent 觉得它很正式而过度谨慎（多停一秒）。→ 由自报困惑与裸名字条件监控。
+3. **两臂对“引发”的熟悉度不同**（`causes` 先验强）——这正是要测的，不做中和。
+
+### 10. 与既有实验的关系
+
+- 第三轮已证 `derived-from` **裸名字读得对**（2/2、5/5）；本实验补上：**写侧对比**、与 `causes` 的正面比较、以及 `blocks` 对照。
+
+### 结论（实验方案，待执行）
+
+- 2 臂（N/C，可选 R）× 2 条件 × 2 agent，12 题（读 4 / 写 4 / 词对 2 / 跨页 1 / 困惑 1），成本与既有几轮同量级。
+- 先定判据（§7）**再跑**。下一个动作：`test`。
