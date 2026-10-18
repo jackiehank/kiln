@@ -440,3 +440,90 @@ K4 的收益，恰好回应「名字还不成熟」：
 3. **收益**：兜底 F、跨象限共存、写错退场、**词表 churn 免疫**——四件事用同一套解释说完。
 4. **代价**：同槽取强 = 约定「接替蕴含派生」；不接受就退回两槽 / K3。
 5. 由此，上一节遗留的「有向非阻塞象限的槽怎么分」有了答案：**不分，同一槽内分档**。
+
+## hypothesize（三续）：relation 词表要不要像 action 词表一样可自定义
+
+> 用户推演（2026-10-18）：action 是原子、可自由组合；issue 也原子、由不同关系组合。relation 要不要保留同样的灵活性——**分了类，但具体名称不绑定，可自定义**？
+
+### 0. 先把类比钉死：action 的「可配置」到底配置了什么
+
+`.kilnconfig.jsonc` 里 action 词表可改，但**不是什么都可改**：
+
+| 层 | 谁定 | 内容 |
+| --- | --- | --- |
+| **结构层** | 引擎固定 | 必须有**起点**动作；必须有≥1 个**终点**动作；动作组成有序 path |
+| **名字层** | 项目配置 | `names`、数量、哪一个是 start、哪些是 terminal |
+
+→ 「可配置」= **名字自由、角色映射可配；但引擎用来推理的「角色」是固定的**。
+
+### 1. 平移到 relation：完全同构，而且刚好补上了「名字未定」
+
+| 层 | 谁定 | relation 里的内容 |
+| --- | --- | --- |
+| **结构层** | 引擎固定 | 键 = `(无序对, 槽)`；槽的 `blocking`（→ DAG 检测）；槽内**强度全序**（→ LWW 取强）；`directed`（→ 反向推导） |
+| **名字层** | 项目配置 | 每个名的（名字、释义、所属槽、槽内 rank、是否 directed）、槽表 |
+
+**答案：该保留灵活性，但只在「名字层」——结构层绝不能可配**，否则环检测/取强/反向推导都无处落脚（引擎逻辑被交给用户）。
+
+### 2. 配置形态（草图，贴 `actions` 的风格）
+
+```jsonc
+"relations": {
+  // 槽：结构层，引擎只认 blocking 这一个布尔
+  "slots": {
+    "ordering": { "blocking": true },   // 约束顺序/结构
+    "lineage":  { "blocking": false }   // 谱系/接替
+  },
+  // 名字层：映射到槽 + 槽内强度序（1 最弱）；directed 决定反向推导
+  "names": {
+    "blocks":       { "slot": "ordering", "rank": 1, "directed": true },
+    "part-of":      { "slot": "ordering", "rank": 2, "directed": true },
+    "relates-to":   { "slot": "lineage",  "rank": 1, "directed": false },
+    "derived-from": { "slot": "lineage",  "rank": 2, "directed": true },
+    "supersedes":   { "slot": "lineage",  "rank": 3, "directed": true }
+  },
+  // 历史别名：提交不可改，旧名必须仍能解析
+  "aliases": { "spawns": { "as": "derived-from", "flip": true } }
+}
+```
+
+引擎侧：key = `(无序对, slot)`；value = `(name, direction)`；同槽取 **rank 最大**（平手按时间）。
+
+### 3. 为什么这是对的（四条收益）
+
+1. **与 action 对称**：kiln 就有两处「词表即自定义点」，理念一致——这是「原子 + 自由组合」在**边**上的自然延伸。
+2. **直接回应「名字未定」**：改名 / 翻译 / 增删 / 调强度，全在配置里，引擎一行不改。
+3. **引擎保持通用**：只认 `slot / blocking / rank / directed`，不认任何具体名字——这正是上一节「机制不绑名字」的落地形态。
+4. **释义可跟配置走**：`relation-vocabulary` 的结论是「释义本身就是规则，Skill 只要 5 个键 + 一句话释义」。名字可配后，**这句释义就该从配置里读**，`-h` / Skill 可**数据化生成**，不用再两处维护。
+
+### 4. 绝不不能再可配的（引擎的落脚点）
+
+| 不可配 | 为什么 |
+| --- | --- |
+| 键 = `(无序对, 槽)` | 一整张图的存/读方式；可配就没法比较、没法反向 |
+| `slot.blocking` | 决定要不要跑 DFS / Tarjan 防环 |
+| 槽内**全序** | LWW「取强」靠它；无全序就无法定谁盖谁 |
+| `directed` | 反向推导靠它 |
+
+> **一条设计校验规则**：槽内必须是**全序**；两个关系若**不可比**（谁都不蕴含谁），就必须**分属不同槽**。这条规则使「自定义」安全：不论用户怎么加名字，引擎的推理都有落脚点。
+
+### 5. 一并要解决的坑
+
+1. **历史别名**：`derived-from` / `blocks` 等已写进提交，改名不改历史 → `aliases` +（必要时）方向 `flip` 是必需品（与 action 改名同题）。
+2. **`check` 对未知 trailer**：配置里没声明的键，报错还是提示？— 连到 `silent-flag-drop`。
+3. **默认词表 = 现有 5 名**：保住 `relation-vocabulary` 已验证过的 LLM 可读性；自定义是 **opt-in**，不是“什么都自己起名”。
+4. **跨项目 / 桥接**：两仓词表不同时需要 glossary 映射；kiln 单仓单项目，暂可不管。
+5. **无向×阻塞 槽**：应视为**空槽**而不是不允许存在——配置里允许它，但 `blocking + !directed` 给出警告（互阻塞=死锁）。
+
+### 6. 可实测（留给 `test`）
+
+1. 把 `internal/model` 里的五个固定字段（`DerivedFrom` / `Spawns` / `RelatesTo` / `Blocks` / `Supersedes`）换成 `map[(对,槽)] → (name,dir)`，看 `engine.go` 的 `appendUnique` / `relationLines` / `checkIssue` 改动面。
+2. 写一个只改了名字（如 `derived-from` → `stems-from`）+ aliases 的仓库，看 `path` / `graph` / `check` 是否仍能读旧提交。
+
+### 结论（推演，未定论）
+
+1. **该保留灵活性**——但要同 action 一样：**自由度给「名字」，结构由引擎固定**。
+2. **结构层三项必须固定**：键 `(对,槽)`、槽的 `blocking`、槽内**强度全序**（+ `directed`）。
+3. **名字层全部可配**：名字、数量、释义、槽归属、槽内 rank、槽表。
+4. 形态上就是 `actions` 的翻版：**`relations.slots` + `relations.names` + `aliases`**；默认词表就是现有 5 名。
+5. 一个硬约束：**槽内必须全序；不可比者分槽**——这是自定义安全性的根。
