@@ -371,3 +371,59 @@
 - 保留 `part-of`/`has-part` 的决定**更稳**：它现在连“软代价”都没了。
 - 实验的 **D1/D2 消歧题仍然有效**（那两道问的是“不是一部分的纯依赖”，预期 `blocked-by`，两臂 100%）；只有 head-to-head 第 4 项作废。
 - 遗留不变：AND 三层载体、`check` 判定细节、`part-of` 落地。
+
+## conclude：结论（2026-10-18）
+
+### 1. 命名：保留 `part-of` / `has-part`
+
+- **领域无关优先**：kiln 之后要用于想法管理等非编程场景，而对象已统一叫 issue；`sub-issue-of` = “issue 的 issue”，等于把对象类型又写一遍。
+- **实验未分出高下**：两轮命名实验（含本轮 10 agent）主判据均**平手**；头对头 4:3 未达偏好阈。
+- **无软代价**：实验里“`part-of` 易被读成依赖”是**设计意图**（阻塞槽强档），不是缺陷。
+- **零回写**：`relation-types` / `relation-vocabulary` 本来就定的 `part-of`。
+
+→ **`sub-issue-of` / `has-sub-issue` 记为可配置替代名**（`relations.names` 可覆盖，见 `relation-revision`）。
+
+### 2. 语义与边界
+
+- **结构包含**：`A part-of B` = A 是 B 的一部分（子→母）。
+- **蕴含依赖**：`A part-of B` **蕴含** `A blocks B`（母等子）。二者同属**阻塞槽**，强度格 `blocks` 弱于 `part-of`，`part-of` 为**强档**；同一对顶点只存一条，**强档胜**。
+- **AND-join**：母要等**全部**子完成（WBS 100% rule / ISO 21511）。
+
+### 3. 「母等全部子」靠什么承载：三层，都不靠名字
+
+| 层 | 做法 | 归属 |
+| --- | --- | --- |
+| **释义 / Skill** | 写死“母项要等**全部**子项完成（AND）” + 消歧句“`part-of` = 结构组成；纯先后用 `blocks`/`blocked-by`” | Skill |
+| **渲染 / 进度** | 分解父项显示 `子项 x/y 完成` | `relation-rendering` |
+| **`check`** | 父项已有终点动作、但有子项未到终点 → **⚠ 警告**（不 error） | `check` |
+
+- **不做** YouTrack 式自动关/开父项（kiln 状态来自自身动作史，不派生）。
+- 依据：名字**单独**出现不携带 AND（本轮实验裸条件 3/4 答“否”）；业内也都靠工具行为（GitHub 进度条 / Jira Sub-Task Blocking Condition / YouTrack 工作流），**没有一家放在名字里**。
+
+### 4. 写作消歧规则（进 Skill）
+
+| 事实 | 写什么 |
+| --- | --- |
+| Q 是 R 的一部分 | `part-of: R`（同时蕴含 `Q blocks R`） |
+| Q 必须等 R、但 Q 不是 R 的一部分 | `blocked-by: R` |
+| Q 阻塞 R、Q 不是 R 的一部分 | `blocks: R` |
+
+### 5. 依据汇总
+
+- **collect**：tracker 用层级词、`part-of` 是本体论词；AND 靠工具行为承载。
+- **命名实验（10 agent）**：★ 主判据平手；头对头 4:3 无偏好；AND 随语境翻转（裸 3/4 否、带释义 3/4 是）。
+- **`relation-types`**：分解 = AND-join（ISO 21511）。
+- **`relation-vocabulary`**：名字定稿 `part-of`/`has-part`；加难版实验暴露 AND 未传达。
+- **`relation-revision`**：槽 / 强度模型（阻塞槽 `blocks` 弱于 `part-of`）。
+
+### 6. 遗留（转出）
+
+1. **AND 警告的判定细节**（“子项未到终点”如何定义、父项哪些动作算“到达”）→ `check` 实现。
+2. **进度渲染形态**（`path` 一行 vs `status` 一列）→ `relation-rendering`。
+3. **`part-of` 落地**（进代码、`has-part` 可写）→ `silent-flag-drop` / `relation-types` 落地项。
+4. （可选）AND 随语境翻转的现象可另开小 issue 深挖。
+
+### 7. 非目标
+
+- 不改机制（键 `(对,槽)` / 槽内强度 / 取强）→ `relation-revision`。
+- 不改渲染的**全部**规格 → `relation-rendering`。
