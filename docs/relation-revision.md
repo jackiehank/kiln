@@ -713,7 +713,7 @@ K4 的收益，恰好回应「名字还不成熟」：
 | `internal/model/model.go` | `Action` 与 `Issue` 两个结构**各有 5 个关系字段**（共 10 处声明） | `map[(对,槽)] → (name,dir)` |
 | `internal/trailer/trailer.go` | 解析/输出 **5 个硬编码键** | 配置驱动（`relations.names`） |
 | `internal/engine/engine.go` | 5 行 `appendUnique` 并集（`:71-75`）；`relationLines` 硬编码三族（`:302-313`）；`checkIssue` | 取强（单值槽）+ **入边索引** + 按槽分组 |
-| `internal/cli/cli.go` | 5 个 flag（`--derived-from` 等）+ `relationSummary` | 配置驱动 |
+| `internal/cli/cli.go` | **三处硬编码**：① `-h` 帮助文本（`usageFooter` `:34-36`，直接列 `--derived-from --spawns --relates-to --blocks --supersedes`）；② flag 解析（`:323-327`）；③ 关系摘要输出（`:1282-1286`） | 配置驱动（帮助文本也需从 `relations.names` 生成） |
 | `internal/config/config.go` | **只有 `actions`，没有 `relations`** | 新增 `relations.slots/names/aliases` |
 | 测试 | `trailer_test` / `engine_test` / `cli_test` 引用旧名 | 同步 |
 
@@ -744,3 +744,4 @@ K4 的收益，恰好回应「名字还不成熟」：
 3. **别名无损**：16 条 `derived-from` 可安全映射到 `caused-by`。
 4. **`silent-flag-drop` 的担忧被实测坐实**：未知 trailer 键既不入模型也不报错。
 5. **未做**：端到端的槽/LWW/反向推导行为（需先实现）；最小仓目前只能验“当前实现”。
+6. **`-h` 也硬编码**：`usageFooter`（`cli.go:34-36`）直接把 5 个关系 flag 列在静态字符串里；一旦词表可配置，`-h` 也必须改成**从 `relations.names` 生成**，否则帮助与实际能力脱节（这是 `cli.go` 三处硬编码中的一处）。
