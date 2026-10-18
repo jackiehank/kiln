@@ -11,6 +11,7 @@
 package trailer
 
 import (
+	"sort"
 	"strings"
 
 	"kiln/internal/model"
@@ -40,6 +41,55 @@ var scalarKeys = map[string]bool{
 	"issue": true, "action": true, "title": true,
 	"refs": true, "target": true, "scope": true, "domain": true, "tags": true,
 	"unrelate": true,
+}
+
+// retiredKeys are trailers kiln once wrote and deliberately stopped using. They
+// are ignored without an "unknown key" warning: retired is not the same as a
+// typo.
+var retiredKeys = map[string]bool{"object": true}
+
+// UnknownKeys returns the trailer-block keys that are neither fixed trailers nor
+// vocabulary names/aliases. The trailer block is the last blank-line-separated
+// paragraph, and it only counts when it carries at least one kiln trailer
+// (issue:), so a prose line like "注意: …" is not mistaken for a trailer.
+func UnknownKeys(message string, rel *model.RelationSet) []string {
+	body := strings.TrimRight(strings.ReplaceAll(message, "\r\n", "\n"), "\n")
+	paras := strings.Split(body, "\n\n")
+	block := paras[len(paras)-1]
+	hasIssue := false
+	var keys []string
+	for _, raw := range strings.Split(block, "\n") {
+		line := strings.TrimSpace(raw)
+		i := strings.Index(line, ":")
+		if i <= 0 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(line[:i]))
+		if strings.TrimSpace(line[i+1:]) == "" {
+			continue
+		}
+		if key == "issue" {
+			hasIssue = true
+		}
+		keys = append(keys, key)
+	}
+	if !hasIssue {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, key := range keys {
+		if scalarKeys[key] || retiredKeys[key] || seen[key] {
+			continue
+		}
+		if _, ok := rel.Resolve(key); ok {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Parse scans every line of message for known trailers. It returns the parsed

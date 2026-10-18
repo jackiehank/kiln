@@ -123,6 +123,10 @@ type Action struct {
 
 	Relations []Rel
 	Unrelate  []string
+
+	// UnknownTrailerKeys are trailer-block keys neither fixed nor in the
+	// relation vocabulary (typos / retired-forward names), surfaced by check.
+	UnknownTrailerKeys []string
 }
 
 // Issue aggregates every action that shares one issue ID, plus the folded

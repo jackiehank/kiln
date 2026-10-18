@@ -208,14 +208,10 @@ func (e *env) rel() *model.RelationSet {
 }
 
 // fixedFlags are the do/commit flags that are not relation names.
-var fixedFlags = map[string]bool{
-	"title": true, "refs": true, "target": true, "scope": true,
-	"domain": true, "tag": true, "unrelate": true,
-}
+var fixedFlags = []string{"title", "refs", "target", "scope", "domain", "tag", "unrelate", "force"}
 
-// relationsFromFlags reads relation declarations from the parsed flags. It
-// accepts canonical names and aliases (resolved to canonical) and warns about
-// unknown flags instead of dropping them silently.
+// relationsFromFlags reads relation declarations from the parsed flags, accepting
+// canonical names and aliases (resolved to canonical).
 func (e *env) relationsFromFlags(f flags) []model.Rel {
 	rel := e.rel()
 	var out []model.Rel
@@ -234,21 +230,45 @@ func (e *env) relationsFromFlags(f flags) []model.Rel {
 	for _, alias := range rel.Aliases() {
 		add(alias)
 	}
+	return out
+}
+
+// doCommitFlags is the do/commit flag allowlist: fixed flags plus the relation
+// vocabulary's names and aliases.
+func (e *env) doCommitFlags() map[string]bool {
+	allowed := allowedFlags(fixedFlags...)
+	for _, name := range e.rel().Names() {
+		allowed[name] = true
+	}
+	for _, alias := range e.rel().Aliases() {
+		allowed[alias] = true
+	}
+	return allowed
+}
+
+// allowedFlags builds a set from names.
+func allowedFlags(names ...string) map[string]bool {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		m[n] = true
+	}
+	return m
+}
+
+// warnUnknownFlags prints a warning for every supplied flag not in allowed.
+// Warnings go to stderr so they never pollute a `do` message destined for a
+// commit; kiln stays honest about what it accepted and what it ignored.
+func warnUnknownFlags(errw io.Writer, f flags, allowed map[string]bool) {
 	var unknown []string
-	for key := range f {
-		if fixedFlags[key] {
-			continue
+	for k := range f {
+		if !allowed[k] {
+			unknown = append(unknown, k)
 		}
-		if _, ok := rel.Resolve(key); ok {
-			continue
-		}
-		unknown = append(unknown, key)
 	}
 	sort.Strings(unknown)
-	for _, key := range unknown {
-		fmt.Fprintf(e.errw, "警告: 未知 flag --%s（关系名见 -h；别名 derived-from / spawns 亦可）\n", key)
+	for _, k := range unknown {
+		fmt.Fprintf(errw, "警告: 未知 flag --%s（可用 flag 见 kiln -h）\n", k)
 	}
-	return out
 }
 
 // backend returns the repository backend, opening it from dir/config on first
@@ -421,6 +441,7 @@ func (e *env) write(args []string, commit bool) int {
 	}
 
 	rels := e.relationsFromFlags(f)
+	warnUnknownFlags(e.errw, f, e.doCommitFlags())
 	msg := trailer.Format(trailer.Fields{
 		Issue:     issue,
 		Action:    action,
@@ -627,7 +648,8 @@ func (e *env) workspaceBackend() (vcs.Workspace, int) {
 // points the user at it. The area's name and branch are derived from the issue,
 // so naming alone is the binding — no extra file keeps them in sync.
 func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
-	pos, _ := parse(args)
+	pos, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags())
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue>")
 		return 2
@@ -779,6 +801,7 @@ func areaStateWord(a vcs.WorkspaceInfo, s vcs.AreaState) string {
 // is refused by the backend unless --force says to lose it.
 func (e *env) workspaceRemove(ws vcs.Workspace, args []string) int {
 	pos, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("force"))
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, "用法: kiln worktree remove <issue> [--force]")
 		return 2
@@ -805,6 +828,7 @@ func areaRole(a vcs.WorkspaceInfo) string {
 
 func (e *env) path(args []string) int {
 	pos, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat"))
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, "用法: kiln path <issue> [--stat|--shortstat]")
 		return 2
@@ -859,6 +883,7 @@ func (e *env) path(args []string) int {
 // rebase. Rendering is delegated to git.
 func (e *env) show(args []string) int {
 	pos, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("stat"))
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, "用法: kiln show <issue> [n] [--stat]")
 		return 2
@@ -978,6 +1003,7 @@ func trimNewlines(s string) string { return strings.Trim(s, "\n") }
 
 func (e *env) status(args []string) int {
 	_, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("json"))
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
@@ -1255,6 +1281,7 @@ func (e *env) isDone(p *model.Issue) bool {
 
 func (e *env) check(args []string) int {
 	_, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("json", "verbose"))
 	verbose := len(f["verbose"]) > 0
 	repo, code := e.loadRepo()
 	if repo == nil {
@@ -1289,6 +1316,7 @@ func (e *env) check(args []string) int {
 
 func (e *env) list(args []string) int {
 	_, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action"))
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
@@ -1323,6 +1351,7 @@ func (e *env) list(args []string) int {
 
 func (e *env) graph(args []string) int {
 	_, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags("format"))
 	format := f.get("format")
 	if format == "" {
 		format = "ascii"

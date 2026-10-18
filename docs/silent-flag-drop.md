@@ -145,3 +145,33 @@
 2. **B**：`kiln path X --bogus` / `kiln status --bogus` → ⚠；合法 flag 不受影响。
 3. **A**：临时仓提交带 `caused-byy:` / `typo-key:` → `kiln check` ⚠ 点名；正文含 `注意: xxx` 不误报。
 4. `go build` / `go test ./...` 过。
+
+## apply：落地与验证（2026-10-18）
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `trailer/trailer.go` | 新增 `UnknownKeys(message, rel)`：只扫**最后一个空行段落**且段内至少有一个 `issue:`；`retiredKeys={object}` 不报 |
+| `model/model.go` | `Action` 新增 `UnknownTrailerKeys []string` |
+| `engine/engine.go` | `ActionsFromCommits` 填入该字段；`checkIssue` 新增 Rule 4 → ⚠ `unknown-trailer` |
+| `cli/cli.go` | 面 C：`fixedFlags` 加 `force`；面 B：`warnUnknownFlags` + 在 path/show/status/check/list/graph/workspaceNew/workspaceRemove 调用；`relationsFromFlags` 不再自行警告 |
+
+### 2. 验收（实测）
+
+| # | 项 | 结果 |
+| --- | --- | --- |
+| C | `kiln do zz ask --force` | **不再报未知** ✓ |
+| B | `kiln path X --bogus` / `kiln status --bogus` | ⚠ `未知 flag --bogus`；合法 flag 静默 ✓ |
+| A | 提交带 `caused-byy:` / `typo-key:` | `check` ⚠ `未知 trailer 键: caused-byy` / `typo-key`（rule=`unknown-trailer`）✓ |
+| A | 正文 `注意: 这里有个正文冒号` | **不报**（不在 trailer 块）✓ |
+| A | 真仓 20 条 `object:`（已退役） | **不报**（`retiredKeys`）✓ |
+
+- `go build ./...` / `go test ./...` 全过。
+
+### 3. 边界与取舍
+
+- **已退役 ≠ 未知**：`object:` 是有意退役，不报（否则真仓会被 20 条噪声淹没）。将来退役新键时加到 `retiredKeys`。
+- **trailer 块判定**：最后一个空行段落 + 段内至少一个 `issue:`——防“正文里的 `中文: 东西`”假阳性（已实测）。
+- **提示一律 stderr**，不污染 `do` 的提交信息。
+- 还剩一个已知局限：若提交里 trailer 块**后面还有段落**（非 kiln 生成格式），块判定会落空；这是宁缺勿滥的取舍。

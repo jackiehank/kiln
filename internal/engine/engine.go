@@ -36,6 +36,8 @@ func ActionsFromCommits(commits []vcs.Commit, rel *model.RelationSet) []model.Ac
 			Tags:      f.Tags,
 			Relations: f.Relations,
 			Unrelate:  f.Unrelate,
+
+			UnknownTrailerKeys: trailer.UnknownKeys(c.Message, rel),
 		})
 	}
 	return out
@@ -178,6 +180,7 @@ const (
 	RuleStartAction    = "start-action"
 	RuleTerminalAction = "terminal-action"
 	RuleRelationTarget = "relation-target"
+	RuleUnknownTrailer = "unknown-trailer"
 	RuleDerivedFrom    = "derived-from"
 	RuleSpawns         = "spawns"
 	RuleComplete       = "complete"
@@ -241,6 +244,14 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 		if _, ok := repo.Issues[r.Target]; !ok {
 			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleRelationTarget, Ref: r.Target,
 				Message: "关系目标不存在：" + r.Name + " 指向 " + r.Target})
+		}
+	}
+
+	// Rule 4: unknown trailer keys are surfaced, not silently dropped.
+	for _, a := range p.Actions {
+		for _, key := range a.UnknownTrailerKeys {
+			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleUnknownTrailer, Action: a.Kind, Ref: key,
+				Message: "未知 trailer 键: " + key})
 		}
 	}
 
