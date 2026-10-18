@@ -261,3 +261,59 @@
 - 偏好信号（非判决）：`sub-issue-of`/`has-sub-issue` 在 tracker 语境、与依赖消歧、以及强制二选一上占优；`part-of`/`has-part` 在通用性、与引发消歧、短对称上占优。
 - **AND 载体的结论要改**：不能再说“名字完全不携带 AND”——它在带释义时会浮现，但不可靠（仍不能当语义保证）→ 仍需显式载体（Skill/`check`/进度）。
 - 下一个动作：`hypothesize`——定「名字 + AND 载体」方案（可参 collect 三家做法）。
+
+## hypothesize：定「名字 + AND 载体」——建议 `sub-issue-of`/`has-sub-issue` + 三层载体
+
+### 1. 命名（建议，待确认）
+
+**建议改用 `sub-issue-of` / `has-sub-issue`**（替换 `part-of` / `has-part`）。
+
+**理由**：
+
+1. **实验（头对头）**：在 A/B 互换位序后两 agent 逐项一致，`sub-issue-of` 在「工具里最自然」「最不易与依赖混淆」「**只能保留一套**」三项胜出；`part-of` 只在「组成部分」「最通用」「最不易与引发混淆」胜出。
+2. **collect**：所有主流 tracker 都用层级词（`parent`/`child`、`sub-issue`/`subtask`）；`part-of` 是本体论/需求工程词，是圈内异类。
+3. **零迁移**：`part-of` 尚未落地（`silent-flag-drop`），改名只动文档。
+4. **关键一条**：agent 明说 `part-of` **更易被读成依赖**（“完成 R 需要 Q”）——而 kiln 恰恰要把分解与依赖分开。
+
+**代价 / 反方**：
+
+- 更长（`sub-issue-of` 12 字符 vs `part-of` 7）。
+- 通用性差：`part-of` 可表任意“部分-整体”，`sub-issue-of` 只对 issue 成立（但 kiln 里一切皆 issue，影响小）。
+- 丢掉本体论的标准性与传递性优势。
+
+→ **两者实验上都不扣分**；若“更长/更专”可接受，则换；否则保留 `part-of`/`has-part`。
+
+### 2. AND 载体：三层叠加（都不靠名字）
+
+| 层 | 做法 | 出处依据 |
+| --- | --- | --- |
+| **释义 / Skill** | 一行里写死：“母项要等**全部**子项完成（AND）” | 本实验：名字单独出现不携带 AND |
+| **渲染 / 进度** | `path` / `status` 对分解父项显示 `子项 x/y 完成` | GitHub sub-issues 进度条 |
+| **`check`** | 父项已有终点动作、但有子项未到终点 → **⚠ 警告**（不 error） | Jira Sub-Task Blocking Condition（配置化） |
+
+- **不做** YouTrack 式“自动关/开父项”：kiln 的 issue 状态来自自身动作史，不派生（与 `check` 的“检查”定位一致）。
+- 分工：**释义教读、进度给看、`check` 软拦**。
+
+### 3. 边界：与 `blocks` 的关系
+
+- `A <sub-issue-of> B` **蕴含** `A blocks B`（子阻塞母，母等子）。
+- 按 `relation-revision` 的槽模型：二者同属**阻塞槽**，分解是强度格的**强档**（`blocks ≺ 分解`）→ 同一对顶点只能存一条，强档胜。
+- 因此 §2 的 AND 警告是**状态规则**，不是图规则，与环检测分工。
+
+### 4. 回写清单（若采纳改名）
+
+- `relation-types`：分解族名 + 「9 个名字」表。
+- `relation-vocabulary`：D5 与定稿表（`part-of` → `sub-issue-of`）。
+- 本 issue：把 collect/实验里的 `part-of` 标注为“旧名”。
+- `silent-flag-drop`：`part-of` 落地条目改名。
+
+### 5. 遗留
+
+1. **待你确认**：改成 `sub-issue-of` 还是保留 `part-of`。
+2. AND 警告的判定细节（“子项未到终点”如何定义；父项哪些动作算“到达”）。
+3. 进度渲染形态（`path` 一行 vs `status` 一列）→ 归 `relation-rendering`。
+
+### 结论（hypothesize，待确认）
+
+- **命名**：建议 `sub-issue-of`/`has-sub-issue`（零迁移改）；否则保留 `part-of`/`has-part`。
+- **AND**：不靠名字，靠三层（释义 / 进度 / `check` 警告）。
