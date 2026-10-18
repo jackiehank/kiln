@@ -69,3 +69,36 @@
 - `internal/engine/engine.go` `checkIssue`：Rule 3/4 只覆盖 derived-from / spawns 的存在性。
 - `README.md:133`（关系表含 `spawns:`）与 `README.md:281`（`part-of` 尚未落地）并存。
 - `docs/relation-vocabulary.md` 结论 1 / 5：词表定稿 5 个名字、反向名取消。
+
+## test：现状重测——大半已解决，剩三个面（2026-10-18）
+
+> 本 issue 源于 2026-10-17；其后 `relations-impl` / `help-relation-flags` 已改变大部分前提。用新编译的 kiln 重测。
+
+### 1. 已解决（原问题清单逐条核对）
+
+| 原问题 | 现状 |
+| --- | --- |
+| `part-of` 定稿却写不进（静默丢弃） | ✅ `kiln do zz ask --part-of other` → 正常写出 `part-of: other` |
+| 未知 flag 静默 | ✅ `kiln do zz ask --bogus 1` → `警告: 未知 flag --bogus…`（exit 0） |
+| `check` 只查两族关系目标 | ✅ 改为**全键目标存在**（⚠） |
+| 词表 5 名 vs 实现 5 键只交集 4 | ✅ trailer 解析改为**词表驱动**（9 名 + 别名） |
+
+### 2. 仍未解决（实测）
+
+| 输入 | 结果 |
+| --- | --- |
+| `kiln path <issue> --bogus` | **静默忽略**（无警告） |
+| `kiln status --bogus` / `kiln list --bogus x` | **静默忽略** |
+| 提交里带 `typo-key: i1` / `caused-byy: i1` | **静默忽略**：`path` 不显示关系，`check` 也不报 |
+| `kiln do <i> ask --force`（非 commit） | ⚠，但**措辞误导**：`--force` 是**已知**的 commit flag，被当成“未知” |
+
+### 3. 剩下的三个面
+
+- **A 未知 trailer 键**（最危险：使用者以为声明了，但进不了模型）；
+- **B 其它命令的未知 flag**（`path`/`status`/`list`/`show`/`graph`/`check`/`worktree`/`config`）；
+- **C `--force` 在 `do` 下被误报为未知**（措辞问题）。
+
+### 4. 结论
+
+- 原 issue 的“词表 / 实现不一致”已消；剩下的是**“不识别的输入是否报”**的通用问题。
+- 下一步：`hypothesize` 定三个面的处置（注意 A 的**假阳性**风险：正文里的 `中文: 东西` 不能当 trailer）。
