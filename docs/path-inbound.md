@@ -80,3 +80,66 @@
 - path：出边 + 入边（换名 + 标注）→ 补实现。
 - graph：**去掉入边**（回归声明源箭头，每条边一次）→ 是删而非加。
 - 入边索引只进 path，不进 graph。
+
+## hypothesize：test 设计——怎么确认 path/graph 边界
+
+### 1. 判定对象：把矩阵写成不变式
+
+边界不是「看起来对」，而是五条可断言的性质（I1–I5）：
+
+| # | 不变式 | 含义 |
+| --- | --- | --- |
+| **I1** | graph 边唯一 | 全图里每条 fold 后的边（无序对, 槽, 值）**恰好出现一次**，且落在**声明方**的块里 |
+| **I2** | graph 无入边/无反名 | graph 的标签 ⊆ 声明名集合；不出现「因 X 是目标才换出来的」反名 |
+| **I3** | path = 出 ∪ 入 | path X 的行 = X 的出边（声明名）+ 入边（`inverse(name)`），按 (对, 槽) 去重 |
+| **I4** | 互补不丢边 | graph 表示的边集 == 所有 path 页表示的边集；graph 不重复、path 不遗漏 |
+| **I5** | 对称回落 | `relates-to` 无 inverse，两端同号出现（不换名） |
+
+**I4 是「边界正确」的硬标准**：删掉 graph 的入边不会丢信息，因为那条边在对方 issue 的 path 页里。
+
+### 2. 三层手段（从便宜到贵）
+
+1. **golden 表驱动单测（主力）**：构造内存 `model.Repo` + `DefaultRelationSet()`，对 fixture 断言 `Graph(repo)` 与新的 `perspectiveLines(repo, X)` 的**精确文本**。确定性、无需 git、毫秒级。
+2. **不变式单测（抗文案变动）**：不写死字符串，直接断言 I1–I5；以后改箭头符号 / 标注文案不会误报。
+3. **最小仓冒烟（只证 CLI 接线）**：真 git 仓跑 `kiln path X` / `kiln graph`，把 1/2 的逻辑再走一遍端到端。
+
+> **前置重构**：path 的渲染现在在 `cli.go` 的 `relationSummary`（CLI 里，不好单测）。test 前应把它下移到 engine，变成一个纯函数（出边 + 入边 + inverse + 标注），与 `Graph` 共用同一份 fold 数据。
+
+### 3. 为什么不需要 subagent 实验
+
+- 「视角化会不会迷惑人」已由 `relation-rendering` 的 4-agent 实验回答（H1–H3 过）。
+- 本 issue 要确认的是**边界是否按矩阵实现**——确定性契约，golden + 不变式即可。
+- 只有当要改**反名标注的文案**时，才值得再跑一次可读性实验（判据沿用 relation-rendering 预登记那套）。
+
+### 4. fixture 必须覆盖的陷阱
+
+| # | 场景 | 期望 |
+| --- | --- | --- |
+| 1 | X 只有出边 | graph X == path X 的出边部分 |
+| 2 | X 只有入边 | graph X 无关系行；path X 显示反名（**本 bug 的核心**） |
+| 3 | 同一对双槽（`A blocks B` + `A causes B`） | 两视图都不折叠（不同槽各一行） |
+| 4 | 同一对反向视图（`B caused-by A`） | 与 `A causes B` 是**同一条边**，不成两条 |
+| 5 | 对称 `relates-to` | 两端各一行、同号 |
+| 6 | 双侧冗余声明（`A causes B` 且 `B caused-by A`） | path 去重；graph 的形态待定（子问题 #2） |
+| 7 | 纯被指 issue | path 只入边；graph 该块无关系行 |
+| 8 | 链 A→B→C | 每边只在声明方块出现一次 |
+| 9 | dangling 目标 | `stateOf` 显示 `missing`，不 panic |
+
+### 5. 阻塞项：三个待定子问题先冻结
+
+golden 断言要冻结文本，所以这三项必须先定（否则测不了）：
+
+1. `relates-to` 在 graph 的形状（有向箭头 vs 无向连线）。
+2. 双侧冗余在 graph 的形状（两条反向箭头 vs 归一）。
+3. 反名标注的文案与「首次出现」范围。
+
+### 6. 判据
+
+- I1–I5 全过；
+- fixture 的精确输出匹配 golden；
+- `go build ./...` / `go test ./...` 全过；
+- 最小仓 `kiln path` / `kiln graph` 冒烟与单测一致。
+
+### 7. 顺序
+
+先冻结第 5 节三项（可并入本 issue 的 `conclude`，或再补一个 `hypothesize`）→ 下移 path 渲染到 engine → 写 fixture + golden 与不变式 → 最小仓冒烟。
