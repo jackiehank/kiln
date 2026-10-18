@@ -3,11 +3,25 @@ package trailer
 import (
 	"reflect"
 	"testing"
+
+	"kiln/internal/model"
 )
+
+var testRel = model.DefaultRelationSet()
+
+func relTargets(f Fields, name string) []string {
+	var out []string
+	for _, r := range f.Relations {
+		if r.Name == name {
+			out = append(out, r.Target)
+		}
+	}
+	return out
+}
 
 func TestParseDetectsKilnAction(t *testing.T) {
 	msg := "发现 X 并发可能出错\nissue: auth/session-expiry\naction: ask\nobject: q1\n"
-	f, ok := Parse(msg)
+	f, ok := Parse(msg, testRel)
 	if !ok {
 		t.Fatalf("expected a kiln action")
 	}
@@ -26,7 +40,7 @@ func TestParseIgnoresLoneTrailers(t *testing.T) {
 		"subject mentions": "issue: 和 action: 是 kiln 约定的 trailer",
 	}
 	for name, msg := range cases {
-		if _, ok := Parse(msg); ok {
+		if _, ok := Parse(msg, testRel); ok {
 			t.Fatalf("%s: expected non-kiln commit for %q", name, msg)
 		}
 	}
@@ -34,7 +48,7 @@ func TestParseIgnoresLoneTrailers(t *testing.T) {
 
 func TestParseIsLenient(t *testing.T) {
 	msg := "Issue:My/Thing\nACTION : Ask\ntags: [security, performance]\nrefs: q1,h1\n"
-	f, ok := Parse(msg)
+	f, ok := Parse(msg, testRel)
 	if !ok {
 		t.Fatalf("expected a kiln action despite messy formatting")
 	}
@@ -52,28 +66,30 @@ func TestParseIsLenient(t *testing.T) {
 	}
 }
 
-func TestParseRelationLists(t *testing.T) {
+// Legacy names read through aliases: derived-from -> caused-by, spawns -> causes.
+func TestParseRelationAliases(t *testing.T) {
 	msg := "issue: a/x\naction: ask\nderived-from: b/y\nspawns: c/z, d/w\n"
-	f, _ := Parse(msg)
-	if !reflect.DeepEqual(f.DerivedFrom, []string{"b/y"}) {
-		t.Fatalf("derived-from = %+v", f.DerivedFrom)
+	f, _ := Parse(msg, testRel)
+	if got := relTargets(f, "caused-by"); !reflect.DeepEqual(got, []string{"b/y"}) {
+		t.Fatalf("derived-from alias -> caused-by = %+v", got)
 	}
-	if !reflect.DeepEqual(f.Spawns, []string{"c/z", "d/w"}) {
-		t.Fatalf("spawns = %+v", f.Spawns)
+	if got := relTargets(f, "causes"); !reflect.DeepEqual(got, []string{"c/z", "d/w"}) {
+		t.Fatalf("spawns alias -> causes = %+v", got)
 	}
 }
 
 func TestFormatRoundTrip(t *testing.T) {
 	in := Fields{
-		Issue:       "auth/session-expiry",
-		Action:      "ask",
-		Title:       "X 并发可能出错",
-		Tags:        []string{"security", "performance"},
-		Refs:        []string{"q1", "h1"},
-		DerivedFrom: []string{"perf/deep-dive"},
+		Issue:     "auth/session-expiry",
+		Action:    "ask",
+		Title:     "X 并发可能出错",
+		Tags:      []string{"security", "performance"},
+		Refs:      []string{"q1", "h1"},
+		Relations: []model.Rel{{Name: "caused-by", Target: "perf/deep-dive"}},
+		Unrelate:  []string{"old/thing"},
 	}
-	msg := Format(in)
-	back, ok := Parse(msg)
+	msg := Format(in, testRel)
+	back, ok := Parse(msg, testRel)
 	if !ok {
 		t.Fatalf("round trip lost detection:\n%s", msg)
 	}
@@ -83,12 +99,16 @@ func TestFormatRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(back.Tags, in.Tags) || !reflect.DeepEqual(back.Refs, in.Refs) {
 		t.Fatalf("round trip list mismatch: %+v", back)
 	}
-	if !reflect.DeepEqual(back.DerivedFrom, in.DerivedFrom) {
-		t.Fatalf("round trip relation mismatch: %+v", back.DerivedFrom)
+	if !reflect.DeepEqual(back.Relations, in.Relations) {
+		t.Fatalf("round trip relation mismatch: %+v", back.Relations)
+	}
+	if !reflect.DeepEqual(back.Unrelate, in.Unrelate) {
+		t.Fatalf("round trip unrelate mismatch: %+v", back.Unrelate)
 	}
 	// Format is strict: canonical key casing and spacing, with a blank line
-	// separating the subject from the trailer block.
-	if msg != "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\nderived-from: perf/deep-dive" {
+	// separating the subject from the trailer block, and relations in
+	// vocabulary order before unrelate.
+	if msg != "X 并发可能出错\n\nissue: auth/session-expiry\naction: ask\ntitle: X 并发可能出错\nrefs: q1, h1\ntags: security, performance\ncaused-by: perf/deep-dive\nunrelate: old/thing" {
 		t.Fatalf("unexpected canonical output:\n%s", msg)
 	}
 }
@@ -104,7 +124,7 @@ func TestFormatSkipsBlankListItems(t *testing.T) {
 		{"normal items", []string{"a", "b"}, "issue: x\naction: ask\nrefs: a, b"},
 	}
 	for _, c := range cases {
-		got := Format(Fields{Issue: "x", Action: "ask", Refs: c.refs})
+		got := Format(Fields{Issue: "x", Action: "ask", Refs: c.refs}, testRel)
 		if got != c.want {
 			t.Errorf("%s: Format(Refs=%+v) =\n%q\nwant:\n%q", c.name, c.refs, got, c.want)
 		}

@@ -44,3 +44,35 @@
 
 - `relation-revision` 的 conclude（机制）+ 两个 test（改动面、最小仓静默丢弃）。
 - `internal/{model,trailer,engine,cli,config}` 的硬编码盘点。
+
+## apply：落地与验证（2026-10-18）
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/model/relation.go`（新） | `Rel` / `RelationSlot` / `RelationName` / `RelationSet`；`DefaultRelationSet()` = 9 名（`blocks`/`blocked-by`、`part-of`/`has-part`、`caused-by`/`causes`、`supersedes`/`superseded-by`、`relates-to`）+ 别名 `derived-from`→`caused-by`、`spawns`→`causes` |
+| `internal/model/model.go` | `Action` / `Issue` 的 5 个字段 → `Relations []Rel`；`Action` 另加 `Unrelate []string` |
+| `internal/trailer/trailer.go` | 关系键改为**从 `RelationSet` 取**（别名归一）；识别 `unrelate`；`Fields.Relations` / `Unrelate`；`Format` 按词表顺序输出 |
+| `internal/engine/engine.go` | `foldRelations`：按 `(target, slot)` 取强（同 rank 后写胜）、`unrelate` 作废、同动作内**声明优先**；`relationLines` 渲染**出边 + 入边**（入边用 `Inverse` 换名）；`checkIssue` 改为**全键目标存在**（⚠） |
+| `internal/config/config.go` | `Config.Relations`（默认 = `DefaultRelationSet()`） |
+| `internal/cli/cli.go` | `env.rel()`；`do`/`commit` 的 flag 从词表生成；`relationSummary` 从 `p.Relations`；`Graph` 传词表；`-h` 的关系 flag 行改为新名 |
+| 测试 | `trailer_test` / `engine_test` / `cli_test` 同步 |
+
+### 验证
+
+- **`go build ./...`**、**`go test ./...`** 全过。
+- **最小仓端到端**（新编译的 kiln）：
+  1. `--causes i1` 可写 → `关系: causes i1` ✓
+  2. 旧名 `derived-from: i1` 经 alias 读成 `关系: caused-by i1` ✓
+  3. `--unrelate i1` 后关系消失 ✓
+  4. 同槽取强：先 `relates-to` 后 `caused-by` → 只显 `caused-by` ✓
+  5. 同动作内 `unrelate` + 声明 → 声明优先 ✓
+  6. `check` 全键目标存在（⚠）✓
+
+### 未做（后续）
+
+1. **`.kilnconfig.jsonc` 的 `relations` 段**：目前只把默认词表接进 `Config`，还没解析文件里的自定义槽/名/别名（设计已定，纯 plumbing）。
+2. **`-h` 重排/动态生成**：归 `help-relation-flags`。
+3. **blocking 槽的环检测**：设计已定，未实现。
+4. **`check` 的双侧声明冗余 / `part-of` AND**：见 `relation-revision` 结论，分批。

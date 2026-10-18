@@ -10,6 +10,8 @@ import (
 	"kiln/internal/vcs"
 )
 
+var testRel = model.DefaultRelationSet()
+
 func mkCommit(hash, msg string, day int) vcs.Commit {
 	return vcs.Commit{
 		ID:      hash,
@@ -29,7 +31,7 @@ func sampleCommits() []vcs.Commit {
 }
 
 func TestActionsFromCommitsFiltersAndOrders(t *testing.T) {
-	actions := ActionsFromCommits(sampleCommits())
+	actions := ActionsFromCommits(sampleCommits(), testRel)
 	if len(actions) != 3 {
 		t.Fatalf("expected 3 kiln actions, got %d", len(actions))
 	}
@@ -41,7 +43,7 @@ func TestActionsFromCommitsFiltersAndOrders(t *testing.T) {
 }
 
 func TestBuildAggregatesIssue(t *testing.T) {
-	repo := Build(ActionsFromCommits(sampleCommits()))
+	repo := Build(ActionsFromCommits(sampleCommits(), testRel), testRel)
 	if len(repo.Issues) != 1 {
 		t.Fatalf("expected 1 issue, got %d", len(repo.Issues))
 	}
@@ -55,7 +57,7 @@ func TestBuildAggregatesIssue(t *testing.T) {
 }
 
 func TestCheckCompleteIssueIsOK(t *testing.T) {
-	repo := Build(ActionsFromCommits(sampleCommits()))
+	repo := Build(ActionsFromCommits(sampleCommits(), testRel), testRel)
 	diags := Check(repo, model.DefaultActionSet())
 	if len(diags) != 1 || diags[0].Level != LevelOK {
 		t.Fatalf("expected a single OK diagnostic, got %+v", diags)
@@ -71,7 +73,7 @@ func TestCheckRules(t *testing.T) {
 		mkCommit("d2", "父不存在\nissue: sub/bad-parent\naction: ask\nderived-from: missing/parent", 3),
 		mkCommit("d1", "子不存在\nissue: sub/bad-child\naction: ask\nspawns: missing/child", 2),
 	}
-	repo := Build(ActionsFromCommits(commits))
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
 	diags := Check(repo, model.DefaultActionSet())
 
 	if !hasDiag(diags, "sub/no-ask", LevelErr, "缺少 ask") {
@@ -80,10 +82,10 @@ func TestCheckRules(t *testing.T) {
 	if !hasDiag(diags, "sub/no-ask", LevelWarn, "缺少终点动作") {
 		t.Fatalf("rule 2 not reported: %+v", diags)
 	}
-	if !hasDiag(diags, "sub/bad-parent", LevelErr, "父问题不存在") {
+	if !hasDiag(diags, "sub/bad-parent", LevelWarn, "关系目标不存在") {
 		t.Fatalf("rule 3 not reported: %+v", diags)
 	}
-	if !hasDiag(diags, "sub/bad-child", LevelErr, "子问题不存在") {
+	if !hasDiag(diags, "sub/bad-child", LevelWarn, "关系目标不存在") {
 		t.Fatalf("rule 4 not reported: %+v", diags)
 	}
 }
@@ -98,7 +100,7 @@ func TestCheckDoesNotEnforceOrder(t *testing.T) {
 		mkCommit("h2", "验证\nissue: o/r\naction: test", 2),
 		mkCommit("h1", "提问\nissue: o/r\naction: ask", 1),
 	}
-	repo := Build(ActionsFromCommits(commits))
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
 	diags := Check(repo, model.DefaultActionSet())
 	if len(diags) != 1 || diags[0].Level != LevelOK {
 		t.Fatalf("order must not be enforced, got %+v", diags)
@@ -110,7 +112,7 @@ func TestCheckHonoursCustomVocabulary(t *testing.T) {
 		mkCommit("g2", "收尾\nissue: x/y\naction: done", 2),
 		mkCommit("g1", "开始\nissue: x/y\naction: begin", 1),
 	}
-	repo := Build(ActionsFromCommits(commits))
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
 	set, err := model.NewActionSet([]string{"begin", "probe", "done"}, "begin", []string{"done"})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +128,7 @@ func TestFilter(t *testing.T) {
 		mkCommit("f1", "问题一\nissue: auth/token\naction: conclude\ndomain: auth\ntags: [security]", 3),
 		mkCommit("f2", "问题二\nissue: perf/slow\naction: ask\ndomain: perf\ntags: [performance]", 2),
 	}
-	repo := Build(ActionsFromCommits(commits))
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
 
 	if got := Filter(repo, FilterOptions{Domain: "auth"}); !reflect.DeepEqual(got, []string{"auth/token"}) {
 		t.Fatalf("domain filter = %v", got)
@@ -142,7 +144,7 @@ func TestFilter(t *testing.T) {
 func TestSummarize(t *testing.T) {
 	commitList := append(sampleCommits(),
 		mkCommit("x1", "进行中\nissue: perf/ongoing\naction: ask", 5))
-	repo := Build(ActionsFromCommits(commitList))
+	repo := Build(ActionsFromCommits(commitList, testRel), testRel)
 	s := Summarize(repo, model.DefaultActionSet())
 	if s.Total != 2 || s.Complete != 1 || s.InProgress != 1 || s.Actions != 4 {
 		t.Fatalf("unexpected stats: %+v", s)
@@ -156,7 +158,7 @@ func TestGroupByDomainKeepsCrossDomainFlat(t *testing.T) {
 		mkCommit("k3", "子\nissue: child\naction: ask\ndomain: cli\nderived-from: parent", 3),
 		mkCommit("k2", "父\nissue: parent\naction: conclude\ndomain: design", 2),
 	}
-	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
+	groups := GroupByDomain(Build(ActionsFromCommits(commits, testRel), testRel))
 	if len(groups) != 2 || groups[0].Domain != "cli" || groups[1].Domain != "design" {
 		t.Fatalf("expected a cli block then a design block, got %+v", groups)
 	}
@@ -175,7 +177,7 @@ func TestGroupByDomainSortsIssuesInABlockByID(t *testing.T) {
 		mkCommit("m2", "二\nissue: second\naction: ask\ndomain: design\nspawns: first", 2),
 		mkCommit("m1", "一\nissue: first\naction: ask\ndomain: design", 1),
 	}
-	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
+	groups := GroupByDomain(Build(ActionsFromCommits(commits, testRel), testRel))
 	if len(groups) != 1 || len(groups[0].Issues) != 2 {
 		t.Fatalf("one block with two issues: %+v", groups)
 	}
@@ -190,7 +192,7 @@ func TestGroupByDomainOrdersAndBucketsUndomained(t *testing.T) {
 		mkCommit("n2", "域二\nissue: beta\naction: ask\ndomain: zzz", 2),
 		mkCommit("n1", "域一\nissue: alpha\naction: ask\ndomain: aaa", 1),
 	}
-	groups := GroupByDomain(Build(ActionsFromCommits(commits)))
+	groups := GroupByDomain(Build(ActionsFromCommits(commits, testRel), testRel))
 	if len(groups) != 3 {
 		t.Fatalf("expected 3 blocks, got %d", len(groups))
 	}

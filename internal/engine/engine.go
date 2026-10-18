@@ -14,31 +14,28 @@ import (
 
 // ActionsFromCommits keeps only the kiln commits and returns them in
 // chronological order (git log hands them to us newest-first).
-func ActionsFromCommits(commits []vcs.Commit) []model.Action {
+func ActionsFromCommits(commits []vcs.Commit, rel *model.RelationSet) []model.Action {
 	var out []model.Action
 	for i := len(commits) - 1; i >= 0; i-- {
 		c := commits[i]
-		f, ok := trailer.Parse(c.Message)
+		f, ok := trailer.Parse(c.Message, rel)
 		if !ok {
 			continue
 		}
 		out = append(out, model.Action{
-			ID:          c.ID,
-			Subject:     subject(c.Message),
-			Date:        c.Date,
-			Issue:       f.Issue,
-			Kind:        f.Action,
-			Title:       f.Title,
-			Refs:        f.Refs,
-			Target:      f.Target,
-			Scope:       f.Scope,
-			Domain:      f.Domain,
-			Tags:        f.Tags,
-			DerivedFrom: f.DerivedFrom,
-			Spawns:      f.Spawns,
-			RelatesTo:   f.RelatesTo,
-			Blocks:      f.Blocks,
-			Supersedes:  f.Supersedes,
+			ID:        c.ID,
+			Subject:   subject(c.Message),
+			Date:      c.Date,
+			Issue:     f.Issue,
+			Kind:      f.Action,
+			Title:     f.Title,
+			Refs:      f.Refs,
+			Target:    f.Target,
+			Scope:     f.Scope,
+			Domain:    f.Domain,
+			Tags:      f.Tags,
+			Relations: f.Relations,
+			Unrelate:  f.Unrelate,
 		})
 	}
 	return out
@@ -55,7 +52,7 @@ func subject(message string) string {
 }
 
 // Build aggregates actions into a repository of issues.
-func Build(actions []model.Action) *model.Repo {
+func Build(actions []model.Action, rel *model.RelationSet) *model.Repo {
 	repo := &model.Repo{Issues: map[string]*model.Issue{}}
 	for _, a := range actions {
 		p := repo.Issues[a.Issue]
@@ -68,18 +65,63 @@ func Build(actions []model.Action) *model.Repo {
 			p.Domain = a.Domain
 		}
 		p.Tags = appendUnique(p.Tags, a.Tags...)
-		p.DerivedFrom = appendUnique(p.DerivedFrom, a.DerivedFrom...)
-		p.Spawns = appendUnique(p.Spawns, a.Spawns...)
-		p.RelatesTo = appendUnique(p.RelatesTo, a.RelatesTo...)
-		p.Blocks = appendUnique(p.Blocks, a.Blocks...)
-		p.Supersedes = appendUnique(p.Supersedes, a.Supersedes...)
 	}
 	for _, p := range repo.Issues {
 		sort.SliceStable(p.Actions, func(i, j int) bool {
 			return p.Actions[i].Date.Before(p.Actions[j].Date)
 		})
+		p.Relations = foldRelations(p, rel)
 	}
 	return repo
+}
+
+// foldRelations computes an issue's outbound view: at most one relation per
+// (target, slot), the strongest by rank; ties go to the later action. A
+// declaration inside an action outranks that action's unrelate for the same
+// target, so `unrelate: X` + `blocks: X` means "clear, then keep blocks".
+func foldRelations(p *model.Issue, rel *model.RelationSet) []model.Rel {
+	type key struct{ target, slot string }
+	state := map[key]model.Rel{}
+	for _, a := range p.Actions {
+		declared := map[string]bool{}
+		for _, r := range a.Relations {
+			declared[r.Target] = true
+		}
+		for _, t := range a.Unrelate {
+			if declared[t] {
+				continue
+			}
+			for k := range state {
+				if k.target == t {
+					delete(state, k)
+				}
+			}
+		}
+		for _, r := range a.Relations {
+			n, ok := rel.Lookup(r.Name)
+			if !ok {
+				continue
+			}
+			k := key{r.Target, n.Slot}
+			if cur, ok := state[k]; ok {
+				if c, ok := rel.Lookup(cur.Name); ok && c.Rank > n.Rank {
+					continue
+				}
+			}
+			state[k] = r
+		}
+	}
+	out := make([]model.Rel, 0, len(state))
+	for _, v := range state {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // IDs returns issue IDs sorted for stable output.
@@ -135,6 +177,7 @@ const (
 const (
 	RuleStartAction    = "start-action"
 	RuleTerminalAction = "terminal-action"
+	RuleRelationTarget = "relation-target"
 	RuleDerivedFrom    = "derived-from"
 	RuleSpawns         = "spawns"
 	RuleComplete       = "complete"
@@ -192,19 +235,12 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 			Message: "缺少终点动作（当前 " + last.Kind + "）"})
 	}
 
-	// Rule 3: every derived-from parent must exist.
-	for _, parent := range p.DerivedFrom {
-		if _, ok := repo.Issues[parent]; !ok {
-			diags = append(diags, Diagnostic{Level: LevelErr, Issue: p.ID, Rule: RuleDerivedFrom, Ref: parent,
-				Message: "父问题不存在：derived-from 指向 " + parent})
-		}
-	}
-
-	// Rule 4: every spawned child must exist.
-	for _, child := range p.Spawns {
-		if _, ok := repo.Issues[child]; !ok {
-			diags = append(diags, Diagnostic{Level: LevelErr, Issue: p.ID, Rule: RuleSpawns, Ref: child,
-				Message: "子问题不存在：spawns 指向 " + child})
+	// Rule 3: every relation target must exist — for every relation name, not
+	// just derived-from/spawns. A dangling target is a warning (lenient input).
+	for _, r := range p.Relations {
+		if _, ok := repo.Issues[r.Target]; !ok {
+			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleRelationTarget, Ref: r.Target,
+				Message: "关系目标不存在：" + r.Name + " 指向 " + r.Target})
 		}
 	}
 
@@ -275,7 +311,7 @@ func Summarize(repo *model.Repo, actions *model.ActionSet) Stats {
 
 // Graph renders an ASCII relationship tree: one block per issue, listing the
 // issues it spawns, relates to and derives from.
-func Graph(repo *model.Repo) string {
+func Graph(repo *model.Repo, rel *model.RelationSet) string {
 	var b strings.Builder
 	for i, id := range IDs(repo) {
 		if i > 0 {
@@ -287,7 +323,7 @@ func Graph(repo *model.Repo) string {
 			state = "?"
 		}
 		b.WriteString(id + " (" + state + ")\n")
-		lines := relationLines(repo, p)
+		lines := relationLines(repo, p, rel)
 		for j, l := range lines {
 			if j == len(lines)-1 {
 				b.WriteString("└── " + l + "\n")
@@ -299,16 +335,35 @@ func Graph(repo *model.Repo) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func relationLines(repo *model.Repo, p *model.Issue) []string {
+func relationLines(repo *model.Repo, p *model.Issue, rel *model.RelationSet) []string {
 	var lines []string
-	for _, c := range p.Spawns {
-		lines = append(lines, "spawns "+c+" ("+stateOf(repo, c)+")")
+	own := map[string]bool{} // target|slot already shown from this issue
+	for _, r := range p.Relations {
+		if n, ok := rel.Lookup(r.Name); ok {
+			own[r.Target+"|"+n.Slot] = true
+		}
+		lines = append(lines, r.Name+" "+r.Target+" ("+stateOf(repo, r.Target)+")")
 	}
-	for _, c := range p.RelatesTo {
-		lines = append(lines, "related "+c+" ("+stateOf(repo, c)+")")
-	}
-	for _, c := range p.DerivedFrom {
-		lines = append(lines, "derived-from "+c+" ("+stateOf(repo, c)+")")
+	// Inbound: edges other issues declared toward this one. Rendered with the
+	// inverse name so the sentence still reads with p as the subject.
+	for _, id := range IDs(repo) {
+		q := repo.Issues[id]
+		if q.ID == p.ID {
+			continue
+		}
+		for _, r := range q.Relations {
+			if r.Target != p.ID {
+				continue
+			}
+			if n, ok := rel.Lookup(r.Name); ok && own[q.ID+"|"+n.Slot] {
+				continue
+			}
+			label := rel.Inverse(r.Name)
+			if label == "" {
+				label = r.Name
+			}
+			lines = append(lines, label+" "+q.ID+" ("+stateOf(repo, q.ID)+")")
+		}
 	}
 	return lines
 }

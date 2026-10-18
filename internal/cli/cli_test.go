@@ -1433,7 +1433,7 @@ func TestCheckJSONReportsErrorAndFails(t *testing.T) {
 		t.Fatalf("exit code = %d, want 1 for an error", code)
 	}
 	got := out.String()
-	for _, want := range []string{`"ok": false`, `"rule": "derived-from"`, `"ref": "missing"`, `"level": "error"`} {
+	for _, want := range []string{`"ok": false`, `"rule": "relation-target"`, `"ref": "missing"`, `"level": "error"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("check --json missing %q:\n%s", want, got)
 		}

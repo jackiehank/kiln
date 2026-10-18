@@ -4,9 +4,17 @@
 // trailer. Parsing is deliberately lenient (case-insensitive keys, optional
 // spaces around the colon, `[a, b]` or comma-separated lists) so that agents and
 // humans can write naturally; formatting (see Format) is strict.
+//
+// Relation keys are not hardcoded: the vocabulary comes from the RelationSet, so
+// renamed and project-custom names read the same way (and legacy names stay
+// readable through aliases).
 package trailer
 
-import "strings"
+import (
+	"strings"
+
+	"kiln/internal/model"
+)
 
 // Fields is the semantic content of one kiln commit message.
 type Fields struct {
@@ -20,23 +28,23 @@ type Fields struct {
 	Domain string
 	Tags   []string
 
-	DerivedFrom []string
-	Spawns      []string
-	RelatesTo   []string
-	Blocks      []string
-	Supersedes  []string
+	// Relations are canonicalized declarations (aliases resolved). Unrelate
+	// lists targets whose relations this action voids.
+	Relations []model.Rel
+	Unrelate  []string
 }
 
-var knownKeys = map[string]bool{
+// scalarKeys are the fixed (non-relation) trailers; relation keys come from the
+// vocabulary and "unrelate" is always recognized.
+var scalarKeys = map[string]bool{
 	"issue": true, "action": true, "title": true,
 	"refs": true, "target": true, "scope": true, "domain": true, "tags": true,
-	"derived-from": true, "spawns": true, "relates-to": true,
-	"blocks": true, "supersedes": true,
+	"unrelate": true,
 }
 
 // Parse scans every line of message for known trailers. It returns the parsed
 // fields and whether the commit qualifies as a kiln action.
-func Parse(message string) (Fields, bool) {
+func Parse(message string, rel *model.RelationSet) (Fields, bool) {
 	var f Fields
 	for _, raw := range strings.Split(message, "\n") {
 		line := strings.TrimSpace(raw)
@@ -49,7 +57,15 @@ func Parse(message string) (Fields, bool) {
 		}
 		key := strings.ToLower(strings.TrimSpace(line[:i]))
 		val := strings.TrimSpace(line[i+1:])
-		if val == "" || !knownKeys[key] {
+		if val == "" {
+			continue
+		}
+		if !scalarKeys[key] {
+			if n, ok := rel.Resolve(key); ok {
+				for _, t := range splitList(val) {
+					f.Relations = append(f.Relations, model.Rel{Name: n.Name, Target: t})
+				}
+			}
 			continue
 		}
 		switch key {
@@ -69,16 +85,8 @@ func Parse(message string) (Fields, bool) {
 			f.Refs = append(f.Refs, splitList(val)...)
 		case "tags":
 			f.Tags = append(f.Tags, splitList(val)...)
-		case "derived-from":
-			f.DerivedFrom = append(f.DerivedFrom, splitList(val)...)
-		case "spawns":
-			f.Spawns = append(f.Spawns, splitList(val)...)
-		case "relates-to":
-			f.RelatesTo = append(f.RelatesTo, splitList(val)...)
-		case "blocks":
-			f.Blocks = append(f.Blocks, splitList(val)...)
-		case "supersedes":
-			f.Supersedes = append(f.Supersedes, splitList(val)...)
+		case "unrelate":
+			f.Unrelate = append(f.Unrelate, splitList(val)...)
 		}
 	}
 	f.Action = strings.ToLower(f.Action)
@@ -99,52 +107,40 @@ func splitList(v string) []string {
 	return out
 }
 
-// order is the canonical trailer order used by Format.
-var order = []string{
-	"issue", "action", "title", "refs", "target", "scope",
-	"domain", "tags", "derived-from", "spawns", "relates-to", "blocks", "supersedes",
-}
-
 // Format renders fields as a canonical kiln commit message: the title (when
-// set) on the subject line, a blank line, then trailers in a fixed order. The
-// blank line keeps git from folding the whole message into one "subject"
-// paragraph, so `git log --oneline` and PR titles show only the title.
-func Format(f Fields) string {
+// set) on the subject line, a blank line, then trailers in a fixed order
+// (relations grouped by name, in vocabulary order, then unrelate). The blank
+// line keeps git from folding the whole message into one "subject" paragraph,
+// so `git log --oneline` and PR titles show only the title.
+func Format(f Fields, rel *model.RelationSet) string {
 	var b strings.Builder
 	if f.Title != "" {
 		b.WriteString(f.Title)
 		b.WriteString("\n\n")
 	}
-	for _, k := range order {
-		switch k {
-		case "issue":
-			writeScalar(&b, "issue", f.Issue)
-		case "action":
-			writeScalar(&b, "action", f.Action)
-		case "title":
-			writeScalar(&b, "title", f.Title)
-		case "refs":
-			writeList(&b, "refs", f.Refs)
-		case "target":
-			writeScalar(&b, "target", f.Target)
-		case "scope":
-			writeScalar(&b, "scope", f.Scope)
-		case "domain":
-			writeScalar(&b, "domain", f.Domain)
-		case "tags":
-			writeList(&b, "tags", f.Tags)
-		case "derived-from":
-			writeList(&b, "derived-from", f.DerivedFrom)
-		case "spawns":
-			writeList(&b, "spawns", f.Spawns)
-		case "relates-to":
-			writeList(&b, "relates-to", f.RelatesTo)
-		case "blocks":
-			writeList(&b, "blocks", f.Blocks)
-		case "supersedes":
-			writeList(&b, "supersedes", f.Supersedes)
+	writeScalar(&b, "issue", f.Issue)
+	writeScalar(&b, "action", f.Action)
+	writeScalar(&b, "title", f.Title)
+	writeList(&b, "refs", f.Refs)
+	writeScalar(&b, "target", f.Target)
+	writeScalar(&b, "scope", f.Scope)
+	writeScalar(&b, "domain", f.Domain)
+	writeList(&b, "tags", f.Tags)
+	byName := map[string][]string{}
+	for _, r := range f.Relations {
+		byName[r.Name] = append(byName[r.Name], r.Target)
+	}
+	for _, name := range rel.Names() {
+		if tg := byName[name]; len(tg) > 0 {
+			writeList(&b, name, tg)
 		}
 	}
+	for name, tg := range byName {
+		if _, ok := rel.Lookup(name); !ok {
+			writeList(&b, name, tg)
+		}
+	}
+	writeList(&b, "unrelate", f.Unrelate)
 	return strings.TrimRight(b.String(), "\n")
 }
 

@@ -121,15 +121,12 @@ type Action struct {
 	Domain string
 	Tags   []string
 
-	DerivedFrom []string
-	Spawns      []string
-	RelatesTo   []string
-	Blocks      []string
-	Supersedes  []string
+	Relations []Rel
+	Unrelate  []string
 }
 
-// Issue aggregates every action that shares one issue ID, plus the union of
-// the relationship and classification trailers declared across those actions.
+// Issue aggregates every action that shares one issue ID, plus the folded
+// relationships and classification trailers declared across those actions.
 type Issue struct {
 	ID      string
 	Actions []Action
@@ -137,11 +134,9 @@ type Issue struct {
 	Domain string
 	Tags   []string
 
-	DerivedFrom []string
-	Spawns      []string
-	RelatesTo   []string
-	Blocks      []string
-	Supersedes  []string
+	// Relations is the folded *outbound* view: at most one relation per
+	// (target, slot), the strongest by rank (ties: latest action wins).
+	Relations []Rel
 }
 
 // Last returns the final action in the path.

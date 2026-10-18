@@ -38,10 +38,11 @@ type file struct {
 
 // Config is everything kiln reads from a repository's config file.
 type Config struct {
-	Path     string           // the file kiln used ("" outside a repository)
-	Actions  *model.ActionSet // the vocabulary (built-in defaults when unset)
-	VCS      string           // backend preference: auto | git | jj
-	Worktree string           // isolation mode: off (default) | on
+	Path      string              // the file kiln used ("" outside a repository)
+	Actions   *model.ActionSet    // the vocabulary (built-in defaults when unset)
+	Relations *model.RelationSet  // the relation vocabulary (built-in defaults when unset)
+	VCS       string              // backend preference: auto | git | jj
+	Worktree  string              // isolation mode: off (default) | on
 }
 
 // Worktree modes answer one question: may an action be recorded in the main
@@ -61,7 +62,7 @@ func (c Config) Isolated() bool { return c.Worktree == WorktreeOn }
 // exists but does not parse is an error, so a misspelled key is never silently
 // ignored.
 func Read(startDir string) (Config, error) {
-	cfg := Config{Actions: model.DefaultActionSet(), VCS: "auto", Worktree: WorktreeOff}
+	cfg := Config{Actions: model.DefaultActionSet(), Relations: model.DefaultRelationSet(), VCS: "auto", Worktree: WorktreeOff}
 	path, ok := Path(startDir)
 	if !ok {
 		return cfg, nil // outside a repository: do still works, on the defaults

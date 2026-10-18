@@ -33,7 +33,8 @@ worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里�
 
 do/commit 的 flags:
   --title  --refs  --target  --scope  --domain  --tag
-  --derived-from  --spawns  --relates-to  --blocks  --supersedes
+  --causes  --caused-by  --blocks  --blocked-by  --part-of  --has-part
+  --supersedes  --superseded-by  --relates-to  --unrelate
 
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
@@ -138,14 +139,24 @@ func isWide(r rune) bool {
 // instead of touching a real repository; it is opened lazily, so commands that
 // need no repo (do) still work outside one.
 type env struct {
-	actions  *model.ActionSet
-	dir      string
-	vcsPref  string
-	worktree string
-	repo     vcs.Repo
-	kind     vcs.Kind // the backend that was opened, recorded for backend-specific wording
-	out      io.Writer
-	errw     io.Writer
+	actions   *model.ActionSet
+	relations *model.RelationSet
+	dir       string
+	vcsPref   string
+	worktree  string
+	repo      vcs.Repo
+	kind      vcs.Kind // the backend that was opened, recorded for backend-specific wording
+	out       io.Writer
+	errw      io.Writer
+}
+
+// rel returns the relation vocabulary, falling back to the built-in default
+// when the env was built without one (e.g. tests).
+func (e *env) rel() *model.RelationSet {
+	if e.relations == nil {
+		return model.DefaultRelationSet()
+	}
+	return e.relations
 }
 
 // backend returns the repository backend, opening it from dir/config on first
@@ -206,7 +217,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "配置错误: %v\n", err)
 		return 1
 	}
-	e := &env{actions: cfg.Actions, dir: ".", vcsPref: cfg.VCS, worktree: cfg.Worktree, out: stdout, errw: stderr}
+	e := &env{actions: cfg.Actions, relations: cfg.Relations, dir: ".", vcsPref: cfg.VCS, worktree: cfg.Worktree, out: stdout, errw: stderr}
 	switch cmd {
 	case "do":
 		return e.write(rest, false)
@@ -311,21 +322,24 @@ func (e *env) write(args []string, commit bool) int {
 		}
 	}
 
+	rels := make([]model.Rel, 0)
+	for _, name := range e.rel().Names() {
+		for _, t := range f.list(name) {
+			rels = append(rels, model.Rel{Name: name, Target: t})
+		}
+	}
 	msg := trailer.Format(trailer.Fields{
-		Issue:       issue,
-		Action:      action,
-		Title:       f.get("title"),
-		Refs:        f.list("refs"),
-		Target:      f.get("target"),
-		Scope:       f.get("scope"),
-		Domain:      f.get("domain"),
-		Tags:        f.list("tag"),
-		DerivedFrom: f.list("derived-from"),
-		Spawns:      f.list("spawns"),
-		RelatesTo:   f.list("relates-to"),
-		Blocks:      f.list("blocks"),
-		Supersedes:  f.list("supersedes"),
-	})
+		Issue:     issue,
+		Action:    action,
+		Title:     f.get("title"),
+		Refs:      f.list("refs"),
+		Target:    f.get("target"),
+		Scope:     f.get("scope"),
+		Domain:    f.get("domain"),
+		Tags:      f.list("tag"),
+		Relations: rels,
+		Unrelate:  f.list("unrelate"),
+	}, e.rel())
 	if !commit {
 		fmt.Fprintln(e.out, msg)
 		if tip := e.worktreeTip(issue); tip != "" {
@@ -740,7 +754,7 @@ func (e *env) path(args []string) int {
 			fmt.Fprint(e.out, indentStat(stat))
 		}
 	}
-	if rel := relationSummary(p); rel != "" {
+	if rel := relationSummary(p, e.rel()); rel != "" {
 		fmt.Fprintf(e.out, "  关系: %s\n", rel)
 	}
 	return 0
@@ -1105,7 +1119,7 @@ func (e *env) findIssue(issue string) (*model.Issue, bool) {
 	if err != nil {
 		return nil, false
 	}
-	p, ok := engine.Build(engine.ActionsFromCommits(commits)).Issues[issue]
+	p, ok := engine.Build(engine.ActionsFromCommits(commits, e.rel()), e.rel()).Issues[issue]
 	return p, ok
 }
 
@@ -1232,7 +1246,7 @@ func (e *env) graph(args []string) int {
 		fmt.Fprintln(e.out, "（空）")
 		return 0
 	}
-	fmt.Fprintln(e.out, engine.Graph(repo))
+	fmt.Fprintln(e.out, engine.Graph(repo, e.rel()))
 	return 0
 }
 
@@ -1248,7 +1262,7 @@ func (e *env) loadRepo() (*model.Repo, int) {
 		fmt.Fprintf(e.errw, "读取历史失败: %v\n", err)
 		return nil, 1
 	}
-	return engine.Build(engine.ActionsFromCommits(commits)), 0
+	return engine.Build(engine.ActionsFromCommits(commits, e.rel()), e.rel()), 0
 }
 
 func modeName(commit bool) string {
@@ -1272,18 +1286,14 @@ func (e *env) progressWord(p *model.Issue) string {
 	return "进行中"
 }
 
-func relationSummary(p *model.Issue) string {
-	var parts []string
-	add := func(label string, vals []string) {
-		if len(vals) > 0 {
-			parts = append(parts, label+" "+strings.Join(vals, ", "))
-		}
+func relationSummary(p *model.Issue, rel *model.RelationSet) string {
+	if len(p.Relations) == 0 {
+		return ""
 	}
-	add("derived-from", p.DerivedFrom)
-	add("spawns", p.Spawns)
-	add("relates-to", p.RelatesTo)
-	add("blocks", p.Blocks)
-	add("supersedes", p.Supersedes)
+	parts := make([]string, 0, len(p.Relations))
+	for _, r := range p.Relations {
+		parts = append(parts, r.Name+" "+r.Target)
+	}
 	return strings.Join(parts, "; ")
 }
 
