@@ -307,3 +307,53 @@
 - **视角化渲染在本实验中不迷惑**（H1–H3 均过）。
 - **但真正意外的是写侧**：不让 agent 在页面上看到反名，会诱发“把 `blocked-by` 写成 `blocks`”这种主语/名字错配——这为“读侧展示反名（句渲 2）”提供了直接理由。
 - **建议进入 `conclude`**：定下单 issue 页面 = 视角化句子 + 反名带标注；全局图 = 声明源箭头；视角化的成立前提是**入边渲染先落地**。
+
+## test：实验隔离与效度——怎么防 subagent 看到实验设计（2026-10-18）
+
+> 用户追问：怎么避免 subagent 看到我们的实验设计？下面是实测过的隔离协议。
+
+### 1. 泄漏面（先列全，再逐个堵）
+
+| 通道 | 内容 | 堵法 |
+| --- | --- | --- |
+| **工具**（决定性） | 设计 + 预期答案就存在 `docs/relation-rendering.md`，`read`/`grep`/`bash` 一读就全裸 | **`--no-tools`** |
+| **cwd 注入** | `<cwd>` 路径会进 system prompt；`kiln-exp` 这种目录名会泄露项目 | 用**中性**临时目录名 |
+| **上下文文件** | `<agent-dir>/AGENTS.md`（全局，总是加载）+ 从 cwd 逐级向上找 `AGENTS.md`/`CLAUDE.md`（不要求 trust） | `-nc` / `--no-context-files` |
+| **skills** | skill 的 name/description 会进 system prompt（完整指令按需加载） | `-ns` / `--no-skills` |
+| **prompt templates** | `-np` / `--no-prompt-templates` |
+| **项目 `.pi/`**（settings/extensions/SYSTEM.md） | `-na` / `--no-approve` 忽略 trust-gated 项目资源 |
+| **session 复用** | `-c`/`-r`/`-f` 会带历史 | `--no-session` |
+| **prompt 自身** | 只能靠不写：不提假设名、不提预期答案、不提“这是实验” | 人工审查 |
+
+### 2. 四个探针（实测）
+
+| 探针 | 条件 | 结果 |
+| --- | --- | --- |
+| **A** | `/tmp/kiln-exp` + `--no-tools`（本次实验的实际条件） | 上下文只剩 pi 默认 system prompt 块（`<tools>(none)</tools>`、`<rules>`、`<docs>`）+ 全局 `AGENTS.md` + cwd；**无任何实验内容**。唯一瑕疵：`<cwd>` 里出现 `kiln-exp` |
+| **B** | 仓库目录 + `--no-tools` | 仅命中 `kiln`（来自 cwd 路径）；`relation-rendering` / `视角化` / `blocked-by` / `实验` 全无。→ **即使跑在仓库里，`--no-tools` 也足够** |
+| **C** | 仓库目录 + 只开 `read` 工具 | **读出 `docs/relation-rendering.md` 的 D1–D5 预期答案、得分表、实验图** → 确认主泄漏通道 |
+| **D** | `mktemp -d` 中性目录 + `-nc -ns -np -na --no-tools` | 全无；`<project_context>` 直接为空 |
+
+### 3. 对本次实验的效度结论
+
+- 本次 A 臂/B 臂跑在 `/tmp/kiln-exp` + `--no-tools` + `--no-session`，**未泄漏实验内容**（探针 A）；结论有效。
+- 唯一瑕疵：目录名 `kiln-exp` 使 cwd 里出现项目名（不足以影响 13 道题）。
+- 探针 C 警告：**如果以后需要给 subagent 开工具，必须在文件系统层隔离**——把题库/设计放它读不到的地方（单独目录、只挂题库）。
+
+### 4. 加固配方（推荐以后照用）
+
+```sh
+d=$(mktemp -d)          # 中性目录名，且在仓库之外
+cd "$d"
+pi -p --no-session --no-tools \
+   -nc -ns -np -na \
+   "$(cat prompt.txt)"   # prompt 里不写假设名/预期答案
+```
+
+- `--no-tools` 是**决定性**那一项；其余四项是 belt-and-suspenders。
+- 两臂的 prompt 文件分开放、且不在 subagent 的 cwd 下（防止未来开工具时读到对方臂）。
+- 若要更彻底，用 `--system-prompt` 直接换掉默认提示（探针 A 显示的 `<docs>`/`<rules>` 无害，但可一并去掉）。
+
+### 结论（隔离协议，已实测）
+
+**设计在文件里，工具是唯一主通道；`--no-tools` 就已挡住。** cwd 名、AGENTS.md、skills 是次要通道，分别用中性目录名与 `-nc -ns -np -na` 堵。本次实验已安全，下一个实验按 §4 配方跑。
