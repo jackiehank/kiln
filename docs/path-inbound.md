@@ -143,3 +143,32 @@ golden 断言要冻结文本，所以这三项必须先定（否则测不了）�
 ### 7. 顺序
 
 先冻结第 5 节三项（可并入本 issue 的 `conclude`，或再补一个 `hypothesize`）→ 下移 path 渲染到 engine → 写 fixture + golden 与不变式 → 最小仓冒烟。
+
+## hypothesize：冻结三项待定（用户裁定）
+
+### 1. 无向关系不画箭头
+
+`relates-to` 无 `inverse`（对称），在 graph 里**不画箭头**，用无向连线/平铺表示；**只有有向关系才画** `──name──▶`。
+
+### 2. 双侧冗余 = last-wins
+
+同一 `(无序对, 槽)` 被两侧各声明一次（如 A `causes` B 且 B `caused-by` A）时，**以最后一条声明为准**展示（同 `relation-revision` 的读侧 LWW），全图只出一形。
+
+> **连带项**：这要求 fold 的键是 **`(无序对, 槽)`（全局）**；而现在的 `foldRelations` 是**每个 issue 自己的 `(target, 槽)`**，两条声明都留着。所以 #2 不只是 graph 渲染——要**补一个全局折**。这恰好补上 `relation-revision` 结论里「键 = (无序对, 槽)」在本实现里的缺口。
+
+### 3. 反名标注：沿用 relation-rendering 的定稿
+
+之前已讨论（`docs/relation-rendering.md`）：
+
+- 预登记 mitigation #2（`:203`）：`spawns ＝ 我引发的（derived-from 的反面）`。
+- conclude 定稿（`:295` / `:378`）：**反名首次出现时带一句轻量标注**，例 `P1 spawns P2（= P2 由 P1 引发）`。
+- 相邻：`docs/help-relation-flags.md:260` 已为 `-h` 预留 `relations.names.gloss`。
+
+**「首次出现」的含义（澄清）**：kiln 无状态、每次 `path X` 只渲一页，所以范围 = **本次输出这一页**——同一反名在该页**只标注第一行**，后续同名的行不再重复；没有跨调用记忆。graph 不用反名，故无标注。
+
+**残余待定**：标注内容是「**静态名释义**」（per-name，可挂 `names.gloss`，与「首次」天然契合）还是「**行内展开**」（`X 反名 P（= P 正名 X）`，per-line）？**倾向静态名释义**。另：反名取**规范名**（`caused-by` / `blocked-by` / `has-part` / `superseded-by`），示例里的 `spawns` / `derived-from` 是改名前的旧名。
+
+### 对不变式的补充
+
+- **I5 修订**：对称关系在 graph **无箭头**（无向）。
+- **新增 I6**：同一 `(无序对, 槽)` 在 graph 里**至多一条**（last-wins）。
