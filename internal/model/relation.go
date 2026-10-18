@@ -28,6 +28,12 @@ type RelationName struct {
 	Rank     int
 	Directed bool
 	Inverse  string
+
+	// Gloss is the one-line meaning of the name. `kiln path` attaches it to an
+	// inverse name the first time it shows, and `-h` prints it beside the flag.
+	Gloss string
+	// InverseGloss is the gloss handed to the auto-registered inverse name.
+	InverseGloss string
 }
 
 // RelationSet is the relation vocabulary. The structure — slots and the
@@ -82,7 +88,7 @@ func NewRelationSet(slots []RelationSlot, names []RelationName, aliases map[stri
 		}
 		if n.Inverse != "" {
 			if _, ok := rs.names[n.Inverse]; !ok {
-				inv := RelationName{Name: n.Inverse, Slot: n.Slot, Rank: n.Rank, Directed: true, Inverse: n.Name}
+				inv := RelationName{Name: n.Inverse, Slot: n.Slot, Rank: n.Rank, Directed: true, Inverse: n.Name, Gloss: n.InverseGloss}
 				if err := add(inv); err != nil {
 					return nil, err
 				}
@@ -122,11 +128,11 @@ func DefaultRelationSet() *RelationSet {
 	rs, err := NewRelationSet(
 		[]RelationSlot{{Name: "ordering", Blocking: true}, {Name: "lineage", Blocking: false}},
 		[]RelationName{
-			{Name: "blocks", Slot: "ordering", Rank: 1, Inverse: "blocked-by"},
-			{Name: "part-of", Slot: "ordering", Rank: 2, Inverse: "has-part"},
-			{Name: "relates-to", Slot: "lineage", Rank: 1},
-			{Name: "caused-by", Slot: "lineage", Rank: 2, Inverse: "causes"},
-			{Name: "supersedes", Slot: "lineage", Rank: 3, Inverse: "superseded-by"},
+			{Name: "blocks", Slot: "ordering", Rank: 1, Inverse: "blocked-by", Gloss: "我阻塞谁", InverseGloss: "谁阻塞我"},
+			{Name: "part-of", Slot: "ordering", Rank: 2, Inverse: "has-part", Gloss: "我属于谁", InverseGloss: "谁属于我"},
+			{Name: "relates-to", Slot: "lineage", Rank: 1, Gloss: "无向的关联"},
+			{Name: "caused-by", Slot: "lineage", Rank: 2, Inverse: "causes", Gloss: "谁引发了我", InverseGloss: "我引发了谁"},
+			{Name: "supersedes", Slot: "lineage", Rank: 3, Inverse: "superseded-by", Gloss: "我取代谁", InverseGloss: "谁取代了我"},
 		},
 		map[string]string{"derived-from": "caused-by", "spawns": "causes"},
 	)
@@ -156,6 +162,15 @@ func (rs *RelationSet) Lookup(name string) (RelationName, bool) {
 func (rs *RelationSet) Inverse(name string) string {
 	if n, ok := rs.names[name]; ok {
 		return n.Inverse
+	}
+	return ""
+}
+
+// Gloss returns the one-line meaning of a canonical name, or "" when the name is
+// unknown or carries none.
+func (rs *RelationSet) Gloss(name string) string {
+	if n, ok := rs.names[name]; ok {
+		return n.Gloss
 	}
 	return ""
 }

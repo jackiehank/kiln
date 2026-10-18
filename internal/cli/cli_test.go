@@ -1471,3 +1471,34 @@ func TestJSONKeepsOneShapeRegardlessOfVerbose(t *testing.T) {
 		t.Fatalf("--verbose changed the document:\n%s\nvs\n%s", plain.String(), verbose.String())
 	}
 }
+
+// `path` must show the edges that point at the issue, not just the ones it
+// declared — that is the whole point of the inbound view.
+func TestPathShowsInboundRelations(t *testing.T) {
+	var out, errb bytes.Buffer
+	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	runner := fakeRunner{commits: []vcs.Commit{
+		{ID: "in2", Date: base.Add(time.Hour), Message: "乙\n\nissue: b\naction: ask\ncauses: a"},
+		{ID: "in1", Date: base, Message: "甲\n\nissue: a\naction: ask"},
+	}}
+	e := &env{actions: model.DefaultActionSet(), repo: runner, out: &out, errw: &errb}
+	if code := e.path([]string{"a"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	for _, want := range []string{"  关系:", "    caused-by b（caused-by ＝ 谁引发了我）"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("path must show the inbound edge %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// The help reuses the vocabulary's glosses, so a relation name is explained
+// where it is offered.
+func TestUsageGlossesRelationFlags(t *testing.T) {
+	text := usageText(model.DefaultRelationSet())
+	for _, want := range []string{"--blocked-by", "谁阻塞我", "--caused-by", "谁引发了我"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("usage must carry the gloss %q:\n%s", want, text)
+		}
+	}
+}

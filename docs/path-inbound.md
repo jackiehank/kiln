@@ -216,3 +216,36 @@ golden 断言要冻结文本，所以这三项必须先定（否则测不了）�
 - graph 去掉入边（只画声明源箭头）。
 - 对称关系不画箭头。
 - 双侧冗余 last-wins + **全局 `(无序对, 槽)` 折**（补 `relation-revision` 的键缺口）。
+
+## apply：落地与验证（2026-10-18）
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/model/relation.go` | `RelationName` 加 `Gloss` / `InverseGloss`；`RelationSet.Gloss(name)`；`DefaultRelationSet` 给 9 名各一句释义（反名经 `InverseGloss` 自动继承） |
+| `internal/engine/engine.go` | 新增 `PathLines(repo, p, rel)`：出边（声明名）在前、入边（`inverse` 名）在后，各按 `(目标, 名)` 排序；按 `(目标, 槽)` 去重；翻转名在本页首次出现附 `（名 ＝ 释义）` |
+| `internal/cli/cli.go` | `path` 改用 `engine.PathLines`，关系区多行渲染；删除只画出边的 `relationSummary`；`-h` 的关系 flag 从词表带出 gloss |
+| 测试 | `engine_test`：5 个 `PathLines` 用例（出先入后 / 双侧去重 / 对称不翻转 / 释义一次 / 纯入边）；`cli_test`：path 入边 + `-h` 释义 |
+
+### 渲染形状
+
+```
+  关系:
+    blocks b
+    relates-to d
+    caused-by b（caused-by ＝ 谁引发了我）
+    blocks c
+```
+
+出边在前；翻转名首次出现才附释义；已作为出边出现过的名字不再解释。
+
+### 验证
+
+- `go build ./...`、`go vet ./...`、`go test ./...` 全过。
+- 最小仓端到端：`b causes a` / `c blocked-by a` / `a blocks b relates-to c` → `kiln path a` 显示 `caused-by b（…）` 与 `blocks c`；`kiln path b` 显示入边 `blocked-by a（…）`。
+- 本仓 dogfood：`kiln path relation-revision` 出边 + 入边（`causes relations-impl`）正常；`-h` 关系小节带释义。
+
+### 未做
+
+- graph 的收口（去入边、对称无箭头、last-wins 全局折）→ `graph-normalize`。

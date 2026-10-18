@@ -379,6 +379,80 @@ func relationLines(repo *model.Repo, p *model.Issue, rel *model.RelationSet) []s
 	return lines
 }
 
+// PathLines renders issue p's relation block for `kiln path`: p's own
+// declarations first, under the name it declared, then the inbound edges — the
+// edges other issues declared toward p — flipped to the inverse name so every
+// line still reads with p as the subject. One relation per (target, slot), out
+// before in, each sorted by (target, name). A name that only appears because it
+// was flipped carries its glossary the first time it shows, so the reader learns
+// the inverse once without the block turning into a chart.
+func PathLines(repo *model.Repo, p *model.Issue, rel *model.RelationSet) []string {
+	type entry struct {
+		name    string
+		target  string
+		flipped bool
+	}
+	var out, in []entry
+	seen := map[string]bool{} // target|slot already shown from p's own declarations
+	for _, r := range p.Relations {
+		n, ok := rel.Lookup(r.Name)
+		if !ok {
+			continue
+		}
+		seen[r.Target+"|"+n.Slot] = true
+		out = append(out, entry{name: r.Name, target: r.Target})
+	}
+	for _, id := range IDs(repo) {
+		q := repo.Issues[id]
+		if q.ID == p.ID {
+			continue
+		}
+		for _, r := range q.Relations {
+			if r.Target != p.ID {
+				continue
+			}
+			n, ok := rel.Lookup(r.Name)
+			if !ok || seen[q.ID+"|"+n.Slot] {
+				continue
+			}
+			label := rel.Inverse(r.Name)
+			flipped := label != ""
+			if !flipped {
+				label = r.Name // symmetric: the name reads the same from either side
+			}
+			in = append(in, entry{name: label, target: q.ID, flipped: flipped})
+		}
+	}
+	sortEntries := func(es []entry) {
+		sort.Slice(es, func(i, j int) bool {
+			if es[i].target != es[j].target {
+				return es[i].target < es[j].target
+			}
+			return es[i].name < es[j].name
+		})
+	}
+	sortEntries(out)
+	sortEntries(in)
+
+	var lines []string
+	glossed := map[string]bool{}
+	for _, e := range out {
+		lines = append(lines, e.name+" "+e.target)
+		glossed[e.name] = true // a name the issue declared needs no introduction
+	}
+	for _, e := range in {
+		line := e.name + " " + e.target
+		if e.flipped && !glossed[e.name] {
+			if g := rel.Gloss(e.name); g != "" {
+				line += "（" + e.name + " ＝ " + g + "）"
+			}
+		}
+		glossed[e.name] = true
+		lines = append(lines, line)
+	}
+	return lines
+}
+
 func stateOf(repo *model.Repo, id string) string {
 	if p, ok := repo.Issues[id]; ok {
 		if s := p.State(); s != "" {

@@ -78,7 +78,7 @@ func doCommitFlagGroups(rel *model.RelationSet) (meta, relations []flagHelp) {
 		{"--tag", "<标签>[,<标签>]", "标签"},
 	}
 	for _, name := range rel.Names() {
-		relations = append(relations, flagHelp{"--" + name, "<issue>[,<issue>]", ""})
+		relations = append(relations, flagHelp{"--" + name, "<issue>[,<issue>]", rel.Gloss(name)})
 	}
 	relations = append(relations, flagHelp{"--unrelate", "<issue>[,<issue>]", "撤销与该 issue 的关系"})
 	return meta, relations
@@ -871,8 +871,11 @@ func (e *env) path(args []string) int {
 			fmt.Fprint(e.out, indentStat(stat))
 		}
 	}
-	if rel := relationSummary(p, e.rel()); rel != "" {
-		fmt.Fprintf(e.out, "  关系: %s\n", rel)
+	if lines := engine.PathLines(repo, p, e.rel()); len(lines) > 0 {
+		fmt.Fprintln(e.out, "  关系:")
+		for _, l := range lines {
+			fmt.Fprintln(e.out, "    "+l)
+		}
 	}
 	return 0
 }
@@ -1406,17 +1409,6 @@ func (e *env) progressWord(p *model.Issue) string {
 		return "已完成"
 	}
 	return "进行中"
-}
-
-func relationSummary(p *model.Issue, rel *model.RelationSet) string {
-	if len(p.Relations) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(p.Relations))
-	for _, r := range p.Relations {
-		parts = append(parts, r.Name+" "+r.Target)
-	}
-	return strings.Join(parts, "; ")
 }
 
 func tagsSuffix(p *model.Issue) string {
