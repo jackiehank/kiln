@@ -46,3 +46,42 @@
 - `internal/cli/cli.go:34-36`：`usageFooter` 硬编码 5 个关系 flag。
 - `internal/cli/cli.go:323-327`（flag 解析）、`:1282-1286`（摘要输出）：同源硬编码。
 - `relation-revision` 的 test（2026-10-18）：新名 `causes:` / `unrelate:` 当前被**静默丢弃**；词表将可配置。
+
+## collect：CLI 怎么暴露「多种关系参数」，以及帮助分组（2026-10-18）
+
+> 起因（用户）：本 issue 不只是 `-h` 分组——关系有好几类，`do`/`commit` 该不该给关系参数做**分组 / 专门设计**，也一并想。先看同行。
+
+### 0. 本仓现状（`relations-impl` 落地后）
+
+- `do`/`commit` 的 flag **已经是从词表生成**的（`e.rel().Names()`）——新名 `--causes` / `--caused-by` / `--part-of` … 已可用，不再是 5 个硬编码。
+- 但 `-h` 的 `usageFooter` 仍是**静态字符串**（手工列了 10 个关系 flag），**与配置可能脱节**。
+- → 本 issue 现在只剩两问：**帮助怎么组织** + **参数形态要不要改**。
+
+### 1. 业内暴露关系的三种形态
+
+| 形态 | 代表 | 例子 | 优点 | 代价 |
+| --- | --- | --- | --- | --- |
+| **每类一个 flag**（flat） | `gh issue` v2.94.0 | `--parent` / `--set-parent` / `--remove-parent`；`--blocked-by` / `--blocking` / `--add-*` / `--remove-*` | 可发现、有 shell 补全 | flag 数随词表增长；帮助臃肿 |
+| **通用带名 flag** | `git commit --trailer`；Jira CLI `--link`；`--type` | `--trailer "<token>[(=|:)<value>]"`（可重复）；`jira --action linkIssue --link "Relates"` | **与词表解耦**：自定义名直接可用 | 无逐名发现 / 补全；需自己校验 |
+| **子命令** | `jira issue link`；`jtk links create/list/delete/types` | `jira issue link A --to B --type Blocks` | 命名空间干净 | 与 kiln 的动作提交模型不合（关系得写进历史） |
+
+### 2. 帮助分组是成熟做法
+
+- **Cobra flag groups**：用 flag annotation 分组，帮助按组渲染（例：`entireio/cli` 把 flag 分成 Scope / Navigation / Filtering & Sorting / Formatting，且规定“Scope 永远最先”）。— 一手。
+- GitHub CLI 的帮助也按主题组织。
+
+### 3. 三条对 kiln 的观察（不下结论）
+
+1. **子命令不合适**：kiln 的关系是**动作提交里的 trailer**（写一处、读侧推导）；`kiln relate ...` 要么得写进历史、要么变成第二条边，与 `relation-revision` 的**单值槽**冲突。→ 参数仍应挂在 `do`/`commit` 上。
+2. **通用 `--relate name=target` 值得考虑**：它就是 `git --trailer` 的形态，且**天然适配“词表可配置”**（自定义名不用改 CLI）；代价是可发现性差、要额外校验。
+3. **flat 逐名 flag + 帮助分组**：保留 `--causes` 这类逐名 flag（可发现 / 可补全），但在 `-h` 里给它们一个**独立小节**（Cobra 式分组），并**从词表动态生成**；`unrelate` 放进关系小节。
+
+→ 可能的组合：**flat 逐名 flag（词表生成）+ 通用 `--relate`（逃生口）+ `-h` 关系小节（动态）**。
+
+### 4. 来源
+
+- `git commit --trailer <token>[(=|:)<value>]`（可重复、自由 token）：[git-commit](https://git-scm.com/docs/git-commit)（一手）。
+- GitHub CLI v2.94.0 的 issue 层级 / 依赖 flag：`gh issue --parent / --blocked-by / --blocking`（[GitHub Changelog](https://github.blog/changelog/2026-06-10-manage-sub-issues-types-and-dependencies-from-github-cli/)）（一手）。
+- Jira CLI 通用 `--link`：`jira --action linkIssue --issue X --toIssue Y --link "Relates"`（[Appfire JCLI linkIssue](https://appfire.atlassian.net/wiki/spaces/SUPPORT/pages/89147359/How+to+use+linkIssue)）（一手 / 厂商文档）。
+- 子命令式关系管理：`jira issue link`（[matcra587/jira-cli](https://pkg.go.dev/github.com/matcra587/jira-cli@v0.9.1/internal/cli/issue)）、`jtk links create ... --type`（[atlassian-cli #148](https://github.com/open-cli-collective/atlassian-cli/issues/148)）（二手 / 提案）。
+- Cobra flag groups： [entireio/cli flaggroups.go](https://github.com/entireio/cli/blob/v0.11.3/cmd/entire/cli/flaggroups.go)（一手）。
