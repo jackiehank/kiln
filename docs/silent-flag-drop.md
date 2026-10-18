@@ -102,3 +102,46 @@
 
 - 原 issue 的“词表 / 实现不一致”已消；剩下的是**“不识别的输入是否报”**的通用问题。
 - 下一步：`hypothesize` 定三个面的处置（注意 A 的**假阳性**风险：正文里的 `中文: 东西` 不能当 trailer）。
+
+## hypothesize：收口三个残留面（2026-10-18）
+
+### 1. 面 C（最简单，先修）
+
+- `--force` 是 `commit` 的**已知** flag；在 `do` 下不该被叫“未知”。
+- **处置**：把 `force` 加入固定 flag（不再 ⚠）；帮助里已经把它写在“commit 额外 flag”。
+
+### 2. 面 B：所有命令的未知 flag → ⚠
+
+- 现状仅 `do`/`commit` 做（`relationsFromFlags`）。扩展到 `path` / `show` / `status` / `list` / `graph` / `check` / `worktree` / `config`。
+- **做法**：每个命令声明自己的 flag 白名单；`parse` 后统一比对，不在白名单 → **⚠（不拦）**。
+- 白名单（草案）：
+
+| 命令 | 允许的 flag |
+| --- | --- |
+| do / commit | title, refs, target, scope, domain, tag, unrelate, force + 词表名 + 别名 |
+| path | stat, shortstat |
+| show | stat |
+| status / check | json |
+| list | json, domain, tag, action |
+| graph | format |
+| worktree | （子命令各异：remove 有 force） |
+| config | —（无） |
+
+### 3. 面 A：未知 trailer 键 → `check` ⚠（防假阳性）
+
+- **难点**：`trailer.Parse` 逐行宽松扫描，正文里的 `中文: 东西` 会被当键。
+- **处置**：只在 **trailer 块** 里判定。trailer 块 = 消息**最后一个空行之后**的段，且该段**至少含一个已知 trailer**（`issue:` / `action:`）；在该段内、键不属于 `{固定键 ∪ 词表名 ∪ 别名}` 的行 → ⚠ `未知 trailer 键: X`。
+- **只在 `check` 报**（不拦提交）；`do`/`commit` 不需要（写入本来就是白名单驱动）。
+- 效果：`typo-key: i1` / `caused-byy: i1` 被点名；正文里的 `注意: …` 不误报（不在 trailer 块 / 块内无已知 trailer）。
+
+### 4. 不做
+
+- 不实现新关系名（已落地）。
+- 不改 `do` 的 stdout（提示一律走 **stderr**，不污染提交信息）。
+
+### 验收
+
+1. **C**：`kiln do X ask --force` 不再报“未知”；`kiln commit … --force` 正常。
+2. **B**：`kiln path X --bogus` / `kiln status --bogus` → ⚠；合法 flag 不受影响。
+3. **A**：临时仓提交带 `caused-byy:` / `typo-key:` → `kiln check` ⚠ 点名；正文含 `注意: xxx` 不误报。
+4. `go build` / `go test ./...` 过。
