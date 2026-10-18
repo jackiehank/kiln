@@ -381,3 +381,21 @@ do/commit 的 flags:
 - **单一真源**（命令 / flag 结构化表，文本与 JSON 同源）。
 
 → 建议另开一个 issue（或并入 `help-alignment`）承接这三项。
+
+## apply（续）：help 标注必填 / 选填（2026-10-18）
+
+### 核实（读码 + 实测）
+
+- `do`/`commit`：**必填 = 位置参数 `<issue> <action>`**；**没有无条件必填的 flag**（`write` 只校验位置参数数量、issue ID 格式、action 合法）。
+- `path`/`show`：必填位置参数 `<issue>`。
+- **`--force` 是条件必填**：`worktree=on` 时在 main 提交必须用它豁免（`write` 里 `if !f.has("force") { refuseInMain(...) }`）。
+
+### 改动
+
+1. `do/commit 的 flags:` 头 → “（位置参数 `<issue> <action>` 必填；以下 flag 均选填）”。
+2. 图例 → “`<>` 必填占位；`[]` 选填；`[,<…>]` 可重复、逗号分隔；关系名亦可写别名 derived-from / spawns”。
+3. `commit 额外 flag` 的 `--force` → 标“worktree=on 时在 main 提交**必填**，作一次性豁免”。
+
+### 验收
+
+- `-h` 可见上述标注；`go build ./...` / `go test ./...` 全过。

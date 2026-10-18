@@ -38,7 +38,7 @@ const usageOtherFlags = `
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
 show 的 flags:  --stat（只给该动作的文件统计）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
-commit 额外 flag:  --force（一次性豁免：worktree=on 时放行当次在 main 提交）
+commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 `
 
@@ -121,10 +121,10 @@ func usageText(rel *model.RelationSet) string {
 			b.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
-	b.WriteString("\ndo/commit 的 flags:\n")
+	b.WriteString("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n")
 	writeGroup("  元数据:", meta)
 	writeGroup("  关系:  （均可重复、逗号分隔）", relations)
-	b.WriteString("  说明: <> 是占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n")
+	b.WriteString("  说明: <> 必填占位；[] 选填；[,<…>] 可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n")
 	b.WriteString(usageOtherFlags)
 	return b.String()
 }
