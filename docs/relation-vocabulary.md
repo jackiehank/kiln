@@ -373,11 +373,13 @@
 | --- | --- | --- | --- |
 | **D1** | 反向名是否回写侧（写 9） | 回 / 不回（只读侧渲） | 推演与实验倾向**回**（不暴露反名会诱发写侧错配） |
 | **D2** | 依赖族**主名** | `blocks`（主流）/ `blocked-by` / `depends-on` | 决定箭头规范方向与“主名清单” |
-| **D3** | 反名 `spawns` | 保留 / 改 `spawned-by` / `branches-into` | 与 `derived-from` 对称性 |
+| **D3** | 反名 `spawns` | 保留 / `yields` / `gives-rise-to` / `branches-into` / （换成 `spawned-by`+`spawns` 对） | 与 `derived-from` 对称性 |
 | **D4** | 反名 `has-part` | 保留 / 改 `has-sub-issue` / `contains` | 与 `part-of` 对称性 |
 | **D5** | `part-of` 一族的名 | `part-of`/`has-part` vs `sub-issue-of`/`has-sub-issue` | `relation-types` 待选 |
 | **D6** | `derived-from` 的名字 | 保留 / 改名 | **不在本 issue**——归 `derived-from-direction`：读侧已证清白（2/2），但 wsl-agent owner 提过改名，且「写反了没人管」待验 |
-| **D7** | 同源名 | 新造 | 归 `common-origin` |
+| **D7** | 同源（`common-origin`）新名 | 新造 | 归 `common-origin` |
+
+> **澄清（D3）**：`derive` / `derives-from` **不是** `derived-from` 的反向——英文里两者**同向**（`X derives from Y` ≡ `X is derived from Y`），只是语态不同。反向必须让**来源方当主语**：`spawns` / `yields` / `gives-rise-to` / `produces`。唯一同词根的双向对是 **`spawned-by` / `spawns`**（但那是把 `derived-from` 换掉，有迁移成本，且 `spawned-by` 与 `derived-from` 同向）。→ D3 的候选收窄为 {`spawns`（保留）、`yields`、`gives-rise-to`、`branches-into`} 或整族改用 `spawned-by`/`spawns`。
 
 ### 3. 已定、不动的部分
 
