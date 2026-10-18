@@ -172,3 +172,47 @@ golden 断言要冻结文本，所以这三项必须先定（否则测不了）�
 
 - **I5 修订**：对称关系在 graph **无箭头**（无向）。
 - **新增 I6**：同一 `(无序对, 槽)` 在 graph 里**至多一条**（last-wins）。
+
+## conclude：范围收窄到 path，反名标注取 A（2026-10-18）
+
+### 0. 范围裁定
+
+本 issue **只做 `path`**。一切 `graph` 的收口（去入边、对称不画箭头、双侧冗余 last-wins + 全局折）**移出**，另开 `graph-normalize`。因此前几节里关于 graph 的 I1 / I2 / I6 **不再是本 issue 的验收项**。
+
+### 1. path 渲染规格（定稿）
+
+- 形态：**视角化句子**，主语 = X。
+- 内容：X 的**出边**（用声明的名）+ **入边**（用 `inverse(名)`）；按 `(目标, 槽)` 去重，一行一条。
+- 反名：取**规范名**（`caused-by` / `blocked-by` / `has-part` / `superseded-by`）；`relates-to` 无 inverse，回落同号。
+- **反名标注 = A 静态名释义**：`<名> ＝ <一句释义>`（如 `caused-by ＝ 谁引发了我（causes 的反面）`）。挂在反名**在本页首次出现**的那一行，同页后续同名不重复。释义属于**词表**（每规范名一句，内置默认，配置可覆盖），`-h` 复用同一份。
+- 顺序：**先出边、后入边**，各自按 `(目标, 名)` 稳定排序。
+
+### 2. path 不变式（本 issue 验收）
+
+- **P1**：path X 的行 = 出边（声明名）∪ 入边（inverse 规范名），按 (对, 槽) 去重，无重复。
+- **P2**：对称关系（`relates-to`）在两端同号出现。
+- **P3**：反名在本页首次出现时附静态释义，后续同名不重复。
+- **P4**：顺序稳定（先出后入，各按 (目标, 名) 排）。
+
+> 原 I3 微调为 P1；I4 的「graph 不丢边」一面移入 `graph-normalize`；I5 收敛为 P2；I1 / I2 / I6 移出。
+
+### 3. test 收敛
+
+- 主力：path 的 golden 单测（对 fixture 断言 `path X` 精确文本）+ P1–P4 不变式单测。
+- fixture 保留 path 相关陷阱：只有出边 / 只有入边（本 bug 核心）/ 同对双槽 / 同对反向视图 / 对称 relates-to / 双侧冗余（path 侧去重）/ 纯被指 / 链 / dangling。
+- **前置重构**：path 渲染从 `cli.go:relationSummary` 下移到 engine 纯函数。
+- graph 的 fixture 与断言 → `graph-normalize`。
+- 最小仓冒烟 `kiln path X`。
+
+### 4. 落地清单（本 issue）
+
+1. 词表加 `gloss`（9 名 + 反名各一句；内置默认，配置可覆盖）。
+2. path 渲染下移到 engine：出边 + 入边（inverse）+ 去重 + 顺序 + 首次释义。
+3. `-h` 复用同一份 gloss（与 `help-relation-flags` 的预留位对齐）。
+4. 单测：golden + P1–P4。
+
+### 5. 移出（→ `graph-normalize`）
+
+- graph 去掉入边（只画声明源箭头）。
+- 对称关系不画箭头。
+- 双侧冗余 last-wins + **全局 `(无序对, 槽)` 折**（补 `relation-revision` 的键缺口）。
