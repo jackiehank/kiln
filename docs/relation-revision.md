@@ -602,3 +602,46 @@ K4 的收益，恰好回应「名字还不成熟」：
 4. **依赖族主名改为等待方视角**（`depends-on` / `blocked-by`），`blocks` 降为反名 / 读侧视图。—— 这会改动 `relation-vocabulary` 的现有 5 名结论，应回写那里。
 5. **默认/模板的取向**：主名一律选「主语 = 新 issue」那一侧；这条规则可直接用来**审校**默认词表。
 6. **机制无关**：不管最终 5 名还是 9 名，槽/rank/键都不动——这正是「名字可自定义」设计的好处。
+
+## test：扫全库真实关系——检验「每 (对,槽) 只有一个值」与 K4 / 强度格（2026-10-18）
+
+> 本 issue 的首个实测：解析本仓 `git log` 的全部 trailer，看真实关系分布是否支持设计假设。脚本：Python 解析 `issue/action/derived-from/spawns/relates-to/blocks/supersedes/part-of/has-part` 八个 trailer。
+
+### 1. 数据
+
+- **42 个 issue、44 条关系声明、48 条边**（有的声明多目标）。
+- 按键：`derived-from` **16**、`relates-to` **27**、`blocks` **1**；**没有** `spawns` / `supersedes` / `part-of` / `has-part`。
+- **dangling 目标：0**（所有目目标都存在）。
+
+### 2. (无序对, 槽) 重数 >1：仅 3 例
+
+**例 1** — `(cli-necessity, config-home)` 非阻塞槽：
+`config-home relates-to cli-necessity` 在 config-home 的 **4 个动作里重复写了 4 次**。
+→ `appendUnique` 在**同一 issue 内**会去重，模型层只 1 条；但这说明**同一条边被反复声明**是常态。
+
+**例 2** — `(derived-from-direction, relation-vocabulary)` 非阻塞槽：
+`relation-vocabulary relates-to derived-from-direction` **且** `derived-from-direction derived-from relation-vocabulary` —— **同对、同槽、两族**。
+→ 这正是 wsl-agent 那个“`relates-to` 无法退场”案的**真实复现**；强度格（`relates-to` 弱于 `derived-from`）会折叠为 `derived-from`，**正确**。
+
+**例 3** — `(relation-rendering, relation-vocabulary)` 非阻塞槽：
+**两侧都写了 `relates-to`**（`relation-vocabulary → relation-rendering` 与反向）——**单侧声明约定被人工违反了**；无序对键去重即可。
+
+**反向共存：2 对**，正是例 2 / 例 3。
+
+### 3. 结论
+
+1. **K4 被真实数据支持**：3 例重数**全部**是「同一条边重复」或「应被强度格折叠」，**没有一例是“两条必须共存的同槽边”**。→ **单值槽 + 强度格够用**，不需要多重边。
+2. **强度格不是空转**：例 2 就是它要解决的（`relates-to` 被 `derived-from` 升档）。
+3. **单侧声明靠不住**（例 3 双侧都写）→ **反向推导 + 无序对去重是必需品**，不是优化。
+4. **dangling = 0**：`check` 的“目标存在”缺口暂无实害，但仍应对齐 5 键。
+5. **词表用量高度集中**：`relates-to` 占 56%、`derived-from` 33%、`blocks` 2%——强度格实际主要服务 relates-to ↔ derived-from。
+
+### 4. 局限
+
+- 只 42 issue / 48 边；`part-of`/`causes` 等新名未落地，无法测。
+- 静态解析，未覆盖运行时的入边索引/渲染行为。
+
+### 5. 剩余可实测项（未做）
+
+- **量改动面**：`internal/model` 的五个固定字段（`DerivedFrom`/`Spawns`/`RelatesTo`/`Blocks`/`Supersedes`）→ `map[(对,槽)]`；`engine.go` 的 `appendUnique` → 取强；`relationLines`（`engine.go:302`）→ 按槽分组。
+- **最小仓实验**：造只有 2-3 个 issue 的仓，验证“同槽改族（relates-to→derived-from）”与“删到空 tombstone”在 `path`/`graph`/`check` 三处的行为。
