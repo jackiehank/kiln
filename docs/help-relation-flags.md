@@ -267,3 +267,71 @@ do/commit 的 flags:
 ### 6. 验收（补）
 
 7. `-h` 里每个 flag 带**占位符**；列表型带 `[,<…>]`；有一行图例说明。
+
+## hypothesize（三续）：help 形态——分命令帮助 + `help` 命令 + `--json`
+
+> 用户（2026-10-18）：考虑优化 help 形态，如 `kiln do -h` / `kiln do help`，或 `--json` 格式的 help。
+
+### 0. 现状
+
+| 入口 | 行为 |
+| --- | --- |
+| `kiln -h` / `--help` / `help` | 全局 usage → **stdout, exit 0** |
+| `kiln`（无参） | 全局 usage → **stderr, exit 2** |
+| **`kiln do -h`** | **不是帮助**——落到 `用法: kiln do <issue> <action> [flags]`（stderr, exit 2） |
+| `kiln help <cmd>` | **不存在** |
+| `--json` help | **不存在** |
+
+- 帮助有**三处来源**：`usageHeader` / `usageCommands` / `usageFooter`（全局） + 各命令的 `用法:` 串（局部） → **会漂移**（`usageFooter` 与生成的关系 flag 已经是一次实例）。
+
+### 1. 提议
+
+1. **分命令帮助**：`kiln <cmd> -h` / `--help` 在**位置参数之前拦截** → 该命令的帮助。
+2. **`kiln help [cmd]`**：`help` 无参 = 全局；`help do` = 分命令。
+   - **`kiln do help` 不采纳**：`help` 会被当成 issue 名（`do` 要 `<issue> <action>`）；`kiln do help` 不应有第二种含义。
+3. **`--json` help**：`kiln help --json` / `kiln <cmd> -h --json` → **一个 JSON 文档**（与 `status`/`list`/`check` 的 `--json` 契约一致）。
+
+### 2. 单一真源（关铪）
+
+- 把命令与 flag 建成**结构化表**：命令（名/用法）、flag（名/值类型/是否列表/可重复/所属组/释义/是否关系）。
+- **文本帮助与 JSON 帮助都从它渲染**；关系 flag 由 `RelationSet` 生成（承接本 issue 已有结论）。
+- → 消掉“三处来源”的漂移（`usageFooter` 与生成 flag 不一致就是当前的病）。
+
+### 3. JSON 形状（草案）
+
+```json
+{
+  "commands": [
+    {"name": "do", "usage": "kiln do <issue> <action> [flags]",
+     "flags": [{"name": "title", "value": "text"},
+               {"name": "refs", "value": "list", "list": true, "repeatable": true},
+               {"name": "caused-by", "value": "issue", "list": true, "relation": true}]}
+  ],
+  "relations": {
+    "slots": [{"name": "ordering", "blocking": true}],
+    "names": [{"name": "caused-by", "slot": "lineage", "rank": 2, "directed": true, "inverse": "causes"}],
+    "aliases": {"derived-from": "caused-by"}
+  },
+  "actions": {"names": ["ask"], "start": "ask", "terminal": ["conclude", "apply"]}
+}
+```
+
+### 4. 触发与退出码
+
+| 入口 | 输出 | 退出 |
+| --- | --- | --- |
+| `kiln <cmd> -h` / `kiln help <cmd>` | stdout | 0 |
+| `kiln help` / `-h` / `--help` | stdout | 0 |
+| `kiln`（无参） | stderr | 2 |
+| 加 `--json` | stdout **只放一个 JSON 文档** | 0 |
+
+### 5. 边界（建议）
+
+- 分命令 / JSON help 是**通用 help** 的事，不止关系 flag；与 `help-alignment` / `help-self-contained` 相邻。
+- **建议**：本 issue 只定 **`do`/`commit` 的小节内容与值形状**；**分命令 / JSON help 的框架**另开一个 issue（或并入 `help-alignment`），以免本 issue 膨胀。
+- 不实现 shell 补全（可后续）。
+
+### 6. 取舍
+
+- 分命令 + JSON help 正是 agent 想要的（可自省、无散文）；代价是要把帮助重构成**单一真源**。
+- `kiln do help` 不采纳（与 issue 名冲突）。
