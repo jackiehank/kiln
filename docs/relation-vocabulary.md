@@ -373,10 +373,10 @@
 | --- | --- | --- | --- |
 | **D1** | 反向名是否回写侧（写 9） | **已定：回**（写 9） | 实验：不暴露反名会诱发写侧错配 |
 | **D2** | 依赖族**主名** | **已定：`blocks` / `blocked-by`** | 保留主流用词；两名均可写（写 9） |
-| **D3** | 反名 `spawns` | 保留 / `yields` / `gives-rise-to` / `branches-into` / （换成 `spawned-by`+`spawns` 对） | 与 `derived-from` 对称性 |
-| **D4** | 反名 `has-part` | 保留 / 改 `has-sub-issue` / `contains` | 与 `part-of` 对称性 |
-| **D5** | `part-of` 一族的名 | `part-of`/`has-part` vs `sub-issue-of`/`has-sub-issue` | `relation-types` 待选 |
-| **D6** | `derived-from` 的名字 | 保留 / 改名 | **不在本 issue**——归 `derived-from-direction`：读侧已证清白（2/2），但 wsl-agent owner 提过改名，且「写反了没人管」待验 |
+| **D3** | 引发族命名 | **已定：改用 `causes` / `caused-by`**（`derived-from` / `spawns` 降为 alias） | 与 `blocks`/`blocked-by` 同形 + 对齐 Jira；两轮实验证明命名不影响 agent |
+| **D4** | 反名 `has-part` | **已定：保留 `has-part`** | 与 `part-of` 对称 |
+| **D5** | 分解族名 | **已定：`part-of` / `has-part`** | 短、对称、含介词 |
+| **D6** | `derived-from` 的遗留 | **名字已定：改名 `caused-by`**（alias 保留）；「写反了没人管」归 `derived-from-direction` | 校验缺口仍在 |
 | **D7** | 同源（`common-origin`）新名 | 新造 | 归 `common-origin` |
 
 > **澄清（D3）**：`derive` / `derives-from` **不是** `derived-from` 的反向——英文里两者**同向**（`X derives from Y` ≡ `X is derived from Y`），只是语态不同。反向必须让**来源方当主语**：`spawns` / `yields` / `gives-rise-to` / `produces`。唯一同词根的双向对是 **`spawned-by` / `spawns`**（但那是把 `derived-from` 换掉，有迁移成本，且 `spawned-by` 与 `derived-from` 同向）。→ D3 的候选收窄为 {`spawns`（保留）、`yields`、`gives-rise-to`、`branches-into`} 或整族改用 `spawned-by`/`spawns`。
@@ -812,3 +812,70 @@
 2. 因此 D3（`derived-from`/`spawns` vs `caused-by`/`causes`）**降为纯设计偏好**：形态一致性（C）vs 零迁移 + RE 术语（N）——**不涉正确性**。
 3. **真正该跟进的是 `part-of` 语义传达**：否则无论叫什么名，agent 都不会把它当依赖。→ 转给 `relation-types` 的落地项 / Skill。
 4. 若还要继续试：只能上**真实仓回放**（拿本仓 41 个 issue 的真关系让 agent 读/写）——但那测的是“真实分布下的稳定性”，不是名字优劣了。
+
+## conclude：词表定稿（2026-10-18）
+
+### 0. 选型结果
+
+本次 conclude 收下 D1–D7。**引发族由 `derived-from` / `spawns` 改为 `causes` / `caused-by`**（D3）；`derived-from` / `spawns` 降为**只读 alias**。
+
+### 1. 最终词表（9 个可写名）
+
+4 对有向关系（每对两个可写名，共 8）+ 1 个对称关系（1）= **9 个可写名**。
+
+| 族 | 名一 | 名二 | 语义 | 方向（名一 / 名二） |
+| --- | --- | --- | --- | --- |
+| **引发** | `causes` | `caused-by` | 因果（无序，可分头处理） | 来源→衍生 / 衍生→来源 |
+| **分解** | `part-of` | `has-part` | 结构（**AND-join**：母等全部子） | 子→母 / 母→子 |
+| **依赖** | `blocks` | `blocked-by` | 先后（FS） | 阻塞者→被阻塞者 / 反向 |
+| **取代** | `supersedes` | `superseded-by` | 接替 | 新→旧 / 反向 |
+| **关联** | `relates-to` | —— | 弱关联（无向） | 对称 |
+
+**Aliases（读旧提交，保留历史可读）**：
+
+- `derived-from` → `caused-by`
+- `spawns` → `causes`
+
+### 2. 裁定明细
+
+| # | 项 | 结果 |
+| --- | --- | --- |
+| D1 | 反向名回写侧 | **回**（写 9） |
+| D2 | 依赖族 | `blocks` / `blocked-by` |
+| D3 | 引发族 | **`causes` / `caused-by`**（原 `derived-from`/`spawns` 作 alias） |
+| D4 | `has-part` | 保留 |
+| D5 | 分解族 | `part-of` / `has-part` |
+| D6 | `derived-from` 遗留 | 名字已改；「写反了没人管」归 `derived-from-direction` |
+| D7 | 同源 | 归 `common-origin`（未定） |
+
+### 3. 命名原则（定格）
+
+1. **有向关系的键名必须含介词**（`from`/`by`/`of`/…）。
+2. **主语恒为声明方**（写侧）；渲染时主语 = 当前视角的 issue。
+3. **一对方向关系 = 两个可写名**，机械互逆；写任一侧，读侧推反向。
+4. **同族两名形态一致**（同词根·主动/被动）——这正是选 `causes`/`caused-by` 而非 `derived-from`/`spawns` 的理由。
+
+### 4. 渲染规格（与 relation-rendering 对齐）
+
+- **写 9 / 句渲 2（正反，主语=X）/ 图渲 1（声明源箭头）**。
+- 反名首次出现带一句标注。
+- alias 名只出现在**读**（旧提交），不出现在写侧 Skill。
+
+### 5. 依据（两轮实验）
+
+- 易版（4 边）+ 加难版（7 行 5 族、无释义、多跳、对抗措辞、陷阱）**两轮均天花板**：两臂全部题满分。
+- → **命名不影响 agent 正确性**；取舍依据落在：① 形态一致性（`causes`/`caused-by` 与 `blocks`/`blocked-by` 同形）② 业内用词（Jira）③ 零迁移。
+- 最终取 `causes`/`caused-by`：①② 胜；③ 由 alias 兜。
+
+### 6. 遗留 / 转出
+
+1. **`part-of` 的「母等全部子」语义必须显式教**（实验：8/8 agent 拒绝从名字推断先后）→ 转 `relation-types` 落地项 / Skill。
+2. **`derived-from-direction` 需更新**：名字已改（`derived-from` → `caused-by`）；「写反了没人管」的校验缺口仍在。
+3. **`common-origin`**（同源）仍无名字。
+4. **`relation-types` 的「9 个名字」需同步**为本文的 9 个可写名。
+5. 本词表是**默认值 / 模板**；`relation-revision` 已定「词表可自定义」（`relations.slots/names/aliases`）。
+
+### 7. 非目标
+
+- 不改代码（实现走 `relation-types` 的落地项）。
+- 不改机制（键 `(对,槽)` / 槽内强度 / 取强）——归 `relation-revision`。
