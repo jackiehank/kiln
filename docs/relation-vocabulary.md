@@ -371,8 +371,8 @@
 
 | # | 待决项 | 选项 | 备注 |
 | --- | --- | --- | --- |
-| **D1** | 反向名是否回写侧（写 9） | 回 / 不回（只读侧渲） | 推演与实验倾向**回**（不暴露反名会诱发写侧错配） |
-| **D2** | 依赖族**主名** | `blocks`（主流）/ `blocked-by` / `depends-on` | 决定箭头规范方向与“主名清单” |
+| **D1** | 反向名是否回写侧（写 9） | **已定：回**（写 9） | 实验：不暴露反名会诱发写侧错配 |
+| **D2** | 依赖族**主名** | **已定：`blocks` / `blocked-by`** | 保留主流用词；两名均可写（写 9） |
 | **D3** | 反名 `spawns` | 保留 / `yields` / `gives-rise-to` / `branches-into` / （换成 `spawned-by`+`spawns` 对） | 与 `derived-from` 对称性 |
 | **D4** | 反名 `has-part` | 保留 / 改 `has-sub-issue` / `contains` | 与 `part-of` 对称性 |
 | **D5** | `part-of` 一族的名 | `part-of`/`has-part` vs `sub-issue-of`/`has-sub-issue` | `relation-types` 待选 |
@@ -394,3 +394,49 @@
 - `relation-rendering` 的结论已假定「写 9 / 句渲 2 / 图渲 1」与反名可渲；**若 D2 改主名，箭头规范方向随之变**。
 - `relation-types` 的「9 个名字」需与 D1–D5 同步。
 - 默认词表（模板）在 D1–D5 定了之后才能冻结。
+
+## collect：「衍生 / 来源」这一对，业内一般叫什么（2026-10-18）
+
+> 用户裁定 **D1 = 回**（写侧 9 名）、**D2 = `blocks` / `blocked-by`**（已回写入上表）。本轮只看一件事：**「X 由 Y 引发」这一对方向关系，同行怎么命名。**
+
+### 1. 三条结论
+
+1. **主流把「一对方向关系」建模成「一个链接类型 + 正反两个名字」**，你在一侧加、**另一侧自动出现**——这正是 D1=回 的业内形态。
+2. 「衍生/来源」这类，**Jira 叫 `causes` / `is caused by`**；**需求工程（SysRE）叫 `derived from` / `derives-from` / `gives-rise-to`**（SysML `«deriveReqt»`、NIST/ISO 29148 术语）。
+3. **`spawns` 不是业内词**——没找到任何 tracker 用它。
+
+### 2. 逐工具证据
+
+| 领域 / 工具 | 「衍生 → 来源」叫什么 | 反向叫什么 | 备注 |
+| --- | --- | --- | --- |
+| **Jira** | `is caused by` | `causes` | 链接类型名 “Problem/Incident”（outward=`causes`, inward=`is caused by`）；**在默认链接类型列表里** |
+| **YouTrack** | ——（默认无） | —— | 方向模型分 **Directed / Undirected / Aggregation**；名称成对（inward/outward）；`causes`/`is caused by` 可作链接类型加（Jira 导入时出现） |
+| **Azure Boards** | ——（**无「引发」类**） | —— | 只有 Related / Predecessor-Successor / Parent-Child / Duplicate / Affects-Affected by |
+| **需求工程（NIST / ISO 29148）** | **`derived from`**（“derived requirement”：由高层需求隐含或转换而来） | —— | 术语地位：`parent requirement` / `child requirement`、upward/downward traceability |
+| **SysML / OMG** | **`«deriveReqt»`**（client requirement derived from supplier） | —— | 箭头从 derived（client）→ supplier；属性 `/derived`、`/derivedFrom` |
+| **RE trace-link 分类学** | **`derives-from`**（Requirement → Business Goal） | **`gives-rise-to`**（Business Goal → Requirement） | 明确把反名定为 `gives-rise-to` |
+| **Jira / GreenHopper** | `split from` | `split to` | 拆分场景（`SplitIssueLinkTypeService`：把一个 issue 链到“从它拆出来”的 issues） |
+
+### 3. 关键结构发现（比名字更重要）
+
+1. **一个链接类型 = inward/outward 两个名字**：Jira 管理端直接把链接类型定义为「Name + Outward description + Inward description」（例：Problem/Incident → `causes` / `is caused by`）；YouTrack 同样“Directed 与 Aggregation 用不同的 inward/outward 名”。→ **写侧 9 名（正反各一）是业内标准形态**。
+2. **写一侧、另一侧自动出现**：YouTrack：“When you add the is required for link to issue A, a depends on link is automatically added to issue B.” → 正好是 kiln 的「单侧声明 + 读侧推导反向」。
+3. **方向分三类**：YouTrack 明确分 **Directed（依赖）/ Undirected（关联）/ Aggregation（分解/去重）** → 与 kiln 的「阻塞/非阻塞 + 有向/无向」两轴同构，且**分解被单列**。
+4. **名字多为带介词的短语**（`is blocked by` / `is caused by` / `derived from` / `subtask of`）→ 与「有向关系名必须含介词」一致。
+
+### 4. 对 D3 的启示
+
+- **`derived-from` 有业内地位**（RE / SysML / NIST）——保留。
+- **`spawns` 无业内对应**。若要与行业对齐，反名候选：`causes`（Jira）/ `gives-rise-to`（RE）/ `yields`。
+- 注意 `causes` 是“因→果”框架：`X is caused by Y` ≈ `X derived-from Y`，两者方向一致；`causes` 就是反名。
+
+### 5. 来源
+
+- Jira 链接类型列表：[Link work items（Jira Cloud）](https://support.atlassian.com/jira-software-cloud/docs/link-issues/)（含 `causes` / `is caused by`）。
+- Jira 链接类型定义（outward/inward descriptions）：[Configure work item linking](https://support.atlassian.com/jira-cloud-administration/docs/configure-issue-linking/)（一手）。
+- YouTrack：[Link Issues（YouTrack Server 2026.2）](https://www.jetbrains.com/help/youtrack/server/link-issues.html)（一手；Directed/Undirected/Aggregation、inward/outward 名、自动补反向）。
+- Azure Boards：[Link Types Reference](https://learn.microsoft.com/en-us/azure/devops/boards/queries/link-type-reference)（一手；无“引发”类）。
+- SysML `«deriveReqt»`：[OMG SysML 1.3/1.6 §16.3.2.2](https://www.omg.org/spec/SysML/1.3/Beta1/PDF/changebar)（一手）。
+- 需求工程术语：[NIST CSRC「derived requirement」（引 ISO/IEC/IEEE 29148:2018）](https://csrc.nist.gov/glossary/term/derived_requirement)（一手）。
+- Jira split：[SplitIssueLinkTypeServiceImpl](https://docs.atlassian.com/jira-software/10.0.0/com/atlassian/greenhopper/service/issuelink/SplitIssueLinkTypeServiceImpl.html)（一手/API 文档）。
+- RE trace-link 分类学（`derives-from`/`gives-rise-to`）：[chwezi-sdlc-documentation trace-link-types](https://github.com/peterbamuhigire/chwezi-sdlc-documentation/blob/main/02-requirements-engineering/fundamentals/after/09-traceability-engineering/references/trace-link-types.md)（二手，社区整理）。
