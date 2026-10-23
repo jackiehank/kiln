@@ -82,3 +82,15 @@ magick -density 110 g.svg g.png # 已验证，420ms
 - **产品出口仍是 `--svg`**：零依赖、用户拿到就能开，不要求本机有浏览器；
 - 浏览器截图是 agent 侧的自查/调试手段（`magick` 管线之外的第二条路），现在也能直接渲染 `kiln graph --mermaid` 的预览页。
 
+## 结论（已定）
+
+用户 2026-10-23 决定（m00870）：**不做 `--svg`**——"还得自己考虑样式，太重"。图的出口收敛为两条，都有现成实现或正在落地：
+
+| 需求 | 出口 | 落点 |
+| --- | --- | --- |
+| 人看，贴 md / GitHub / mermaid.live | `kiln graph --mermaid` | 已实现（`847f92c`），`.kiln/graph-preview.html` 离线可开 |
+| agent / 脚本读 | `kiln graph --json` | `graph-export` 线里正在设计 |
+| 要 PNG | `tools/browser-shot/mermaid-shot.mjs`（.mmd 直出 PNG） | 已实现（`15a0d51`），沙箱外 4 秒内出图 |
+
+本 issue 的可行性调查仍然有效（`magick` 能把探针 SVG 光栅化、48 节点真实规模 420ms 出图），但"自己考虑样式"的成本被判定为不划算：mermaid 的布局与主题直接复用，比自己写分层 + 配色更省、也更好看。`--svg` 若日后重开，按新 issue 对待，本 doc 的 E 表仍可当输入。
+
