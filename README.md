@@ -50,9 +50,9 @@ go build -o kiln ./cmd/kiln
 
 **3. 下载预编译二进制**
 
-从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。预编译产物会随首个 release 一起发布；在此之前请用上面两种方式。
+从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。每个 `v*` tag 由 GitHub Actions 构建五个产物：Windows amd64、macOS arm64/amd64、Linux amd64/arm64，并附 `checksums.txt`；Termux 等 arm64 Linux 环境取 `kiln_linux_arm64`。tag 需是 `v0.x` / `v1.x`——模块路径没有 `/v2`，更高的主版本会被 Go 的版本戳忽略。预编译产物随首个 release 发布；在此之前请用上面两种方式。
 
-单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建。
+单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.1.0`）。
 
 ## 五分钟上手
 
@@ -316,3 +316,7 @@ kiln 的模型天生适合 agent：
 - [docs/mvp-plan.md](docs/mvp-plan.md) —— **规格**：核心约定、trailer 规范、命令面、`check` 规则、设计原则。改 kiln 之前先读它。
 - [docs/](docs/) —— 每个设计决定一份记录（`worktree-mode.md` / `worktree-include.md` / `config-home.md` …）：为什么长成这样、当时试过什么、放弃了什么。
 - 模块地图：`cmd/kiln`（入口）｜`internal/model`（领域类型）｜`internal/config`（配置）｜`internal/trailer`（提交信息解析）｜`internal/vcs`（后端接口 + `git` / `jj` 两个适配器 + 播种）｜`internal/engine`（聚合：path / check / status / list / graph）｜`internal/cli`（子命令与渲染）。分层约束：`cli → engine → (vcs, model)`，引擎不直接 exec。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
