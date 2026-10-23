@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +63,7 @@ var usageCommands = [][2]string{
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
+	{"kiln --version", "打印版本、可执行文件路径与构建时间（-V / version 同义）"},
 }
 
 // flagHelp is one row of the do/commit flag help: the flag, its value shape
@@ -320,6 +324,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText(rel))
 		return 0
+	case "version", "--version", "-V":
+		return printVersion(stdout)
 	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config":
 		// handled below
 	default:
@@ -359,6 +365,27 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.config(rest)
 	}
 	return 2
+}
+
+// printVersion answers "which kiln am I running, and how old is it?". A stale
+// binary once hid new flags behind a warning, discovered by accident; the facts
+// belong in one command instead of a guess. Version comes from the build info
+// (no hand-kept constant, no ldflags); the build time is the executable's mtime,
+// which is what answers "is this file current?".
+func printVersion(w io.Writer) int {
+	version := "devel"
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+	fmt.Fprintf(w, "kiln %s\n", version)
+	if exe, err := os.Executable(); err == nil {
+		fmt.Fprintf(w, "可执行文件: %s\n", exe)
+		if st, err := os.Stat(exe); err == nil {
+			fmt.Fprintf(w, "构建时间: %s\n", st.ModTime().Format("2006-01-02 15:04:05"))
+		}
+	}
+	fmt.Fprintf(w, "%s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	return 0
 }
 
 // flags holds repeatable --key value pairs parsed from a command's arguments.

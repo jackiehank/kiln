@@ -29,3 +29,27 @@ agent 访谈（2026-10-23）P6：本机 PATH 上的 `kiln` 是仓库根 `kiln.ex
 - 不做自更新、不做 `kiln upgrade`；
 - 不校验源码是否比二进制新（那是 CI / 构建脚本的事；版本命令只报事实）；
 - 不把版本塞进 `status --json`。
+
+## apply（2026-10-23）
+
+- `internal/cli/cli.go`：`Run` 在命令分发里加 `version` / `--version` / `-V`，且**先于**配置错误检查返回——版本不读配置、不读仓库。新增 `printVersion(io.Writer)`：
+  - `kiln <version>`：`runtime/debug.ReadBuildInfo().Main.Version`，空 / `(devel)` 时回退 `devel`；本仓 `go build` 得到的是 Go 的伪版本（脏树带 `+dirty`），这正是"这份二进制来自哪次构建"的事实；
+  - `可执行文件: <os.Executable()>`；
+  - `构建时间: <exe mtime>`（`os.Stat` 失败则省略该行，不编造时间）；
+  - `<runtime.Version()> <GOOS>/<GOARCH>`。
+- `usageCommands` 增加一行 `kiln --version`，说明三种写法同义。
+- 测试：`TestVersionPrintsTheBuildFacts`（三种写法逐字节相同、含三行事实、不写 stderr）、`TestVersionNeedsNoConfig`（临时目录里放坏的 `.kilnconfig.jsonc`，仍 exit 0）。
+- 复核：`go build` / `go vet` / `go test ./...` 全过；本机三种写法输出一致；坏配置下 `--version` 正常。
+
+## 结论（已定）
+
+`kiln --version` / `kiln -V` / `kiln version` 是同一个命令，输出：
+
+```
+kiln v0.0.0-20261023091450-476793954e64+dirty
+可执行文件: C:\…\kiln.exe
+构建时间: 2026-10-23 17:15:50
+go1.27.0 windows/amd64
+```
+
+它回答的是"我跑的是哪一个二进制、它多久没重建了"，不是"源码是什么版本"：`构建时间` 取可执行文件 mtime，`version` 取 Go 构建信息——不维护手写版本号、不走 ldflags、不碰发布流程。坏配置、非仓库目录下都能用，因为它不读这两样。

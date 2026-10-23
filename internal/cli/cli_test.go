@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1718,4 +1719,47 @@ func relationRunner() fakeRunner {
 
 func newRelationEnv(out, errw *bytes.Buffer) *env {
 	return &env{actions: model.DefaultActionSet(), repo: relationRunner(), out: out, errw: errw}
+}
+
+// The version command reports the three facts that decide "is this the binary I
+// just built?", and its three spellings are one command.
+func TestVersionPrintsTheBuildFacts(t *testing.T) {
+	var first string
+	for _, args := range [][]string{{"--version"}, {"-V"}, {"version"}} {
+		var out, errb bytes.Buffer
+		if code := Run(args, &out, &errb); code != 0 {
+			t.Fatalf("%v: exit code = %d, stderr = %q", args, code, errb.String())
+		}
+		if errb.Len() != 0 {
+			t.Fatalf("%v: version must not write stderr: %q", args, errb.String())
+		}
+		got := out.String()
+		for _, want := range []string{"kiln ", "可执行文件: ", "构建时间: ", runtime.Version()} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v: missing %q in:\n%s", args, want, got)
+			}
+		}
+		if first == "" {
+			first = got
+		} else if got != first {
+			t.Fatalf("%v and --version must print the same bytes:\n%s\nvs\n%s", args, first, got)
+		}
+	}
+}
+
+// A broken config does not make the version unanswerable: it reads neither the
+// config nor any repository.
+func TestVersionNeedsNoConfig(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".kilnconfig.jsonc"), []byte("{ this is not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	var out, errb bytes.Buffer
+	if code := Run([]string{"--version"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "kiln ") {
+		t.Fatalf("version output missing: %q", out.String())
+	}
 }
