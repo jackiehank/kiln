@@ -38,11 +38,11 @@ type file struct {
 
 // Config is everything kiln reads from a repository's config file.
 type Config struct {
-	Path      string              // the file kiln used ("" outside a repository)
-	Actions   *model.ActionSet    // the vocabulary (built-in defaults when unset)
-	Relations *model.RelationSet  // the relation vocabulary (built-in defaults when unset)
-	VCS       string              // backend preference: auto | git | jj
-	Worktree  string              // isolation mode: off (default) | on
+	Path      string             // the file kiln used ("" outside a repository)
+	Actions   *model.ActionSet   // the vocabulary (built-in defaults when unset)
+	Relations *model.RelationSet // the relation vocabulary (built-in defaults when unset)
+	VCS       string             // backend preference: auto | git | jj
+	Worktree  string             // isolation mode: off (default) | on
 }
 
 // Worktree modes answer one question: may an action be recorded in the main
