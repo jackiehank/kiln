@@ -29,3 +29,27 @@
 - 不下载/内置 Chromium（Playwright 浏览器缓存约 150MB，且本机网络受限）；
 - 不引入 Docker/qemu 中间层（除非上面的路全断）。
 
+## 采集（2026-10-23）
+
+| 假设 | 结果 |
+| --- | --- |
+| 沙箱内 Edge 无头可用 | ❌ `--headless=new/old` 全部 `exit 13`（`0x80000003` STATUS_BREAKPOINT）；非无头 `about:blank` 4 秒内退出；`--version` 报 `Lock file can not be created! Error code: 5` + `Failed to create a ProcessSingleton for your profile directory`（默认 profile 在 workspace 外，沙箱禁止写） |
+| 是 Edge 安装坏了 | ❌ 不是：同一台机器 `%APPDATA%\npm\node_modules\playwright-core` 1.63.0 在，系统 Edge 155.0.4283.62 在 |
+| 沙箱外 Edge 无头可用 | ✅ `danger-full-access` 下 `--headless=new --disable-gpu --no-sandbox --screenshot=... about:blank` 写出 2727B PNG，exit 0 ⇒ **根因是 DSH 沙箱，不是浏览器** |
+| 沙箱外 Docker 可用 | ✅ `docker version` → server 29.8.2；`wsl -l -v` → `docker-desktop (Stopped)`；但沙箱内两者都被拒（`permission denied ... npipe:////./pipe/dockerDesktopLinuxEngine`、`WSL_E_ACCESS_DENIED`） |
+| Playwright 能用系统 Edge | ✅ `playwright-core` + `channel: 'msedge'` 直接驱动 Edge，**不需要** `ms-playwright` 浏览器缓存（本机也确实没有） |
+| 能渲染本地 mermaid 预览页 | ✅ `file://` + 本地 `mermaid.min.js`，等 `svg` 出现后截图；`.mmd` 直出 PNG 4287×1961（图自然尺寸） |
+| qemu 可用 | ❌ 未安装，且要镜像下载（网络受限） |
+
+**采集结论**：路径 = **Playwright-core + 系统 Edge（headless）**。唯一约束是：Chromium 在 DSH `workspace-write` 沙箱内必然崩溃，所以 agent 运行截图脚本需要 `danger-full-access`；用户自己的终端没有沙箱，直接跑即可。Docker / WSL / qemu 不必引入——它们解决的是同一个沙箱限制，而提权就够了。
+
+## apply（2026-10-23）
+
+工具落在 `tools/browser-shot/`（不进 `cmd/kiln`，无产品依赖）：
+
+- `shot.mjs`：通用截图。`node shot.mjs <url|file> [--out p.png] [--width 1440] [--height 900] [--wait-for sel|text:foo] [--clip sel] [--full-page] [--settle ms] [--channel msedge] [--headful]`；输出一行 JSON（`ok/out/title/url/size`）。
+- `mermaid-shot.mjs`：`.mmd` → PNG。`node mermaid-shot.mjs g.mmd --out g.png [--theme default|dark|neutral] [--scale 2]`；按 `viewBox` 钉住 SVG 尺寸再截，避免 mermaid 默认把图缩到容器宽度。
+- `README.md`：用法与沙箱约束。
+
+两处实现细节：`playwright-core` 依次从 `require` 链路、`%APPDATA%\npm\node_modules`、`%ProgramFiles%\nodejs\node_modules` 找；mermaid bundle 依次从 `$KILN_MERMAID_JS`、`.kiln/mermaid.min.js`、`%LOCALAPPDATA%\Programs` 下的浏览器包找。
+
