@@ -77,3 +77,29 @@
 3. **git 路径提交绕过索引**：提交内容 = 列出的路径的工作区内容；其余改动（含已暂存的其他文件）原样保留。`--only` 的 git 语义因此干净。
 4. **接口成本小**：`vcs.Repo.Action(message string)` 只被 `cli.write()` 调用；扩成 `Action(message string, paths []string)` 需改 git/jj 两实现、fakeRunner 与调用点，改动面可控。
 5. **与 `do` 的关系**：`do` 只打印 trailer、不提交，`--only` 对它没有意义，应当拒收。
+
+## hypothesize（2026-10-23）
+
+**裁定：做 `--only`（候选 B + F），默认行为不变。**
+
+理由：摩擦是真实且对称的，而两个后端都原生支持路径限定；成本集中在一次接口扩参，不需要引入暂存区概念（候选 E 否）。`target-honesty`（D）是事后审计，与本 issue 互补而不是替代；默认隔离区（C）作为文档建议保留，不在此轮改默认工作流。
+
+### 设计
+
+- **命令面**：`kiln commit <issue> <action> --only <path>...`。路径为仓库相对路径（支持目录，交给后端 pathspec/fileset 处理）；`--only` 至少一个路径。`kiln do` 拒绝 `--only`（exit 2）。
+- **接口**：`vcs.Repo.Action(message string, paths []string)`；`paths` 为空 = 今天的整副本（jj）/ 索引（git）行为，逐字节不变。
+  - git：`paths` 非空 → 先 `git add -- <paths>`（只加列出的），再 `git commit -m msg -- <paths>`；
+  - jj：`paths` 非空 → `jj commit --message <msg> -- <paths>`（`--` 分隔，避免路径被当成 revision）。
+- **前置校验**（在 `Action` 之前、`empty-commit-hint` 提示之后）：每个路径必须存在，且这些路径整体有改动（jj：`jj diff --summary -- <paths>` 非空；git：`git status --porcelain -- <paths>` 非空）；坏路径 exit 1 并点名，**不产生提交**。
+- **索引副作用**：git 上 `--only` 会先把列出的路径加入索引；若提交失败，这些路径保持已暂存。写进文档，不尝试回滚（回滚会误伤调用方原本的暂存意图）。
+- **提示**：逻辑不变；`--only` 场景下"无改动"由前置校验拦截，提示只留给默认路径。
+
+### 待 apply 时确认
+
+- 路径是"仓库相对"还是"当前目录相对"（倾向仓库相对，与 `git`/`jj` 一致）；
+- 目录路径是否允许（倾向允许，由后端展开）；
+- `--only` 与 `--force`、`--domain` 等的组合顺序（`--only` 只影响提交内容，不影响 trailer）。
+
+### 验收映射
+
+E1/E2/E3 由前置校验 + 两后端实现覆盖；E4 由既有逐字节回归测试守住；E5/E6 由 fakeRunner argv 断言与临时仓冒烟覆盖。
