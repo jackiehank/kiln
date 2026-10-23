@@ -5,6 +5,7 @@ package engine
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"kiln/internal/model"
@@ -452,6 +453,101 @@ func edgeLines(repo *model.Repo, edges []Edge, rel *model.RelationSet) []string 
 		out = append(out, "──"+e.Name+"──▶ "+e.To+" ("+state+")")
 	}
 	return out
+}
+
+// Mermaid renders the same folded graph as a Mermaid flowchart, so the plain
+// terminal view can be handed to a renderer unchanged: one node per issue
+// carrying its state, one labelled arrow per directed edge, a plain line per
+// symmetric edge. Node ids are kept to [A-Za-z0-9_] and made unique, labels are
+// quoted, and both lists are sorted so the same repository always prints the
+// same text.
+func Mermaid(repo *model.Repo, rel *model.RelationSet) string {
+	edges := FoldEdges(repo, rel)
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].From != edges[j].From {
+			return edges[i].From < edges[j].From
+		}
+		if edges[i].To != edges[j].To {
+			return edges[i].To < edges[j].To
+		}
+		return edges[i].Name < edges[j].Name
+	})
+
+	var b strings.Builder
+	b.WriteString("flowchart LR\n")
+	name := map[string]string{}
+	taken := map[string]bool{}
+	node := func(id, state string) {
+		base := "i_" + sanitizeNodeID(id)
+		n := base
+		for i := 2; taken[n]; i++ {
+			n = base + "_" + strconv.Itoa(i)
+		}
+		taken[n] = true
+		name[id] = n
+		b.WriteString("  " + n + "[\"" + quoteLabel(id+" ("+state+")") + "\"]\n")
+	}
+
+	ids := make([]string, 0, len(repo.Issues))
+	for id := range repo.Issues {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		state := repo.Issues[id].State()
+		if state == "" {
+			state = "?"
+		}
+		node(id, state)
+	}
+
+	// A declaration may point at an issue no commit ever opened: the text view
+	// draws it as (missing), so the flowchart needs a node for it too.
+	missing := map[string]bool{}
+	for _, e := range edges {
+		if _, ok := repo.Issues[e.To]; !ok {
+			missing[e.To] = true
+		}
+	}
+	targets := make([]string, 0, len(missing))
+	for id := range missing {
+		targets = append(targets, id)
+	}
+	sort.Strings(targets)
+	for _, id := range targets {
+		node(id, "missing")
+	}
+
+	for _, e := range edges {
+		if rel.Inverse(e.Name) == "" {
+			b.WriteString("  " + name[e.From] + " --- " + name[e.To] + "\n")
+			continue
+		}
+		b.WriteString("  " + name[e.From] + " -- " + e.Name + " --> " + name[e.To] + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// sanitizeNodeID keeps only [A-Za-z0-9_] so an id never needs quoting.
+func sanitizeNodeID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	if b.Len() == 0 {
+		return "x"
+	}
+	return b.String()
+}
+
+// quoteLabel escapes a quoted Mermaid label; the only character Mermaid reads
+// specially inside one is the double quote.
+func quoteLabel(s string) string {
+	return strings.ReplaceAll(s, "\"", "#quot;")
 }
 
 // PathLines renders issue p's relation block for `kiln path`: p's own

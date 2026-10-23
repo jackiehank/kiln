@@ -46,3 +46,13 @@
 - 不做 `dot` / Graphviz 格式（真要时再加，`Edge` 已是现成中间层）；
 - 不改 `ascii` 的形态与默认值；
 - 不扩展到 `path` / `show`。
+
+## apply（2026-10-23：先落 `--mermaid`）
+
+用户要求**先出一条 `--mermaid` 看效果**，所以本轮只落 E3，`--json`（E1/E2）与双选报错（E5）留待下一步。
+
+- `internal/engine/engine.go`：新增 `Mermaid(repo, rel) string`、`sanitizeNodeID`、`quoteLabel`。输出 `flowchart LR`：每个 issue 一个 `i_<消毒 id>["<id> (<state>)"]`；被声明却没被任何提交开过的目标补 `(missing)` 节点，和 ascii 的缺失目标显示对齐；边直接复用 `FoldEdges`，按 `(from, to, name)` 排序，有向 `-- name -->`、对称（`rel.Inverse(name) == ""`）`---`。id 消毒到 `[A-Za-z0-9_]`，碰撞依次加 `_2`、`_3`；节点与边都排序，同仓每次同文本。
+- `internal/cli/cli.go`：`graph` 接受 `--mermaid`，并把 `--format=mermaid` 归一为同一选项（`--format=ascii` 仍是默认）；未知格式的报错扩成 `ascii|mermaid`；`kiln -h` 的命令行同步为 `graph [--format=ascii|mermaid] [--mermaid]`。
+- 测试：`engine_test.go` `TestMermaidRendersTheFoldedGraph`（消毒碰撞 `a.b`/`a/b`、`(missing)` 节点、有向与对称各一条，逐字节断言）、`TestMermaidIsStable`；`cli_test.go` `TestGraphMermaidFlagMatchesFormatAlias`、`TestGraphRejectsUnknownOrConflictingFormats`。
+- 复核：真仓 `kiln graph --mermaid` 111 行 = 48 节点 + 62 边；`--mermaid` 与 `--format=mermaid` 逐字节相同；`--format=json` 与 `--mermaid --format=json` 均 exit 2；`go build`/`go vet`/`go test ./...` 全过；ascii 分支代码未动。
+- 预览：`.kiln/graph-preview.{mmd,md,html}`（`.kiln/` 被忽略，不入库）；`graph-preview.html` 用本地 `mermaid.min.js`，离线可开。

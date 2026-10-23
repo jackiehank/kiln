@@ -405,3 +405,41 @@ func TestGraphFoldUnrelateClearsThePair(t *testing.T) {
 		t.Fatalf("unrelate must remove the pair: %+v", edges)
 	}
 }
+
+// mermaid: the same folded graph as a flowchart — ids kept to [A-Za-z0-9_] and
+// made unique, labels carrying the state, a labelled arrow for a directed name
+// and a plain line for a symmetric one.
+func TestMermaidRendersTheFoldedGraph(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("m4", "丙关联甲与幽灵\nissue: c\naction: ask\nrelates-to: a.b\nrelates-to: ghost", 4),
+		mkCommit("m3", "甲阻塞乙\nissue: a/b\naction: ask\nblocks: b", 3),
+		mkCommit("m2", "点号开题\nissue: a.b\naction: ask", 2),
+		mkCommit("m1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	got := Mermaid(repo, testRel)
+	want := "flowchart LR\n" +
+		"  i_a_b[\"a.b (ask)\"]\n" +
+		"  i_a_b_2[\"a/b (ask)\"]\n" +
+		"  i_b[\"b (ask)\"]\n" +
+		"  i_c[\"c (ask)\"]\n" +
+		"  i_ghost[\"ghost (missing)\"]\n" +
+		"  i_a_b_2 -- blocks --> i_b\n" +
+		"  i_c --- i_a_b\n" +
+		"  i_c --- i_ghost"
+	if got != want {
+		t.Fatalf("mermaid =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// mermaid is deterministic: the same repository prints the same text.
+func TestMermaidIsStable(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("m2", "甲阻塞乙\nissue: a\naction: ask\nblocks: b", 2),
+		mkCommit("m1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	if Mermaid(repo, testRel) != Mermaid(repo, testRel) {
+		t.Fatal("mermaid must be stable")
+	}
+}

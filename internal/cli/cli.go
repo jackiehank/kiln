@@ -55,7 +55,7 @@ var usageCommands = [][2]string{
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
-	{"kiln graph [--format=ascii]", "问题关系图"},
+	{"kiln graph [--format=ascii|mermaid] [--mermaid]", "问题关系图（--mermaid 输出流程图）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
@@ -1360,13 +1360,20 @@ func (e *env) list(args []string) int {
 
 func (e *env) graph(args []string) int {
 	_, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("format"))
+	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid"))
 	format := f.get("format")
+	if f.has("mermaid") {
+		if format != "" && format != "mermaid" && format != "ascii" {
+			fmt.Fprintf(e.errw, "--mermaid 与 --format=%s 冲突\n", format)
+			return 2
+		}
+		format = "mermaid"
+	}
 	if format == "" {
 		format = "ascii"
 	}
-	if format != "ascii" {
-		fmt.Fprintf(e.errw, "MVP 仅支持 --format=ascii（当前: %s）\n", format)
+	if format != "ascii" && format != "mermaid" {
+		fmt.Fprintf(e.errw, "MVP 仅支持 --format=ascii|mermaid（当前: %s）\n", format)
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -1375,6 +1382,10 @@ func (e *env) graph(args []string) int {
 	}
 	if len(repo.Issues) == 0 {
 		fmt.Fprintln(e.out, "（空）")
+		return 0
+	}
+	if format == "mermaid" {
+		fmt.Fprintln(e.out, engine.Mermaid(repo, e.rel()))
 		return 0
 	}
 	fmt.Fprintln(e.out, engine.Graph(repo, e.rel()))

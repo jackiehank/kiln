@@ -1562,3 +1562,41 @@ func TestDoAcceptsForceWithoutAWarning(t *testing.T) {
 		t.Fatalf("--force is a known flag: %q", errb.String())
 	}
 }
+
+// graph --mermaid is the same document as --format=mermaid, the option's older
+// spelling; both print a Mermaid flowchart and nothing but it.
+func TestGraphMermaidFlagMatchesFormatAlias(t *testing.T) {
+	var byFlag, byFormat, flagErr, formatErr bytes.Buffer
+	if code := newDemoEnv(&byFlag, &flagErr).graph([]string{"--mermaid"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, flagErr.String())
+	}
+	if code := newDemoEnv(&byFormat, &formatErr).graph([]string{"--format=mermaid"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, formatErr.String())
+	}
+	if byFlag.String() != byFormat.String() {
+		t.Fatalf("--mermaid and --format=mermaid must agree:\n%s\nvs\n%s", byFlag.String(), byFormat.String())
+	}
+	if !strings.HasPrefix(byFlag.String(), "flowchart LR\n") {
+		t.Fatalf("mermaid document must start with its header:\n%s", byFlag.String())
+	}
+	if strings.Contains(byFlag.String(), "──") {
+		t.Fatalf("mermaid must not reuse the ascii drawing:\n%s", byFlag.String())
+	}
+}
+
+// A format other than ascii/mermaid is refused, and so is asking for two
+// formats at once.
+func TestGraphRejectsUnknownOrConflictingFormats(t *testing.T) {
+	for _, args := range [][]string{
+		{"--format=json"},
+		{"--mermaid", "--format=json"},
+	} {
+		var out, errb bytes.Buffer
+		if code := newDemoEnv(&out, &errb).graph(args); code != 2 {
+			t.Fatalf("%v: exit code = %d, stderr = %q", args, code, errb.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%v: a refused format must print no document: %q", args, out.String())
+		}
+	}
+}
