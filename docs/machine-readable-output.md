@@ -161,22 +161,23 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 }
 ```
 
-出错时（示例）：`{ "issue": "broken-ref", "level": "error", "rule": "derived-from", "ref": "missing-parent" }`
+关系靶不存在时（示例，warn）：`{ "issue": "broken-ref", "level": "warn", "rule": "relation-target", "ref": "missing-parent" }`；trailer 里出现不认识的键时：`{ "issue": "a", "level": "warn", "rule": "unknown-trailer", "action": "ask", "ref": "foo" }`
 
 | 字段 | 来源 | 说明 |
 | --- | --- | --- |
 | `ok` | 无 `level == "error"` | **与退出码同义**：`ok=false` ⟺ exit 1。CI 判据一眼可见 |
 | `summary.ok/warn/error` | `engine.Check` 结果计数 | **计的是"条目数"不是"issue 数"**（一个 issue 可同时缺起点与父） |
 | `results[].level` | `engine.Level` | **字符串枚举** `ok` / `warn` / `error`——不吐内部的 0/1/2 序号 |
-| `results[].rule` | **新增**（见 §6） | 机器码：`start-action` / `terminal-action` / `derived-from` / `spawns` / `complete` |
-| `results[].action` | `p.Last()` | 仅 `terminal-action` 用：当前停在哪个动作 |
-| `results[].ref` | 关系目标 | 仅 `derived-from` / `spawns` 用：指向了谁 |
+| `results[].rule` | **新增**（见 §6） | 机器码：`start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete`（原 `derived-from` / `spawns` 已并入 `relation-target`，见文末结论） |
+| `results[].action` | `p.Last()` | 仅 `terminal-action` / `unknown-trailer` 用：前者是停在哪个动作，后者是坏键落在哪个动作 |
+| `results[].ref` | 关系目标 / 键名 | `relation-target` 用：靶 issue；`unknown-trailer` 用：不认识的键名 |
 | `results[].actions` | `kinds(p)` | 路径里全部动作类型，**按序**；每一条结果都带 |
 | 标题 `actions` | | 恒在，**与 `--verbose` 无关**（见 §5 第 6 条） |
 
 要点：
 
 - **不给 `message`**：`check` 的中文判据（"缺少 ask：问题没有起点动作"）是**文本视图的文案**。机器视图给 `rule` + `ref` / `action`，消费方按码分支，**不解析中文**——这正是把它做成 JSON 的全部理由。
+- **关系码是泛化的**：任一写侧关系名（`causes` / `part-of` / …，见 `relations-impl` 的词表）的靶不存在，都报 `relation-target`（warn），**不按关系名分码**；坏 trailer 键报 `unknown-trailer`。
 - **空仓**：文本打一句提示并 exit 0；JSON 给 `{ "ok": true, "summary": 全零, "results": [] }`，**不出提示句**（prose 不进 schema）。
 - **stdlib 编码**：`encoding/json` 默认转义 `<` `>` `&`；issue ID 与关系名都是 kebab-slug，不受影响，不必设 `SetEscapeHTML(false)`。
 
@@ -315,3 +316,42 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - `--toon`、紧凑输出；
 - 错误路径仍走 stderr prose（`打开仓库失败` 这类），未结构化；
 - `check` 结果里是否带提交 id。
+
+## 结论（已定）
+
+2026-10-23 按 §7 的清单把三个命令复核了一遍：**实现未改一行**；唯一动手的是**把文档对齐到已交付的行为**（本质上是原 §4 写于落地当时，随后被 `relations-impl` / `silent-flag-drop` 的落地改掉了）。
+
+### 复核（真仓 + 最小仓）
+
+| # | 检查 | 结果 |
+| --- | --- | --- |
+| 1 | 真仓 `status --json` | 47 条 issue、顶层 `summary` / `worktree` / `issues`；行键 `id`/`domain`/`action`/`done`/`has-worktree`，无 `parent` |
+| 2 | 真仓 `list --json --action hypothesize` | `filter` 回显、`count` 与 `results` 各 19 |
+| 3 | 真仓 `check --json` | `ok=true`、`summary` 34/13/0、`results` 47 行；exit 0；stderr 0 字节 |
+| 4 | `check --json --verbose` | 与不带 verbose **逐字节相同** |
+| 5 | 空仓 | `issues: []`、`results: []`，exit 0，不出提示句 |
+| 6 | 错误仓（父靶不存在） | `"ok": false`、`rule: relation-target`、`ref` 为靶、exit 1 |
+| 7 | 坏 trailer 键 | `rule: unknown-trailer`、`ref` 为键名、`action` 为所在动作 |
+| 8 | `go build` / `go vet` / `go test ./...` | 全绿 |
+
+### 原文块的出人（以本文 §4 为准）
+
+| 原文 §4 | 现状 | 依据 |
+| --- | --- | --- |
+| `derived-from` / `spawns` 两个码，`ref` 指父 | 统一成一个 `relation-target`（**warn**），覆盖全部写侧关系名的靶存在性 | `relations-impl` 验收 5、60b02b9 |
+| 示例把靶缺失写成 `"level": "error"` | 现为 **warn**（`ok` 仍 `true`，不拉退出码） | 同上 |
+| 未提 `unknown-trailer` | 新增码；`ref` 是**键名**、`action` 是该动作 | `silent-flag-drop`（处处报，不静默） |
+
+`ref` 的用途由"仅 derived-from / spawns"扩成 `relation-target`（靶 issue）/ `unknown-trailer`（键名）；`action` 由"仅 terminal-action"扩成 `terminal-action` / `unknown-trailer`。死常量 `RuleDerivedFrom` / `RuleSpawns` 已无引用，随本次对齐删除。
+
+### 已知缺口（留档，未做）
+
+`relation-target` 的 finding 里**不带关系名**：`Diagnostic` 只有 `ref`，同一 issue 的多条坏边分不出是哪一条。补 `relation` 字段会动 JSON schema，属于读侧契约的扩字段，本轮不动；若消费方需要，单独开 issue。
+
+### 遗留（承接 §7）
+
+- `path` / `show` / `worktree list` 的 `--json`；
+- `--toon`、紧凑输出；
+- 错误路径仍走 stderr prose；
+- `check` 结果里是否带提交 id；
+- 上述「关系名缺失」。

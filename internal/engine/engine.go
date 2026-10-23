@@ -174,15 +174,15 @@ const (
 
 // Rule codes name the finding a diagnostic carries. They are the contract a
 // machine view reports, so the text view keeps its sentence and the machine
-// view binds to these words: a caller branches on `derived-from`, never on
-// Chinese prose. Each code doubles as the trailer it checks where one exists.
+// view binds to these words: a caller branches on `relation-target`, never on
+// Chinese prose. The relation code is generic on purpose: every relation name
+// reports the same code, because the finding (a target that does not exist) is
+// the same.
 const (
 	RuleStartAction    = "start-action"
 	RuleTerminalAction = "terminal-action"
 	RuleRelationTarget = "relation-target"
 	RuleUnknownTrailer = "unknown-trailer"
-	RuleDerivedFrom    = "derived-from"
-	RuleSpawns         = "spawns"
 	RuleComplete       = "complete"
 )
 
