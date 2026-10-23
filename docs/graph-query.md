@@ -37,3 +37,31 @@
 - 不做任意路径查询（`kiln path` 已有）；
 - 不做子图布局 / 排序策略的改动（排序仍按 id、`(from, to, name)`）；
 - 不改 mermaid / ascii 的过滤（本轮 `--issue` / `--depth` 只服务 `--json`；其它格式给了就明确报错，不静默忽略）。
+
+## 设计（2026-10-23）
+
+采用 **B**：同一个 `graph --json` 文档，收窄成邻域诱导子图——`summary` / `nodes` / `missing` / `edges` 全部按过滤后的集合计数与排列，schema 与解码器都不变；全量文档就是"不传 `--issue`"的特例。
+
+- **邻域是无向的**：边 `blocks` 声明方向只表示"谁声明"，反向到达的 issue 同样相关；BFS 双向扩散。
+- `--depth` 默认 **1**；`--depth 0` 只留 `X` 自身、`edges: []`。
+- 过滤集合包含**未开过的靶**（ghost）：它若在深度内，边照旧写出并进 `missing`，与全量文档的表示一致——`nodes` 仍只有真实 issue。
+- 错误：`--issue` 未知 → exit 1、stdout 0 字节；`--depth` 无 `--issue` → exit 2；负深度 / 非整数 → exit 2；`--issue` / `--depth` 与 `--json` 之外的格式同给 → exit 2（不静默忽略）。
+- `nodes[]` 补 `tags`（`omitempty`），与 `list --json` 同源。
+
+## apply（2026-10-23）
+
+- `internal/cli/cli.go`：
+  - `graph` 的 `allowedFlags` 增加 `issue` / `depth`；`--issue` / `--depth` 只允许与 `--json` 同给，否则 `--issue/--depth 只服务 --json`、exit 2；`--depth` 无 `--issue` → `--depth 需要 --issue`、exit 2；深度非法 → `--depth 需要非负整数`、exit 2。
+  - `graphJSON(repo, focus, depth)`：`focus` 非空时先查 issue 存在（否则 `没有 issue "<id>"`、exit 1），再 `neighbourhood` 双向 BFS 出 `dist`，保留真实 issue 的 id（原序）与两端都在 `dist` 里的边；随后照旧算 `missing` / `summary`。`graphNode` 增加 `Tags []string`（`json:"tags,omitempty"`），从 `p.Tags` 抄。
+- 测试（`internal/cli/cli_test.go`）：`TestGraphJSONFiltersToANeighbourhood`（`beta` 深度 1 → `alpha,beta` 一条边；深度 0 → 只剩 `beta`）、`TestGraphJSONNeighbourhoodKeepsGhostTargets`（`gamma` → `ghost` 未开，边保留、`missing: [ghost]`）、`TestGraphQueryFlagErrors`（未知 issue / 缺 `--issue` 的 `--depth` / 负深度 / 与 mermaid 同给 四条，stdout 均为空）。
+- 复核：`go build` / `go vet` / `go test ./...` 全过；真仓 `graph --json --issue graph-query --depth 1` 得到同 schema 的收窄文档，不带 `--issue` 时与旧输出逐字节相同。
+
+## 结论（已定）
+
+`kiln graph --json` 支持按点查：`--issue <id> [--depth N]`（默认 1），返回**同一 schema** 的邻域诱导子图；`--depth 0` 只有该点本身。邻域按无向边扩散（`blocks` 的反向也算相邻），未开过的靶在深度内会以边 + `missing` 出现，而 `nodes` 恒为真实 issue。`nodes[]` 现在带 `tags`，与 `list --json` 一致。
+
+边界：
+
+- `--issue` / `--depth` 只服务 `--json`；给 ascii / mermaid 会明确报错（exit 2），不静默回退全量；
+- 不传 `--issue` 时输出与旧版逐字节相同——全量是特例，不是另一条代码路径；
+- 排序仍由 id 与 `(from, to, name)` 决定，邻域不改变顺序，只决定取舍。
