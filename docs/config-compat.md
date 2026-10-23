@@ -45,3 +45,20 @@
 - `internal/config/config.go`：`file` 结构体 + `dec.DisallowUnknownFields()`；`Read` 对解析错误直接返回错误。
 - `internal/config/config.go` `defaultFile`：播种的默认配置只含 `actions` / `vcs` / `worktree`。
 - `help-relation-flags` 的 apply（2026-10-18）：`-h` 改为读配置且容错；`usagePrologue` 里的 action 词表行仍是静态。
+
+## 结论（已定）
+
+**0.x 阶段不承诺配置兼容：配置可能出现不兼容的变更。**（2026-10-23，用户裁定）
+
+- **立场**：`.kilnconfig.jsonc` 的字段与取值在 0.x 期间可以破坏性变化；迁移在 release notes
+  里说明，不保证「新配置 → 老 kiln」或「老配置 → 新 kiln」的稳定性。唯一保留的宽容度是
+  「老配置缺字段 → 用默认值」（如缺 `relations` 段用默认词表），这是现有行为。
+- **维持严格解析（方案 A）**：未知顶层键仍是硬错误（`dec.DisallowUnknownFields()`，
+  `internal/config/config.go:84`），拼错键可见；不引入 `version` 字段——它拦不住老二进制，
+  信息价值不足以抵消维护成本。
+- **`-h` 容错的不一致保留**：坏配置下 `-h` 仍可看帮助，但展示的是默认词表，可能与项目实际
+  不符；action 词表行也仍是静态字符串。两项一并记为已知边界。
+- **`relations` 段**：仍处于「设计已定、未 plumbing」——配置里写 `relations` 依旧报
+  `unknown field`（`internal/config/config.go` 的 `Config` 尚无该字段），归 `relations-impl`
+  后续；本 issue 不落地。
+- 将来若做配置迁移工具或版本字段，从「0.x 不稳定」这一基线重新开单。
