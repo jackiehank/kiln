@@ -277,7 +277,7 @@ kiln 的模型天生适合 agent：
 
 ## 已知边界
 
-- `kiln graph` 目前只画 `spawns` / `relates-to` / `derived-from`，**`blocks` 与 `supersedes` 还没渲染**（`path` 里是有的）——见 [docs/relation-rendering.md](docs/relation-rendering.md)。
+- `kiln graph` 按「声明源箭头」画：每条关系只出现在**声明方**的块里（不换成反名、目标块不重复），对称关系（`relates-to`）不画箭头，有向关系是 `──name──▶`；同一 `(无序对, 槽)` 被两侧声明时**后写者胜**，全图只出一形——见 [docs/graph-normalize.md](docs/graph-normalize.md)。
 - 关系词表规格里还留了 `part-of`（分解），**尚未落地**。
 - `worktree remove` 清不掉"目录已删"的区（那种区得先 `git worktree prune`）。
 - 新区的未提交改动**不会**被搬过去——**刻意为之，不是待办**（kiln 不代管本地状态，与 `.worktreeinclude` 只管被忽略文件是同一条边界，见 [docs/worktree-adopt.md](docs/worktree-adopt.md)）。要带过去得手工：git 用 `stash -u` → 建区 → 区内 `pop`；jj 用 `workspace add -r @` + 主干 `jj edit @-`（**别**用 `jj restore`，那会级联 rebase 把新区连坐）。

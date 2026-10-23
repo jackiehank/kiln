@@ -320,3 +320,88 @@ func hasDiag(diags []Diagnostic, issue string, level Level, substr string) bool 
 	}
 	return false
 }
+
+// graph: a directed edge is drawn once, in the declaring issue's block, as an
+// arrow labelled with the name that was declared — never echoed with an
+// inverse name in the target's block.
+func TestGraphDrawsDeclaredArrowsOnce(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g2", "甲阻塞乙\nissue: a\naction: ask\nblocks: b", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	got := Graph(repo, testRel)
+	want := "a (ask)\n└── ──blocks──▶ b (ask)\n\nb (ask)"
+	if got != want {
+		t.Fatalf("graph = %q, want %q", got, want)
+	}
+}
+
+// graph: a symmetric relation has no arrow — the name is drawn as a plain
+// connecting line.
+func TestGraphDropsArrowForSymmetricRelation(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g2", "甲关联乙\nissue: a\naction: ask\nrelates-to: b", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	got := Graph(repo, testRel)
+	if !strings.Contains(got, "──relates-to── b (ask)") || strings.Contains(got, "▶") {
+		t.Fatalf("symmetric relation must be drawn without an arrow: %q", got)
+	}
+}
+
+// graph: declared from both sides, the later declaration wins and the edge is
+// shown once, at the later declarant's tail.
+func TestGraphLastWinsAcrossBothSides(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g3", "乙反向声明\nissue: b\naction: ask\nblocked-by: a", 3),
+		mkCommit("g2", "甲阻塞乙\nissue: a\naction: ask\nblocks: b", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	edges := FoldEdges(repo, testRel)
+	if len(edges) != 1 {
+		t.Fatalf("both sides must fold to one edge: %+v", edges)
+	}
+	if e := edges[0]; e.From != "b" || e.To != "a" || e.Name != "blocked-by" {
+		t.Fatalf("later declaration must win: %+v", e)
+	}
+	got := Graph(repo, testRel)
+	if !strings.Contains(got, "b (ask)\n└── ──blocked-by──▶ a (ask)") {
+		t.Fatalf("edge must sit in the later declarant's block: %q", got)
+	}
+	if strings.Contains(got, "a (ask)\n└──") {
+		t.Fatalf("a's block must not repeat the edge: %q", got)
+	}
+}
+
+// graph fold keeps foldRelations' strength chain inside one issue: within a
+// slot the higher-ranked name wins, even against a later weaker one.
+func TestGraphFoldKeepsStrongerNameWithinOneIssue(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g4", "甲改为分解\nissue: a\naction: ask\npart-of: b", 4),
+		mkCommit("g3", "甲阻塞乙\nissue: a\naction: ask\nblocks: b", 3),
+		mkCommit("g2", "甲开题\nissue: a\naction: ask", 1),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	edges := FoldEdges(repo, testRel)
+	if len(edges) != 1 || edges[0].Name != "part-of" {
+		t.Fatalf("strength chain must survive the global fold: %+v", edges)
+	}
+}
+
+// graph fold: unrelate takes the pair out of the graph for good, from either
+// side's view.
+func TestGraphFoldUnrelateClearsThePair(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g3", "甲解除\nissue: a\naction: ask\nunrelate: b", 3),
+		mkCommit("g2", "甲阻塞乙\nissue: a\naction: ask\nblocks: b", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	if edges := FoldEdges(repo, testRel); len(edges) != 0 {
+		t.Fatalf("unrelate must remove the pair: %+v", edges)
+	}
+}

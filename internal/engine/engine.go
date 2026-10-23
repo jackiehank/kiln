@@ -320,9 +320,97 @@ func Summarize(repo *model.Repo, actions *model.ActionSet) Stats {
 	return s
 }
 
-// Graph renders an ASCII relationship tree: one block per issue, listing the
-// issues it spawns, relates to and derives from.
+// Edge is one relationship after the whole-repository fold: the declaring
+// issue (the arrow's tail), the target, the name it declared, and the slot the
+// name lives in.
+type Edge struct {
+	From string
+	To   string
+	Name string
+	Slot string
+}
+
+// FoldEdges folds every declaration in the repository by (unordered pair, slot)
+// — last declaration wins, whichever side made it — so a relationship declared
+// from both sides shows one shape once. Within one issue the strength chain
+// still decides: a later weaker name does not displace a stronger earlier one
+// (higher rank wins, a tie goes to the later action), which is exactly
+// foldRelations' rule.
+func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
+	type item struct {
+		issue string
+		a     model.Action
+	}
+	var items []item
+	for _, id := range IDs(repo) {
+		for _, a := range repo.Issues[id].Actions {
+			items = append(items, item{id, a})
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if !items[i].a.Date.Equal(items[j].a.Date) {
+			return items[i].a.Date.Before(items[j].a.Date)
+		}
+		return items[i].issue < items[j].issue
+	})
+
+	type key struct{ pair, slot string }
+	pair := func(a, b string) string {
+		if a > b {
+			a, b = b, a
+		}
+		return a + "\x00" + b
+	}
+	state := map[key]Edge{}
+	for _, it := range items {
+		declared := map[string]bool{}
+		for _, r := range it.a.Relations {
+			declared[r.Target] = true
+		}
+		// An unrelate clears the pair as a whole: it says the two issues are no
+		// longer related, not merely that this side stopped declaring.
+		for _, t := range it.a.Unrelate {
+			if declared[t] {
+				continue
+			}
+			p := pair(it.issue, t)
+			for k := range state {
+				if k.pair == p {
+					delete(state, k)
+				}
+			}
+		}
+		for _, r := range it.a.Relations {
+			n, ok := rel.Lookup(r.Name)
+			if !ok {
+				continue
+			}
+			k := key{pair(it.issue, r.Target), n.Slot}
+			if cur, ok := state[k]; ok && cur.From == it.issue {
+				if c, ok := rel.Lookup(cur.Name); ok && c.Rank > n.Rank {
+					continue
+				}
+			}
+			state[k] = Edge{From: it.issue, To: r.Target, Name: r.Name, Slot: n.Slot}
+		}
+	}
+	out := make([]Edge, 0, len(state))
+	for _, e := range state {
+		out = append(out, e)
+	}
+	return out
+}
+
+// Graph renders the normalized relationship graph: one block per issue, and in
+// it only the edges whose declaration this issue made — the declared name is the
+// arrow's label, never an inverse, and a target never repeats its own block's
+// edge back. A symmetric name (one without an inverse) is drawn as a plain line
+// instead of an arrow.
 func Graph(repo *model.Repo, rel *model.RelationSet) string {
+	byFrom := map[string][]Edge{}
+	for _, e := range FoldEdges(repo, rel) {
+		byFrom[e.From] = append(byFrom[e.From], e)
+	}
 	var b strings.Builder
 	for i, id := range IDs(repo) {
 		if i > 0 {
@@ -334,7 +422,7 @@ func Graph(repo *model.Repo, rel *model.RelationSet) string {
 			state = "?"
 		}
 		b.WriteString(id + " (" + state + ")\n")
-		lines := relationLines(repo, p, rel)
+		lines := edgeLines(repo, byFrom[id], rel)
 		for j, l := range lines {
 			if j == len(lines)-1 {
 				b.WriteString("└── " + l + "\n")
@@ -346,37 +434,24 @@ func Graph(repo *model.Repo, rel *model.RelationSet) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func relationLines(repo *model.Repo, p *model.Issue, rel *model.RelationSet) []string {
-	var lines []string
-	own := map[string]bool{} // target|slot already shown from this issue
-	for _, r := range p.Relations {
-		if n, ok := rel.Lookup(r.Name); ok {
-			own[r.Target+"|"+n.Slot] = true
+// edgeLines renders one issue's edges as arrows, sorted by (target, name).
+func edgeLines(repo *model.Repo, edges []Edge, rel *model.RelationSet) []string {
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].To != edges[j].To {
+			return edges[i].To < edges[j].To
 		}
-		lines = append(lines, r.Name+" "+r.Target+" ("+stateOf(repo, r.Target)+")")
-	}
-	// Inbound: edges other issues declared toward this one. Rendered with the
-	// inverse name so the sentence still reads with p as the subject.
-	for _, id := range IDs(repo) {
-		q := repo.Issues[id]
-		if q.ID == p.ID {
+		return edges[i].Name < edges[j].Name
+	})
+	out := make([]string, 0, len(edges))
+	for _, e := range edges {
+		state := stateOf(repo, e.To)
+		if rel.Inverse(e.Name) == "" {
+			out = append(out, "──"+e.Name+"── "+e.To+" ("+state+")")
 			continue
 		}
-		for _, r := range q.Relations {
-			if r.Target != p.ID {
-				continue
-			}
-			if n, ok := rel.Lookup(r.Name); ok && own[q.ID+"|"+n.Slot] {
-				continue
-			}
-			label := rel.Inverse(r.Name)
-			if label == "" {
-				label = r.Name
-			}
-			lines = append(lines, label+" "+q.ID+" ("+stateOf(repo, q.ID)+")")
-		}
+		out = append(out, "──"+e.Name+"──▶ "+e.To+" ("+state+")")
 	}
-	return lines
+	return out
 }
 
 // PathLines renders issue p's relation block for `kiln path`: p's own

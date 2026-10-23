@@ -37,3 +37,12 @@
 
 - 不动 `foldRelations` 的**出边**语义（只补全局折的键）。
 - 不改 `status`（维持不渲染关系）。
+
+## apply：`FoldEdges` + 声明源箭头
+
+- `internal/engine/engine.go` 新增 `Edge{From, To, Name, Slot}` 与 `FoldEdges(repo, rel)`：**全局**按 `(无序对, 槽)` 折，动作按日期排序、同侧仍守强度链（rank 大者胜、平手后写），`unrelate` 清整对。
+- `Graph` 改为只取 `From == 本 issue` 的边；`relationLines`（含入边换名）删除。
+- 形态：有向 `──name──▶ target (state)`；对称（`Inverse(name) == ""`）`──name── target (state)`。
+- 测试：`TestGraphDrawsDeclaredArrowsOnce` / `TestGraphDropsArrowForSymmetricRelation` / `TestGraphLastWinsAcrossBothSides` / `TestGraphFoldKeepsStrongerNameWithinOneIssue` / `TestGraphFoldUnrelateClearsThePair`。
+- README「已知边界」里「graph 只画 spawns/relates-to/derived-from」的旧说法一并更新。
+
