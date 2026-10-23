@@ -31,14 +31,14 @@
 
 **倾向 C**：`--json` 是本仓既有约定，`--format` 已存在、留作别名即可。
 
-## 验收（草案）
+## 验收（定稿，2026-10-23）
 
-- **E1**：`kiln graph --json` → 单 JSON 文档，`{"nodes":[{...}],"edges":[{...}]}`；边**已折**（与 ascii 同一份 `FoldEdges`），每条恰好一次。
-- **E2**：节点 `id` / `domain` / `state`；边 `from` / `to` / `name` / `slot` / `symmetric`。
-- **E3**：`kiln graph --mermaid` → 可直接被 mermaid 渲染：有向 `a -- name --> b`，对称 `a --- b`；node id 只含 `[A-Za-z0-9_]` 且无碰撞。
+- **E1**：`kiln graph --json` → 单 JSON 对象 `{"summary":{...},"nodes":[...],"missing":[...],"edges":[...]}`（`missing` 为空时省略）；边**已折**（与 ascii 同一份 `FoldEdges`），每条恰好一次。
+- **E2**：节点 `id` / `domain` / `action` / `done` / `title`；边 `from` / `to` / `name` / `directed`；`missing` 列 `to` 指向未开 issue 的 id。**不输出** `slot` / `symmetric`（理由见下节）。
+- **E3**：`kiln graph --mermaid` → 可直接被 mermaid 渲染：有向 `a -- name --> b`，对称 `a --- b`；node id 只含 `[A-Za-z0-9_]` 且无碰撞。（已实现）
 - **E4**：默认 `ascii` 输出**逐字节不变**；`--format=json` ≡ `--json`。
-- **E5**：`--json --mermaid` 同时给 → 明确报错（exit 2），不静默选一个。
-- **E6**：`go build ./...` / `go test ./...` 全过；最小仓三种格式冒烟。
+- **E5**：`--json --mermaid`、`--json --format=ascii` → 明确报错（exit 2），不静默选一个。
+- **E6**：`go build ./...` / `go test ./...` 全过；最小仓三种格式冒烟；**空仓**输出合法 JSON 而不是文本 `（空）`。
 
 ## 非目标
 
@@ -56,3 +56,35 @@
 - 测试：`engine_test.go` `TestMermaidRendersTheFoldedGraph`（消毒碰撞 `a.b`/`a/b`、`(missing)` 节点、有向与对称各一条，逐字节断言）、`TestMermaidIsStable`；`cli_test.go` `TestGraphMermaidFlagMatchesFormatAlias`、`TestGraphRejectsUnknownOrConflictingFormats`。
 - 复核：真仓 `kiln graph --mermaid` 111 行 = 48 节点 + 62 边；`--mermaid` 与 `--format=mermaid` 逐字节相同；`--format=json` 与 `--mermaid --format=json` 均 exit 2；`go build`/`go vet`/`go test ./...` 全过；ascii 分支代码未动。
 - 预览：`.kiln/graph-preview.{mmd,md,html}`（`.kiln/` 被忽略，不入库）；`graph-preview.html` 用本地 `mermaid.min.js`，离线可开。
+
+## 设计（`--json`，2026-10-23）
+
+用户（m00870）：`--svg` 不做，"还得自己考虑样式，太重"；`--json` 好好设计——**"如何让 json 输出能让 agent 看明白"**。
+
+既有约定（`machine-readable-output` 结论）：一个对象；键复用 kiln 的词；不写给人看的话（无 hint / legend / prose）；缺键表示"无"、不用 `null`，布尔永远写出。据此定形：
+
+```json
+{
+  "summary": { "issues": 50, "edges": 62, "missing": 0 },
+  "nodes": [
+    { "id": "graph-export", "domain": "cli", "action": "design", "done": false,
+      "title": "graph 增加 --json / --mermaid 中间产物" }
+  ],
+  "missing": ["ghost-issue"],
+  "edges": [
+    { "from": "graph-export", "to": "graph-normalize", "name": "relates-to", "directed": false },
+    { "from": "evidence-fluidity", "to": "cli-necessity", "name": "blocks", "directed": true }
+  ]
+}
+```
+
+逐条理由（都回答"agent 凭什么看明白"）：
+
+- `nodes[].title` 取该 issue **最后一个 action** 的 `--title`，与 `action` 同一行同一时点；agent 不必再 `kiln show` 就知道这行是什么。id + 状态文本树已有，标题文本树不显示，所以不算重复。
+- `edges[].directed` 是布尔、**永远写出**：`true` = 有向（箭头），`false` = 对称（无箭头）。语义由数据给出，agent 不必先查关系词表（`blocks` 有向、`relates-to` 对称都不言自明）。**不输出 `symmetric`**——它与 `directed` 互补，双写就是两种说法。
+- 不输出 `slot`：同（对, 槽）取强是折叠的**过程**，不是图的事实；给 agent 只会多一个要解释的字段。
+- `missing` 单独成列：这样 `nodes` 恒等于真实存在过的 issue，`edges[].to ∈ nodes ∪ missing` 一看便知。若塞进 `nodes`，就要在 50 行里各写一个 `"missing": false`，比单列更难读。
+- `summary` 三个计数，脚本不必自己数。
+- 顺序确定：`nodes` 按 id；`edges` 按 `(from, to, name)`——同仓每次同文本。
+- 空仓输出 `{"summary":{"issues":0,"edges":0,"missing":0},"nodes":[],"edges":[]}`：文本视图的 `（空）` 是给人看的，不进 JSON。
+- `--json` ≡ `--format=json`；`--json --mermaid`、`--json --format=ascii` 都是 exit 2，不静默择一；`--json --format=json` 同义，允许。
