@@ -46,3 +46,23 @@
 - 测试：`TestGraphDrawsDeclaredArrowsOnce` / `TestGraphDropsArrowForSymmetricRelation` / `TestGraphLastWinsAcrossBothSides` / `TestGraphFoldKeepsStrongerNameWithinOneIssue` / `TestGraphFoldUnrelateClearsThePair`。
 - README「已知边界」里「graph 只画 spawns/relates-to/derived-from」的旧说法一并更新。
 
+## 结论（已定）
+
+2026-10-23 落地。验收 G1–G5 逐条复核：
+
+| # | 复核 | 结果 |
+| --- | --- | --- |
+| G1 | 同一条边是否只出现一次、在声明方块里 | ✓ 单测 + 最小仓冒烟：双侧声明折成一条，落在后声明方块里 |
+| G2 | 标签是否都是声明名（无反名） | ✓ 真仓图 153 行里 `blocked-by` / `causes` / `has-part` / `superseded-by` / `spawns` 出现 0 次 |
+| G3 | 有向 `──name──▶`；对称无箭头 | ✓ 真仓 40 条 `relates-to` 全为 `──relates-to──`（无 `▶`） |
+| G4 | 同 `(无序对, 槽)` 至多一条 | ✓ `FoldEdges` 按 pair+slot 折；双侧用例只剩后写者 |
+| G5 | build / test 全过；最小仓冒烟 | ✓ `go build ./...` / `go vet ./...` / `go test ./...` 全绿；最小仓输出符合预期 |
+
+### 边界（保留）
+
+- **同侧强度链不变**：同一 issue 同槽仍是 rank 大者胜（平手后写），这是 `foldRelations` 的既有语义，非目标里明确不动。
+- **`unrelate` 清整对**：任一侧 `unrelate: X` 后，该对在图上不再出现（两侧声明都不再显示）。这是全局折的自然结果；若将来要“只清自己这侧”，需要把键降回 `(声明方, 目标, 槽)`。
+- **目标缺失照画**：`relates-to ghost` 渲染为 `(missing)`，由 `check` 的 `relation-target` ⚠ 负责提示。
+- **`path` 不受影响**：仍是视角化句子（含入边、反名），与本图的“声明源箭头”是两套投影。
+
+
