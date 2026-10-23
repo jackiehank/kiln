@@ -196,10 +196,13 @@ type Diagnostic struct {
 	// Rule names the finding; Action and Ref carry the little bit of context the
 	// rule needs (the last action, the issue that is missing), so a machine view
 	// never has to re-derive it from the sentence. Both are empty when the rule
-	// has no such context.
-	Rule   string
-	Action string
-	Ref    string
+	// has no such context. Relation names the declared relation behind a
+	// relation-target finding, so a caller can tell two edges to the same
+	// missing target apart.
+	Rule     string
+	Action   string
+	Ref      string
+	Relation string
 }
 
 // Symbol returns the ✓ / ⚠ / ✗ marker for the level.
@@ -243,7 +246,7 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 	// just derived-from/spawns. A dangling target is a warning (lenient input).
 	for _, r := range p.Relations {
 		if _, ok := repo.Issues[r.Target]; !ok {
-			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleRelationTarget, Ref: r.Target,
+			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleRelationTarget, Ref: r.Target, Relation: r.Name,
 				Message: "关系目标不存在：" + r.Name + " 指向 " + r.Target})
 		}
 	}

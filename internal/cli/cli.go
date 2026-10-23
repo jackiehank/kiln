@@ -1617,7 +1617,8 @@ type worktreeState struct {
 // that is `path`'s job — which keeps the document O(issues), not O(commits).
 type statusIssue struct {
 	issueCore
-	HasWorktree bool `json:"has-worktree"`
+	Title       string `json:"title,omitempty"`
+	HasWorktree bool   `json:"has-worktree"`
 }
 
 // listDoc is the `kiln list --json` document.
@@ -1659,12 +1660,13 @@ type checkSummary struct {
 // checkResult is one finding, named by rule code rather than described in
 // prose. The sentence stays where it is read by a human.
 type checkResult struct {
-	Issue   string   `json:"issue"`
-	Level   string   `json:"level"`
-	Rule    string   `json:"rule"`
-	Action  string   `json:"action,omitempty"`
-	Ref     string   `json:"ref,omitempty"`
-	Actions []string `json:"actions"`
+	Issue    string   `json:"issue"`
+	Level    string   `json:"level"`
+	Rule     string   `json:"rule"`
+	Action   string   `json:"action,omitempty"`
+	Ref      string   `json:"ref,omitempty"`
+	Relation string   `json:"relation,omitempty"`
+	Actions  []string `json:"actions"`
 }
 
 // statusJSON renders the domain view as a flat issue list, in the very order the
@@ -1686,6 +1688,10 @@ func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.Workspace
 		Issues:   make([]statusIssue, 0, s.Total),
 	}
 	for _, r := range e.statusRows(groups, areaIssues(areas)) {
+		title := ""
+		if last, ok := r.issue.Last(); ok {
+			title = last.Title
+		}
 		doc.Issues = append(doc.Issues, statusIssue{
 			issueCore: issueCore{
 				ID:     r.issue.ID,
@@ -1693,6 +1699,7 @@ func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.Workspace
 				Action: r.issue.State(),
 				Done:   e.isDone(r.issue),
 			},
+			Title:       title,
 			HasWorktree: r.area,
 		})
 	}
@@ -1729,12 +1736,13 @@ func (e *env) checkJSON(repo *model.Repo) int {
 			doc.Summary.OK++
 		}
 		doc.Results = append(doc.Results, checkResult{
-			Issue:   d.Issue,
-			Level:   levelWord(d.Level),
-			Rule:    d.Rule,
-			Action:  d.Action,
-			Ref:     d.Ref,
-			Actions: kindsOf(repo.Issues[d.Issue]),
+			Issue:    d.Issue,
+			Level:    levelWord(d.Level),
+			Rule:     d.Rule,
+			Action:   d.Action,
+			Ref:      d.Ref,
+			Relation: d.Relation,
+			Actions:  kindsOf(repo.Issues[d.Issue]),
 		})
 	}
 	if code := e.writeJSON(doc); code != 0 {

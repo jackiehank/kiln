@@ -29,3 +29,10 @@ agent 访谈（2026-10-23）里发现两处既有 JSON 的小缺口，同属"字
 - 不给 `list --json` 加 `title`（`status` 与 `list` 的公共行 `issueCore` 保持不变，`title` 只属于 `status` 的行）；
 - 不动 `check` 的 rule 码集合与退出码；
 - 不把 `slot` 暴露出来。
+
+## apply（2026-10-23）
+
+- `internal/engine/engine.go`：`Diagnostic` 新增 `Relation string`（注释说明它只服务于"靶缺失"）；`relation-target` 的构造同时写 `Ref: r.Target` 与 `Relation: r.Name`。
+- `internal/cli/cli.go`：`statusIssue` 在 `issueCore` 之后新增 `Title string`（`json:"title,omitempty"`）；`statusJSON` 从 `r.issue.Last()` 取标题，与 `graph --json` 的节点同源。`checkResult` 新增 `Relation string`（`json:"relation,omitempty"`）并在 `checkJSON` 里从 `d.Relation` 抄出。`issueCore` / `listIssue` 一行未动。
+- 测试：`cli_test.go` 的 `TestStatusJSONIsFlatAndOrdered` 期望文档补上三行 `title`（`子` / `父落地` / `游荡验证`）；新增 `TestCheckJSONNamesTheBrokenRelation`——`blocks: ghost` 的 issue 走 `check --json`，断言 `"relation": "blocks"` 且整份文档只有一处 `relation`（其它 rule 不带）。
+- 复核：`go build` / `go vet` / `go test ./...` 全过；真仓 `status --json` 每行带 `title`（55 issue）；临时仓 `blocks: ghost` → `relation-target` finding 带 `relation: "blocks"`、`ref: "ghost"`、exit 0（仅 warn）；两命令文本视图逐字节未变。

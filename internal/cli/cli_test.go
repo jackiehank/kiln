@@ -1188,6 +1188,7 @@ func TestStatusJSONIsFlatAndOrdered(t *testing.T) {
       "domain": "cli",
       "action": "ask",
       "done": false,
+      "title": "子",
       "has-worktree": false
     },
     {
@@ -1195,12 +1196,14 @@ func TestStatusJSONIsFlatAndOrdered(t *testing.T) {
       "domain": "design",
       "action": "apply",
       "done": true,
+      "title": "父落地",
       "has-worktree": true
     },
     {
       "id": "stray",
       "action": "test",
       "done": false,
+      "title": "游荡验证",
       "has-worktree": false
     }
   ]
@@ -1437,6 +1440,30 @@ func TestCheckJSONReportsErrorAndFails(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("check --json missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// A relation-target finding names the broken relation, not just the issue it
+// points at: two edges from one issue to the same missing target stay
+// distinguishable, and the other rules never grow the field.
+func TestCheckJSONNamesTheBrokenRelation(t *testing.T) {
+	runner := fakeRunner{commits: []vcs.Commit{
+		{ID: "r1", Date: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Message: "缺靶\n\nissue: broken\naction: ask\nblocks: ghost\ntitle: 缺靶"},
+	}}
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: runner, out: &out, errw: &errb}
+	if code := e.check([]string{"--json"}); code != 0 {
+		t.Fatalf("warnings alone must not fail the check (exit %d, stderr %q)", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{`"rule": "relation-target"`, `"ref": "ghost"`, `"relation": "blocks"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("check --json missing %q:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, `"relation":`); n != 1 {
+		t.Fatalf("only the relation-target finding carries a relation, got %d:\n%s", n, got)
 	}
 }
 
