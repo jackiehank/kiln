@@ -53,3 +53,19 @@
 
 两处实现细节：`playwright-core` 依次从 `require` 链路、`%APPDATA%\npm\node_modules`、`%ProgramFiles%\nodejs\node_modules` 找；mermaid bundle 依次从 `$KILN_MERMAID_JS`、`.kiln/mermaid.min.js`、`%LOCALAPPDATA%\Programs` 下的浏览器包找。
 
+## 结论（已定）
+
+复核（2026-10-23，沙箱外）：
+
+| 项 | 结果 |
+| --- | --- |
+| `shot.mjs` 截本地 HTML | ✅ `{"ok":true,...}`，截到 `svg` 元素，exit 0 |
+| `mermaid-shot.mjs` 直出 | ✅ `graph-preview.mmd` → 4287×1961 PNG（自然尺寸，非视口宽） |
+| 真仓渲染 | ✅ 48 节点 / 62 条边全部出图；有向箭头、对称虚线、中文标签正确 |
+| `kiln check` | ✅ `ok=true`，0 错误（50 issue / 38 完成 / 12 进行中） |
+
+边界：agent 侧必须 `danger-full-access`（沙箱内 Chromium 必崩，原因已定位到 profile 锁/`ProcessSingleton`）；Windows 上 `msedge --version` 会挂起，读版本用 `(Get-Item).VersionInfo`；只出 PNG。
+
+与 `graph-svg` 的分工：**产品出口仍是 `--svg`**（零依赖、用户直接开），浏览器截图用于 agent 自查与调试任何 Web 项目；两者不互相替代。
+
+
