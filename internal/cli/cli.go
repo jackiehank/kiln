@@ -58,7 +58,7 @@ var usageCommands = [][2]string{
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
-	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读）"},
+	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
@@ -1387,7 +1387,7 @@ func (e *env) list(args []string) int {
 
 func (e *env) graph(args []string) int {
 	_, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid", "json"))
+	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid", "json", "issue", "depth"))
 	format := f.get("format")
 	if f.has("json") && f.has("mermaid") {
 		fmt.Fprintln(e.errw, "--json 与 --mermaid 冲突")
@@ -1414,12 +1414,16 @@ func (e *env) graph(args []string) int {
 		fmt.Fprintf(e.errw, "仅支持 --format=ascii|mermaid|json（当前: %s）\n", format)
 		return 2
 	}
+	focus, depth, qcode := e.graphQuery(f, format)
+	if qcode != 0 {
+		return qcode
+	}
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
 	}
 	if format == "json" {
-		return e.graphJSON(repo)
+		return e.graphJSON(repo, focus, depth)
 	}
 	if len(repo.Issues) == 0 {
 		fmt.Fprintln(e.out, "（空）")
@@ -1431,6 +1435,34 @@ func (e *env) graph(args []string) int {
 	}
 	fmt.Fprintln(e.out, engine.Graph(repo, e.rel()))
 	return 0
+}
+
+// graphQuery validates the neighbourhood flags. They only apply to the JSON
+// view (other formats say so instead of silently printing everything), a
+// depth needs an issue to be a depth from, and the depth is a non-negative
+// integer with a default of 1. A zero code means "no filter".
+func (e *env) graphQuery(f flags, format string) (focus string, depth int, code int) {
+	if !f.has("issue") && !f.has("depth") {
+		return "", 0, 0
+	}
+	if format != "json" {
+		fmt.Fprintln(e.errw, "--issue/--depth 只服务 --json")
+		return "", 0, 2
+	}
+	if !f.has("issue") {
+		fmt.Fprintln(e.errw, "--depth 需要 --issue")
+		return "", 0, 2
+	}
+	depth = 1
+	if f.has("depth") {
+		n, err := strconv.Atoi(f.get("depth"))
+		if err != nil || n < 0 {
+			fmt.Fprintln(e.errw, "--depth 需要非负整数")
+			return "", 0, 2
+		}
+		depth = n
+	}
+	return f.get("issue"), depth, 0
 }
 
 // graphDoc is the `kiln graph --json` document: the whole folded graph as one
@@ -1453,11 +1485,12 @@ type graphSummary struct {
 // graphNode is one issue as the graph sees it: what it is called, where it
 // stands, and what its latest action said it was doing.
 type graphNode struct {
-	ID     string `json:"id"`
-	Domain string `json:"domain,omitempty"`
-	Action string `json:"action"`
-	Done   bool   `json:"done"`
-	Title  string `json:"title,omitempty"`
+	ID     string   `json:"id"`
+	Domain string   `json:"domain,omitempty"`
+	Action string   `json:"action"`
+	Done   bool     `json:"done"`
+	Title  string   `json:"title,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
 }
 
 // graphEdge is one folded relationship, named the way it was declared. directed
@@ -1474,7 +1507,7 @@ type graphEdge struct {
 // FoldEdges the ascii and mermaid views draw, so the three renderings agree.
 // Everything is ordered by id or by (from, to, name): the same repository always
 // prints the same document.
-func (e *env) graphJSON(repo *model.Repo) int {
+func (e *env) graphJSON(repo *model.Repo, focus string, depth int) int {
 	rel := e.rel()
 	ids := engine.IDs(repo)
 	edges := engine.FoldEdges(repo, rel)
@@ -1487,6 +1520,13 @@ func (e *env) graphJSON(repo *model.Repo) int {
 		}
 		return edges[i].Name < edges[j].Name
 	})
+	if focus != "" {
+		if _, ok := repo.Issues[focus]; !ok {
+			fmt.Fprintf(e.errw, "没有 issue %q\n", focus)
+			return 1
+		}
+		ids, edges = neighbourhood(ids, edges, focus, depth)
+	}
 
 	doc := graphDoc{
 		Nodes: make([]graphNode, 0, len(ids)),
@@ -1504,6 +1544,7 @@ func (e *env) graphJSON(repo *model.Repo) int {
 			Action: p.State(),
 			Done:   e.isDone(p),
 			Title:  title,
+			Tags:   p.Tags,
 		})
 	}
 
@@ -1525,6 +1566,51 @@ func (e *env) graphJSON(repo *model.Repo) int {
 	sort.Strings(doc.Missing)
 	doc.Summary = graphSummary{Issues: len(doc.Nodes), Edges: len(doc.Edges), Missing: len(doc.Missing)}
 	return e.writeJSON(doc)
+}
+
+// neighbourhood cuts the graph down to the issues within depth undirected hops
+// of focus. Neighbours are found through both ends of every edge: a relation's
+// arrow says who declared it, not which side is relevant. The ids keep their
+// original order; an edge survives when both of its ends are inside, so an
+// unopened target that is reachable stays visible and lands in missing exactly
+// as it does in the full document.
+func neighbourhood(ids []string, edges []engine.Edge, focus string, depth int) ([]string, []engine.Edge) {
+	adj := map[string][]string{}
+	for _, ed := range edges {
+		adj[ed.From] = append(adj[ed.From], ed.To)
+		adj[ed.To] = append(adj[ed.To], ed.From)
+	}
+	dist := map[string]int{focus: 0}
+	queue := []string{focus}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if dist[cur] >= depth {
+			continue
+		}
+		for _, next := range adj[cur] {
+			if _, ok := dist[next]; ok {
+				continue
+			}
+			dist[next] = dist[cur] + 1
+			queue = append(queue, next)
+		}
+	}
+	keptIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := dist[id]; ok {
+			keptIDs = append(keptIDs, id)
+		}
+	}
+	keptEdges := make([]engine.Edge, 0, len(edges))
+	for _, ed := range edges {
+		_, fromOK := dist[ed.From]
+		_, toOK := dist[ed.To]
+		if fromOK && toOK {
+			keptEdges = append(keptEdges, ed)
+		}
+	}
+	return keptIDs, keptEdges
 }
 
 // loadRepo reads history and aggregates it; returns (nil, exitCode) on failure.

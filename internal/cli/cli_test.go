@@ -1705,6 +1705,120 @@ func TestGraphJSONOnEmptyRepoIsStillJSON(t *testing.T) {
 	}
 }
 
+// --issue narrows the same document to its undirected neighbourhood: depth 1
+// keeps both ends of each folded edge, depth 0 keeps only the focus.
+func TestGraphJSONFiltersToANeighbourhood(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newRelationEnv(&out, &errb).graph([]string{"--json", "--issue=beta"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc graphDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("graph --json --issue is not one JSON document: %v\n%s", err, out.String())
+	}
+	var ids []string
+	for _, n := range doc.Nodes {
+		ids = append(ids, n.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"alpha", "beta"}) {
+		t.Fatalf("depth 1 nodes = %v, want [alpha beta]", ids)
+	}
+	if doc.Summary != (graphSummary{Issues: 2, Edges: 1, Missing: 0}) {
+		t.Fatalf("depth 1 summary = %+v", doc.Summary)
+	}
+	want := []graphEdge{{From: "beta", To: "alpha", Name: "relates-to", Directed: false}}
+	if !reflect.DeepEqual(doc.Edges, want) {
+		t.Fatalf("depth 1 edges = %+v, want %+v", doc.Edges, want)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newRelationEnv(&out, &errb).graph([]string{"--json", "--issue=beta", "--depth=0"}); code != 0 {
+		t.Fatalf("depth 0 exit code = %d, stderr = %q", code, errb.String())
+	}
+	doc = graphDoc{}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("depth 0 is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Nodes) != 1 || doc.Nodes[0].ID != "beta" || len(doc.Edges) != 0 {
+		t.Fatalf("depth 0 doc = %+v, want only beta and no edges", doc)
+	}
+}
+
+// An unopened target reached from inside the neighbourhood keeps its edge and
+// is named in missing, exactly as in the full document.
+func TestGraphJSONNeighbourhoodKeepsGhostTargets(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newRelationEnv(&out, &errb).graph([]string{"--json", "--issue=gamma"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc graphDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("graph --json --issue=gamma is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Nodes) != 1 || doc.Nodes[0].ID != "gamma" {
+		t.Fatalf("nodes = %+v, want only gamma", doc.Nodes)
+	}
+	want := []graphEdge{{From: "gamma", To: "ghost", Name: "caused-by", Directed: true}}
+	if !reflect.DeepEqual(doc.Edges, want) {
+		t.Fatalf("edges = %+v, want %+v", doc.Edges, want)
+	}
+	if !reflect.DeepEqual(doc.Missing, []string{"ghost"}) {
+		t.Fatalf("missing = %v, want [ghost]", doc.Missing)
+	}
+	if doc.Summary != (graphSummary{Issues: 1, Edges: 1, Missing: 1}) {
+		t.Fatalf("summary = %+v", doc.Summary)
+	}
+}
+
+// The neighbourhood flags refuse to be ignored: an unknown focus, a depth with
+// no focus, a depth that is not a non-negative integer, and either flag with a
+// non-JSON format all fail with empty stdout.
+func TestGraphQueryFlagErrors(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"--json", "--issue=nope"}, 1},
+		{[]string{"--json", "--depth=2"}, 2},
+		{[]string{"--json", "--issue=beta", "--depth=-1"}, 2},
+		{[]string{"--json", "--issue=beta", "--depth=x"}, 2},
+		{[]string{"--issue=beta"}, 2},
+	} {
+		var out, errb bytes.Buffer
+		if code := newRelationEnv(&out, &errb).graph(tc.args); code != tc.code {
+			t.Fatalf("%v: exit code = %d, want %d (stderr %q)", tc.args, code, tc.code, errb.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%v: a refused query must print no document: %q", tc.args, out.String())
+		}
+		if errb.Len() == 0 {
+			t.Fatalf("%v: a refused query must explain itself", tc.args)
+		}
+	}
+}
+
+// graph --json nodes carry the issue's tags, like list --json does.
+func TestGraphJSONCarriesTags(t *testing.T) {
+	runner := fakeRunner{commits: []vcs.Commit{{
+		ID:      "a1",
+		Date:    time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
+		Message: "带标签\n\nissue: solo\naction: ask\ntitle: 带标签\ntags: [draft, cli]",
+	}}}
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: runner, out: &out, errw: &errb}
+	if code := e.graph([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc graphDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("graph --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Nodes) != 1 || !reflect.DeepEqual(doc.Nodes[0].Tags, []string{"draft", "cli"}) {
+		t.Fatalf("nodes = %+v, want one node tagged [draft cli]", doc.Nodes)
+	}
+}
+
 // relationRunner holds three issues: two declare the same symmetric relation
 // from both sides, and one points a directed relation at an issue that was
 // never opened.
