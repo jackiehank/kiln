@@ -144,6 +144,10 @@ func newRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	gitRun(t, root, "init", "-q")
+	// The adapter commits through git without -c, so the repo needs its own
+	// identity: CI runners have no global user.name/user.email.
+	gitRun(t, root, "config", "user.name", "kiln")
+	gitRun(t, root, "config", "user.email", "kiln@example.com")
 	write(t, root, "a.txt", "a")
 	gitRun(t, root, "add", "a.txt")
 	commit(t, root, "init")

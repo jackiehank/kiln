@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -274,7 +273,10 @@ func parseSummary(out string) []string {
 			continue
 		}
 		if path = strings.TrimSpace(path); path != "" {
-			paths = append(paths, filepath.ToSlash(path))
+			// jj prints Windows paths with backslashes; the summary is a
+			// portable view, so normalize both separators regardless of
+			// the host we happen to be running on.
+			paths = append(paths, strings.ReplaceAll(path, `\`, "/"))
 		}
 	}
 	sort.Strings(paths)
