@@ -30,11 +30,29 @@ kiln 把两样东西都拆成**原子**，再让复杂性从**组合**里长出�
 
 ## 安装
 
+三种方式任选其一。
+
+**1. `go install`（需要 Go 1.27+，见 [go.mod](go.mod)）**
+
 ```sh
-go build -o kiln ./cmd/kiln        # 需要 Go 1.27+（见 go.mod）
+go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-单文件 CLI，**零外部依赖**（`go.mod` 里没有 `require`）。Windows 下产物是 `kiln.exe`，放进 `PATH` 即可。
+二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.1.0` 之类的版本写法固定版本。
+
+**2. 自己构建（单文件、零外部依赖）**
+
+```sh
+git clone https://github.com/jackiehank/kiln.git
+cd kiln
+go build -o kiln ./cmd/kiln
+```
+
+**3. 下载预编译二进制**
+
+从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。预编译产物会随首个 release 一起发布；在此之前请用上面两种方式。
+
+单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建。
 
 ## 五分钟上手
 
