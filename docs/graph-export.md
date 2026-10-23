@@ -98,3 +98,30 @@
 - README：命令表、与 agent 协作一节、已知边界的「机器可读输出只落在四个命令」三处同步。
 - 测试：`internal/cli/cli_test.go` 新增 `TestGraphJSONRendersTheFoldedGraph`（双侧声明的 `relates-to` 折成一条、`caused-by` 指向未开 issue 进 `missing`、nodes 排序与 title）、`TestGraphJSONMatchesFormatAlias`、`TestGraphJSONOnEmptyRepoIsStillJSON`；`TestGraphRejectsUnknownOrConflictingFormats` 改用 `--format=yaml` / `--mermaid --json` / `--json --format=ascii`（`--format=json` 现在是合法值）。
 - 复核：真仓 `graph --json` → 50 issue / 65 边 / 0 missing；两次运行与 `--format=json` 逐字节相同；ascii 与 mermaid 输出未变；空 issue 仓 → `{"summary":{"issues":0,"edges":0,"missing":0},"nodes":[],"edges":[]}`（exit 0）；`--json --mermaid`、`--json --format=ascii`、`--format=yaml` 均 exit 2 且 stdout 0 字节；带有向边指向未开 issue 的临时仓 → `missing: ["ghost"]`、边 `directed: true`；`go build` / `go vet` / `go test ./...` 全过；`kiln check` ok=true。
+
+## 结论（已定）
+
+图的三个出口共用同一份 `FoldEdges`，按用途选：
+
+| 用途 | 命令 | 形态 |
+| --- | --- | --- |
+| 在终端读、看块状结构 | `kiln graph` | ascii 树，逐字节未变 |
+| 贴进 md / GitHub / mermaid.live | `kiln graph --mermaid`（≡ `--format=mermaid`） | `flowchart LR` 文本 |
+| agent / 脚本读 | `kiln graph --json`（≡ `--format=json`） | 单对象 `{summary, nodes, missing?, edges}` |
+
+多选（如 `--json --mermaid`、`--json --format=ascii`）exit 2，不静默择一。
+
+`--json` 让 agent「看明白」的三个关键决定：节点自带 `title`（不必再查历史）；边上 `directed` 永远写出（不必查关系词表就知道有没有箭头）；未开的靶 issue 单独列在 `missing`（`nodes` 与真实 issue 一一对应）。内部折叠用的 `slot` 与 `symmetric` 故意不出现。
+
+典型用法：
+
+```bash
+kiln graph --json | jq '.edges[] | select(.directed)'   # 只看有向关系
+kiln graph --json | jq -r '.nodes[] | select(.done|not) | .id'  # 未完成的 issue
+```
+
+边界：
+
+- 零提交的历史让 backend 直接失败（文本视图同样，exit 1）——不是 `--json` 特有；
+- `title` 是最后一个动作的标题，描述现状而不是 issue 的"名字"；
+- 图只是关系视图：动作明细仍在 `path` / `show`，没有搬进 `graph --json`。
