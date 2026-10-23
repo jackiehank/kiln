@@ -620,6 +620,10 @@ func (e *env) workspace(args []string) int {
 	case "new":
 		return e.workspaceNew(ws, rest)
 	case "list":
+		// `list` takes no flags: a stray one is a user mistake, and a mistake
+		// that changes nothing silently is the bug this issue exists to fix.
+		_, f := parse(rest)
+		warnUnknownFlags(e.errw, f, allowedFlags())
 		return e.workspaceList(ws)
 	case "remove":
 		return e.workspaceRemove(ws, rest)
@@ -718,9 +722,11 @@ func mainRootOf(ws vcs.Workspace) (string, error) {
 // config implements `kiln config path`: it prints where the repository config
 // lives, seeding it when missing so there is always something to edit.
 func (e *env) config(args []string) int {
+	pos, f := parse(args)
+	warnUnknownFlags(e.errw, f, allowedFlags())
 	sub := ""
-	if len(args) > 0 {
-		sub = args[0]
+	if len(pos) > 0 {
+		sub = pos[0]
 	}
 	if sub != "path" {
 		fmt.Fprintln(e.errw, "用法: kiln config path")

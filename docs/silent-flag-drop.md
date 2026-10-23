@@ -175,3 +175,49 @@
 - **trailer 块判定**：最后一个空行段落 + 段内至少一个 `issue:`——防“正文里的 `中文: 东西`”假阳性（已实测）。
 - **提示一律 stderr**，不污染 `do` 的提交信息。
 - 还剩一个已知局限：若提交里 trailer 块**后面还有段落**（非 kiln 生成格式），块判定会落空；这是宁缺勿滥的取舍。
+
+## 结论（已定）
+
+2026-10-23 收尾。apply 声称的三个面里，**面 B 有两条命令漏了**（`worktree list`、`config`），已补上；两个面此前**没有任何测试**，本次一并补。`check` 的未知 trailer 键与退役键行为不变。
+
+### 复核（apply 声称的行为逐条重测）
+
+| 输入 | 结果 |
+| --- | --- |
+| `kiln do x ask --force` | 无警告（`--force` 是已知 flag）✓ |
+| `kiln path X --bogus` / `status --bogus` / `list --bogus` | ⚠ `未知 flag --bogus`，命令照常执行，exit 0 ✓ |
+| `kiln worktree list --bogus` | ⚠（**本次新补**，此前静默） |
+| `kiln config path --bogus` | ⚠（**本次新补**，此前静默） |
+| 临时仓带 `caused-byy:` | `check` → `rule: unknown-trailer`、`ref: caused-byy`、warn ✓ |
+| 正文 `注意: …` | 不报（不在 trailer 块）✓ |
+| 退役 `object:` | 不报 ✓ |
+| 真仓 `check --json` | `ok=true`、`35/12/0`、exit 0 ✓ |
+
+### 本次补了什么
+
+| 位置 | 原状 | 现状 |
+| --- | --- | --- |
+| `internal/cli/cli.go` `workspace` 的 `list` 分支 | 子命令之后的参数被直接丢弃 | `parse(rest)` + 空白名单 → ⚠ 未知 flag |
+| `internal/cli/cli.go` `config` | 子命令后的参数被直接丢弃 | `parse(args)` + 空白名单 → ⚠；子命令改取位置参数 |
+
+### 测试（此前为零）
+
+| 测试 | 覆盖 |
+| --- | --- |
+| `trailer_test.go` `TestUnknownKeys` | 块内拼错 / 多键去重排序 / 正文冒号 / 退役 `object` / 别名 / 无 `issue` / 空值 |
+| `engine_test.go` `TestCheckReportsUnknownTrailerKey` | `rule=unknown-trailer`、warn、`Ref`=键名 |
+| `cli_test.go` `TestUnknownFlagWarnsOnEveryCommand` | `path` / `worktree list` / `config` |
+| `cli_test.go` `TestDoAcceptsForceWithoutAWarning` | 面 C |
+
+`go build` / `go vet` / `go test ./...` 全绿。
+
+### 边界（保留）
+
+- **trailer 块后面还有段落**：`UnknownKeys` 取最后一个空行段落，非 kiln 格式（trailer 后又跟正文）会落空——宁缺勿滥，原文已记。
+- **退役键不是错**：`object:` 静默；新退役键要加进 `retiredKeys`。
+- **未知位置参数**（如 `kiln worktree list extra`）仍静默忽略——面 B 只定过 flag，位置参数不在本条范围。
+
+### 遗留
+
+- 错误路径的 prose 结构化仍归 `machine-readable-output` 的遗留清单；
+- 无。

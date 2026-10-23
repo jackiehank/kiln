@@ -1502,3 +1502,63 @@ func TestUsageGlossesRelationFlags(t *testing.T) {
 		}
 	}
 }
+
+// Every command that takes flags names the ones it accepts; a stray flag is
+// warned about and then ignored (exit 0), so no command swallows a typo quietly.
+func TestUnknownFlagWarnsOnEveryCommand(t *testing.T) {
+	t.Run("path", func(t *testing.T) {
+		var out, errb bytes.Buffer
+		if code := newDemoEnv(&out, &errb).path([]string{"demo", "--bogus"}); code != 0 {
+			t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+		}
+		if !strings.Contains(errb.String(), "未知 flag --bogus") {
+			t.Fatalf("path did not warn: %q", errb.String())
+		}
+		if !strings.Contains(out.String(), "demo") {
+			t.Fatalf("path must still print: %q", out.String())
+		}
+	})
+	t.Run("worktree list", func(t *testing.T) {
+		var out, errb bytes.Buffer
+		e := &env{
+			actions: model.DefaultActionSet(),
+			repo:    workspaceRunner{areas: []vcs.WorkspaceInfo{{Path: "C:/w/kiln", Main: true}}},
+			out:     &out, errw: &errb,
+		}
+		if code := e.workspace([]string{"list", "--bogus"}); code != 0 {
+			t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+		}
+		if !strings.Contains(errb.String(), "未知 flag --bogus") {
+			t.Fatalf("worktree list did not warn: %q", errb.String())
+		}
+	})
+	t.Run("config", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		e := &env{actions: model.DefaultActionSet(), dir: root, out: &out, errw: &errb}
+		if code := e.config([]string{"path", "--bogus"}); code != 0 {
+			t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+		}
+		if !strings.Contains(errb.String(), "未知 flag --bogus") {
+			t.Fatalf("config did not warn: %q", errb.String())
+		}
+		if !strings.Contains(out.String(), config.FileName) {
+			t.Fatalf("config must still print the path: %q", out.String())
+		}
+	})
+}
+
+// --force is a commit flag, and `do` prints the same message with the same
+// flag set; it must not be reported as unknown when nobody commits.
+func TestDoAcceptsForceWithoutAWarning(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := Run([]string{"do", "x", "ask", "--force"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "未知 flag") {
+		t.Fatalf("--force is a known flag: %q", errb.String())
+	}
+}

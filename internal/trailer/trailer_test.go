@@ -130,3 +130,31 @@ func TestFormatSkipsBlankListItems(t *testing.T) {
 		}
 	}
 }
+
+// UnknownKeys names the keys that look like trailers but are not: a typo in the
+// block would otherwise be parsed away without a word, and the writer would
+// think they declared it. The block is only the last paragraph and only when it
+// carries `issue:`, so prose that merely contains a colon is not a trailer.
+func TestUnknownKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want []string
+	}{
+		{"typo in the trailer block", "结题\n\nissue: a\naction: conclude\ncaused-byy: b", []string{"caused-byy"}},
+		{"several typos, deduped and sorted", "结题\n\nissue: a\naction: conclude\nz: 1\nb: 2\nz: 3", []string{"b", "z"}},
+		{"prose colon before the block", "注意: 正文里有冒号\n\nissue: a\naction: ask", nil},
+		{"retired key is not a typo", "结题\n\nissue: a\naction: conclude\nobject: q1", nil},
+		{"alias is a known key", "结题\n\nissue: a\naction: conclude\nderived-from: b", nil},
+		{"no kiln trailer, nothing to judge", "随便\n\nfoo: bar", nil},
+		{"empty value is not a declaration", "结题\n\nissue: a\naction: conclude\nfoo:", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := UnknownKeys(c.msg, testRel)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("UnknownKeys(%q) = %v, want %v", c.msg, got, c.want)
+			}
+		})
+	}
+}

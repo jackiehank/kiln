@@ -288,6 +288,30 @@ func TestPathLinesShowsAnIssueThatOnlyHasInbound(t *testing.T) {
 	}
 }
 
+// A commit that carries a typo'd trailer key is reported, not silently dropped:
+// the model never saw the declaration, so the check must say so (warn, with the
+// key as Ref) — a machine view branches on the rule code.
+func TestCheckReportsUnknownTrailerKey(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("u2", "结题\nissue: x/y\naction: conclude\ncaused-byy: z", 2),
+		mkCommit("u1", "开题\nissue: x/y\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	diags := Check(repo, model.DefaultActionSet())
+	found := false
+	for _, d := range diags {
+		if d.Rule == RuleUnknownTrailer {
+			found = true
+			if d.Issue != "x/y" || d.Level != LevelWarn || d.Ref != "caused-byy" {
+				t.Fatalf("unknown-trailer finding = %+v", d)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("typo'd trailer key not reported: %+v", diags)
+	}
+}
+
 func hasDiag(diags []Diagnostic, issue string, level Level, substr string) bool {
 	for _, d := range diags {
 		if d.Issue == issue && d.Level == level && strings.Contains(d.Message, substr) {
