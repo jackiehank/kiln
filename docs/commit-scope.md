@@ -47,3 +47,33 @@
 - 不改 `Action` 的默认语义（无 `--only` = 今天的整副本/索引行为）；
 - 不做逐动作 diff 审计——那是 `target-honesty` 的范围；
 - 不改 `check` 规则。
+
+## collect（2026-10-23）
+
+两个后端各自在临时仓里实测。环境：jj 0.45.1、git（Windows）、kiln 临时二进制。
+
+### jj 0.45.1
+
+| 探针 | 命令 | 结果 |
+| --- | --- | --- |
+| help | `jj commit --help` | `Usage: jj commit [OPTIONS] [FILESETS]...`；"Put these paths in the current commit" |
+| 只提交一个路径 | `jj commit -m "probe: a only" a.md`（`a.md`、`b.md` 均为新文件） | exit 0；`@-` 的 stat 只有 `a.md \| 1 +`；新 `@` 留 `A b.md` |
+| 路径不存在 | `jj commit -m "probe: missing" nope.md` | **exit 0**；stderr `Warning: The given paths do not match any file: nope.md`；仍生成 `(empty)` 空提交 |
+| 路径存在但无改动 | `jj commit -m "probe: unchanged keep" keep.md`（`keep.md` 已提交、无改动） | exit 0；生成空提交 |
+
+### git
+
+| 探针 | 命令 | 结果 |
+| --- | --- | --- |
+| 未跟踪路径 | `git commit -m "probe: untracked path" -- u.md`（`u.md` 未跟踪） | exit 1；`error: pathspec 'u.md' did not match any file(s) known to git` |
+| 先 add 再路径提交 | `git add u.md` 后 `git commit -m "probe: u only" -- u.md` | exit 0；提交只含 `u.md`（`create mode 100644`）；`base.md` 的改动留在工作区（`M base.md`） |
+| 与已暂存改动并存 | 先 `git add other.md`，再 `git commit -m "probe: base only" -- base.md` | exit 0；提交只含 `base.md`；`other.md` 仍是已暂存（`M  other.md`） |
+| 路径无改动 | `git commit -m "probe: unchanged" -- base.md`（无改动） | exit 1；`no changes added to commit (use "git add" and/or "git commit -a")` |
+
+### 含义
+
+1. **两后端都原生支持路径限定提交**：jj 用 fileset，git 用 `-- <paths>`；jj 零额外步骤，git 对未跟踪文件需要 add（kiln 可代加，只加显式列出的路径）。
+2. **jj 的坏路径是静默空提交**：`Warning` 只上 stderr、exit 0。`--only` 必须前置校验（路径存在 + 有改动），否则会把 `empty-commit-hint` 刚提示过的坑放大成常规事故。
+3. **git 路径提交绕过索引**：提交内容 = 列出的路径的工作区内容；其余改动（含已暂存的其他文件）原样保留。`--only` 的 git 语义因此干净。
+4. **接口成本小**：`vcs.Repo.Action(message string)` 只被 `cli.write()` 调用；扩成 `Action(message string, paths []string)` 需改 git/jj 两实现、fakeRunner 与调用点，改动面可控。
+5. **与 `do` 的关系**：`do` 只打印 trailer、不提交，`--only` 对它没有意义，应当拒收。
