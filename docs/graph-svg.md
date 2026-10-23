@@ -47,3 +47,28 @@
 - 不改 `--mermaid` 与 `--json` 的形态；
 - 不做"把 PNG 提交进仓库"的截图快照。
 
+
+## collect（2026-10-23）
+
+把"哪条路真的能走"逐条试了一遍（探针在 `.kiln/`，未入库）：
+
+| 假设 | 结果 |
+| --- | --- |
+| 本机有能把 SVG 变像素的光栅化器 | ✅ `C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe`（7.1.2-Q16-HDRI），`-list format` 里 `MSVG rw+` 是自带渲染器 |
+| 手写 SVG 光栅化可信 | ✅ 圆角框 + 箭头 + 边标签 + 中文的探针 SVG，`magick -density 144 probe.svg probe.png` 一次成功，箭头与中文都正确 |
+| 真实规模可行 | ✅ 从 `kiln graph --mermaid` 解析出 48 节点 / 20 有向边 / 42 对称边，按最长路径分 4 列（37 行），SVG 1296×2356；`magick -density 110` 420ms 出 PNG（1485×2699，407KB），节点名与 `caused-by` 标签可读 |
+| 布局需要 dagre 级算法 | ❌ 不需要：最长路径分层 + 列内按 id 排序已经可读；边穿过节点框、对称边密织是下一步的打磨点，不是可行性问题 |
+| Python + Pillow 可兜底 | ✅ bundled `Pillow 12.3.0`；能画位图，但字体/箭头质量不如 SVG→magick，且只适合本机验证 |
+| 无头浏览器能绕过沙箱 | ❌ Edge headless 全部 `exit 13`（`0x80000003`），试过 `--no-sandbox` / `--disable-gpu-sandbox` / `--disable-crashpad` / `--disable-breakpad` / `--disable-crash-reporter` / `--dump-dom` / `--screenshot` / `Start-Process`；无 Playwright / Puppeteer 缓存 |
+| 有 LibreOffice / Graphviz | ❌ 都没有（`C:\Program Files (x86)\Microsoft Office` 在，但 COM 渲染重且沙箱风险高） |
+| 在线渲染服务可用 | ❌ shell 出站 TLS 全失败（jsdelivr / npm / unpkg / cdnjs），harness `web_fetch` 走 `api.deepseek.com/v1/tools/fetch` 返回 404 |
+| 本机 mermaid bundle 能当渲染器 | ❌ quarto 自带 `mermaid.min.js` 是浏览器 bundle（`globalThis.mermaid`），没有 DOM 跑不起来；只适合给最终用户开 HTML |
+
+**结论**：唯一自足路径是 **A**——产品出 `--svg`（纯字符串、无依赖），agent 用本机 `magick` 转 PNG 自查，用户拿 SVG 直接开浏览器。三步管线已跑通：
+
+```
+kiln graph --svg > g.svg        # 待实现
+magick -density 110 g.svg g.png # 已验证，420ms
+```
+
+实现上确定下来的几点（进 apply 时照此做）：分层用最长路径松弛（有环时迭代上限 = 节点数）；列内按 id 排序；长标签截断到 30 字符 + `…`；有向边带箭头 marker、对称边虚线；按 state 给节点上浅色底（终态浅绿）；SVG 里不出现 `script`、外链与字体下载。
