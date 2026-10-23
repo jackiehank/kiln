@@ -15,7 +15,7 @@ kiln 把两样东西都拆成**原子**，再让复杂性从**组合**里长出�
 
 | 拆什么 | 怎么拆 | 靠什么组合 |
 | --- | --- | --- |
-| **原子 issue** | 一个复杂问题**不**在内部再分小线索，而是拆成**多条独立 issue**（各自 `ask`、各自 `domain`、各自过 `check`） | 类型化**关系**：`derived-from` / `spawns` / `relates-to` / `blocks` / `supersedes` |
+| **原子 issue** | 一个复杂问题**不**在内部再分小线索，而是拆成**多条独立 issue**（各自 `ask`、各自 `domain`、各自过 `check`） | 类型化**关系**：`blocks` / `part-of` / `relates-to` / `caused-by` / `supersedes`（有向的各有反名） |
 | **原子 action** | 一条 issue 的处理流程**没有固定阶段**，拆成**原子动作**（提问 / 假设 / 采集 / 验证 / 结论 / 落地），每个动作就是一次提交 | 自由**组合**：任意次序、可重复、可按需自定义词表 |
 
 于是**复杂性是涌现出来的，不是设计出来的**：
@@ -85,16 +85,17 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
 | `kiln list [--domain=] [--tag=] [--action=] [--json]` | 按条件过滤 issue |
-| `kiln graph [--format=ascii\|mermaid\|json] [--mermaid] [--json]` | 关系图（`--mermaid` 出流程图文本，`--json` 出给 agent 读的一份文档，默认 `ascii`） |
+| `kiln graph [--format=ascii\|mermaid\|json] [--mermaid] [--json] [--issue <id>] [--depth N]` | 关系图（`--mermaid` 出流程图文本；`--json` 出给 agent 读的一份文档，`--issue`/`--depth` 收窄成无向邻域，默认 `ascii`） |
 | `kiln worktree new <issue>` | 建一个专用工作区（详见「工作区模式」） |
 | `kiln worktree list` | 列出全部工作区及各自状态 |
 | `kiln worktree remove <issue> [--force]` | 删除工作区（还有工作的默认拒绝，`--force` 强删） |
 | `kiln config path` | 打印配置路径（缺失时写入一份带注释的默认配置） |
+| `kiln --version` | 打印版本、可执行文件路径、构建时间与 go 平台（`-V` / `version` 同义） |
 | `kiln help` / `kiln -h` | 帮助 |
 
-`do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag --derived-from --spawns --relates-to --blocks --supersedes`
+`do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag`；关系：`--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate`（均可重复、逗号分隔；别名 `--derived-from` / `--spawns` 同样接受）。
 另：`commit --force`（一次性豁免，见「工作区模式」）、`commit --only <paths>`（只提交列出的路径，逗号分隔或重复给）。
-`status` / `list` / `check` 的 flags：`--json`（机器可读输出，见「机器可读输出」）。
+`--json`：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都支持（机器可读输出，见「机器可读输出」）。
 
 ## 动作词表
 
@@ -129,15 +130,22 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 
 | Trailer | 含义 | 方向 |
 | --- | --- | --- |
-| `derived-from:` | 这个 issue 从哪来 | 子 → 父 |
-| `spawns:` | 这个 issue 引出了什么 | 父 → 子 |
-| `relates-to:` | 相关但不派生 | 双向 |
-| `blocks:` | 阻塞了什么 | 阻塞者 → 被阻塞者 |
-| `supersedes:` | 取代了什么 | 新 → 旧 |
+| `blocks:` | 我阻塞谁 | 阻塞者 → 被阻塞者 |
+| `blocked-by:` | 谁阻塞我 | 被阻塞者 → 阻塞者 |
+| `part-of:` | 我属于谁 | 部分 → 整体 |
+| `has-part:` | 谁属于我 | 整体 → 部分 |
+| `relates-to:` | 相关 | 无向 |
+| `caused-by:` | 谁引发了我 | 结果 → 原因 |
+| `causes:` | 我引发了谁 | 原因 → 结果 |
+| `supersedes:` | 我取代谁 | 新 → 旧 |
+| `superseded-by:` | 谁取代了我 | 旧 → 新 |
+| `unrelate:` | 撤销与该 issue 的全部关系（同一条里再声明则声明优先） | — |
+
+别名 `derived-from` / `spawns` 仍可读可写，落在 `caused-by` / `causes` 上。
 
 **标题与 trailer 之间必须留一个空行**，否则 `git log --oneline` 与 PR 标题会把整段 trailer 挤进同一行。
 
-关系键的两端**永远是 issue 名**（没有"指向某条动作"的键）；反向名不存在，方向由渲染时的箭头/措辞体现。
+关系键的两端**永远是 issue 名**（没有"指向某条动作"的键）；正名与反名都是可写键——`blocks:` 与 `blocked-by:` 是同一对边的两个视角，方向由名字本身决定。
 
 `kiln do` 会帮你把这一切排成规范格式，平时不必手写：
 
@@ -217,23 +225,24 @@ kiln 有可插拔的后端层，**git 与 jj 都能用**。`vcs: auto`（默认�
 
 **每个 issue 必须由起点动作开启、由终点动作收尾**（中间动作不设顺序约束）。目前的规则：
 
-1. 存在性：至少一个起点动作（默认 `ask`）
-2. 终点：最后一个动作是终点动作（默认 `conclude` / `apply`）——**只警告，不阻断**
-3. 父存在：声明 `derived-from` 时父 issue 必须存在
-4. 子存在：声明 `spawns` 时子 issue 必须存在
+1. 起点：至少一个起点动作（默认 `ask`）——缺失报 `start-action`（✗）
+2. 终点：最后一个动作是终点动作（默认 `conclude` / `apply`）——不符报 `terminal-action`（⚠，只警告不阻断）
+3. 关系：每条声明的关系目标都必须存在——悬空报 `relation-target`（⚠，带关系名与目标 issue）
+4. 未知键：不认识的 trailer 键会被点名——`unknown-trailer`（⚠）
+5. 以上都通过：`complete`（✓）
 
 ```
 $ kiln check
 ✓ session-expiry   完整（ask, hypothesize, test, conclude）
 ⚠ deep-dive        缺少终点动作（当前 test）
-✗ broken-ref       父 issue 不存在：derived-from 指向 missing-parent
+⚠ broken-ref       关系目标不存在：caused-by 指向 missing-parent
 ```
 
 约定：**只有 `✗`（错误）让 `check` 返回非零退出码**，`⚠` 只提示——所以"进行中的 issue"不会卡住 CI。
 
 ## 机器可读输出（`--json`）
 
-`status` / `list` / `check` 可以吐机器可读的 JSON（加 `--json`），给 agent 与脚本用。**不加这个 flag 时，输出一字不变。**
+`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都能吐机器可读的 JSON（加 `--json`），给 agent 与脚本用。**不加这个 flag 时，输出一字不变。**
 
 ```sh
 kiln status --json
@@ -254,7 +263,7 @@ kiln check --json
 规矩（完整 schema 见 [docs/machine-readable-output.md](docs/machine-readable-output.md)）：
 
 - **顶层永远是一个对象**，不放裸数组；`issues` / `results` 恒为数组——空仓是 `[]`，不是 `null`。
-- **`status` 是平铺的一层行**：`id` / `domain` / `action` / `done`，外加 `has-worktree`。**没有分组、没有嵌套**——文本视图用一行**块头**标出 domain，JSON 里每个 issue 一行、自带 `domain`，所以两边**issue 行的相对顺序一致**（块头行不参与）。
+- **`status` 是平铺的一层行**：`id` / `domain` / `action` / `done` / `title`，外加 `has-worktree`。**没有分组、没有嵌套**——文本视图用一行**块头**标出 domain，JSON 里每个 issue 一行、自带 `domain`，所以两边**issue 行的相对顺序一致**（块头行不参与）。
 - **`check` 用 rule 码说话**：`start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete`——不吐中文判据；`ok` **与退出码同义**（有 `✗` 才 `false` / 退出 1）。
 - **缺省即省略**（省略 = 没有），**布尔恒显**（`false` 是判定结果，不是"没有"）。
 - **stdout 只放一个 JSON 文档**：提示、legend、报错一律在 stderr，退出码与文本视图一致。
@@ -265,8 +274,8 @@ kiln 的模型天生适合 agent：
 
 - **约定只一条**：做研究动作时用 `kiln commit`（或 `git commit -m "$(kiln do …)"`）。告诉 agent 这一句就够了。
 - **先开单再落代码**：`ask` 动作里只放 issue doc，提交后再写实现。按顺序做不需要任何额外能力；确实要反过来做时，用 `kiln commit … --only docs/<issue>.md` 只提交 doc（两后端一致），不必把代码挪开。见 [docs/commit-order.md](docs/commit-order.md)、[docs/commit-scope.md](docs/commit-scope.md)。
-- **结构化输出**：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 加 `--json` 后都是**真正的**机器可读格式，stdout 只放一个 JSON 文档；`graph` 另有 `--mermaid`（流程图文本）。见「机器可读输出」。
-- **诚实**：`check` 会把"缺终点动作""父 issue 不存在"这类结构问题直接指出来（`--json` 下给的是 rule 码，不是中文）。
+- **结构化输出**：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 加 `--json` 后都是**真正的**机器可读格式，stdout 只放一个 JSON 文档；`graph` 另有 `--mermaid`（流程图文本），`graph --json --issue <id> --depth N` 只出该 issue 的无向邻域。见「机器可读输出」。
+- **诚实**：`check` 会把"缺终点动作""关系目标不存在""不认识的 trailer 键"这类结构问题直接指出来（`--json` 下给的是 rule 码，不是中文）。
 - **隔离**：并行 agent 用 `kiln worktree new` 各占一个区，从**结构上**消除互相污染。
 
 ## 它不做什么
@@ -280,7 +289,6 @@ kiln 的模型天生适合 agent：
 ## 已知边界
 
 - `kiln graph` 按「声明源箭头」画：每条关系只出现在**声明方**的块里（不换成反名、目标块不重复），对称关系（`relates-to`）不画箭头，有向关系是 `──name──▶`；同一 `(无序对, 槽)` 被两侧声明时**后写者胜**，全图只出一形——见 [docs/graph-normalize.md](docs/graph-normalize.md)。
-- 关系词表规格里还留了 `part-of`（分解），**尚未落地**。
 - `worktree remove` 清不掉"目录已删"的区（那种区得先 `git worktree prune`）。
 - 新区的未提交改动**不会**被搬过去——**刻意为之，不是待办**（kiln 不代管本地状态，与 `.worktreeinclude` 只管被忽略文件是同一条边界，见 [docs/worktree-adopt.md](docs/worktree-adopt.md)）。要带过去得手工：git 用 `stash -u` → 建区 → 区内 `pop`；jj 用 `workspace add -r @` + 主干 `jj edit @-`（**别**用 `jj restore`，那会级联 rebase 把新区连坐）。
 - **机器可读输出覆盖七个命令**：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都有 `--json`；`--toon` 尚未评估——见 [docs/machine-readable-output.md](docs/machine-readable-output.md)、[docs/read-json.md](docs/read-json.md)。
