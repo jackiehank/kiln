@@ -38,7 +38,7 @@
 - **E3**：`kiln graph --mermaid` → 可直接被 mermaid 渲染：有向 `a -- name --> b`，对称 `a --- b`；node id 只含 `[A-Za-z0-9_]` 且无碰撞。（已实现）
 - **E4**：默认 `ascii` 输出**逐字节不变**；`--format=json` ≡ `--json`。
 - **E5**：`--json --mermaid`、`--json --format=ascii` → 明确报错（exit 2），不静默选一个。
-- **E6**：`go build ./...` / `go test ./...` 全过；最小仓三种格式冒烟；**空仓**输出合法 JSON 而不是文本 `（空）`。
+- **E6**：`go build ./...` / `go test ./...` 全过；最小仓三种格式冒烟；**空 issue 仓**（有历史、无 `issue:` trailer）输出合法 JSON 而不是文本 `（空）`。
 
 ## 非目标
 
@@ -88,3 +88,13 @@
 - 顺序确定：`nodes` 按 id；`edges` 按 `(from, to, name)`——同仓每次同文本。
 - 空仓输出 `{"summary":{"issues":0,"edges":0,"missing":0},"nodes":[],"edges":[]}`：文本视图的 `（空）` 是给人看的，不进 JSON。
 - `--json` ≡ `--format=json`；`--json --mermaid`、`--json --format=ascii` 都是 exit 2，不静默择一；`--json --format=json` 同义，允许。
+
+## apply（2026-10-23：落 `--json`）
+
+- `internal/cli/cli.go`：
+  - `graph` 现在接受 `--json` 与 `--format=json`（同义）；与 `--mermaid` / `--format=ascii` 同给时 exit 2，报 `--json 与 --mermaid 冲突` / `--json 与 --format=ascii 冲突`；未知格式报 `仅支持 --format=ascii|mermaid|json（当前: …）`；`kiln -h` 的命令行同步。
+  - 新增 `graphDoc` / `graphSummary` / `graphNode` / `graphEdge` 与 `graphJSON(repo)`：边取同一份 `engine.FoldEdges`，按 `(from, to, name)` 排序；`nodes` 按 id 排序、每个带最后一个 action 的 `title`；`directed = rel.Inverse(name) != ""`；`missing` 收 `to` 不在 `repo.Issues` 的唯一 id，排序后单列（空则省略）。
+  - 空 issue 仓走 JSON 分支（不再打印 `（空）`）。真·零提交仓在读历史时就会失败（`读取历史失败: git log …`，exit 1）——这是 backend 既有行为，与文本视图一致，不在本 issue 内改。
+- README：命令表、与 agent 协作一节、已知边界的「机器可读输出只落在四个命令」三处同步。
+- 测试：`internal/cli/cli_test.go` 新增 `TestGraphJSONRendersTheFoldedGraph`（双侧声明的 `relates-to` 折成一条、`caused-by` 指向未开 issue 进 `missing`、nodes 排序与 title）、`TestGraphJSONMatchesFormatAlias`、`TestGraphJSONOnEmptyRepoIsStillJSON`；`TestGraphRejectsUnknownOrConflictingFormats` 改用 `--format=yaml` / `--mermaid --json` / `--json --format=ascii`（`--format=json` 现在是合法值）。
+- 复核：真仓 `graph --json` → 50 issue / 65 边 / 0 missing；两次运行与 `--format=json` 逐字节相同；ascii 与 mermaid 输出未变；空 issue 仓 → `{"summary":{"issues":0,"edges":0,"missing":0},"nodes":[],"edges":[]}`（exit 0）；`--json --mermaid`、`--json --format=ascii`、`--format=yaml` 均 exit 2 且 stdout 0 字节；带有向边指向未开 issue 的临时仓 → `missing: ["ghost"]`、边 `directed: true`；`go build` / `go vet` / `go test ./...` 全过；`kiln check` ok=true。

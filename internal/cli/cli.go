@@ -55,7 +55,7 @@ var usageCommands = [][2]string{
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
-	{"kiln graph [--format=ascii|mermaid] [--mermaid]", "问题关系图（--mermaid 输出流程图）"},
+	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
@@ -1360,8 +1360,16 @@ func (e *env) list(args []string) int {
 
 func (e *env) graph(args []string) int {
 	_, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid"))
+	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid", "json"))
 	format := f.get("format")
+	if f.has("json") && f.has("mermaid") {
+		fmt.Fprintln(e.errw, "--json 与 --mermaid 冲突")
+		return 2
+	}
+	if f.has("json") && format != "" && format != "json" {
+		fmt.Fprintf(e.errw, "--json 与 --format=%s 冲突\n", format)
+		return 2
+	}
 	if f.has("mermaid") {
 		if format != "" && format != "mermaid" && format != "ascii" {
 			fmt.Fprintf(e.errw, "--mermaid 与 --format=%s 冲突\n", format)
@@ -1369,16 +1377,22 @@ func (e *env) graph(args []string) int {
 		}
 		format = "mermaid"
 	}
+	if f.has("json") {
+		format = "json"
+	}
 	if format == "" {
 		format = "ascii"
 	}
-	if format != "ascii" && format != "mermaid" {
-		fmt.Fprintf(e.errw, "MVP 仅支持 --format=ascii|mermaid（当前: %s）\n", format)
+	if format != "ascii" && format != "mermaid" && format != "json" {
+		fmt.Fprintf(e.errw, "仅支持 --format=ascii|mermaid|json（当前: %s）\n", format)
 		return 2
 	}
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
+	}
+	if format == "json" {
+		return e.graphJSON(repo)
 	}
 	if len(repo.Issues) == 0 {
 		fmt.Fprintln(e.out, "（空）")
@@ -1390,6 +1404,100 @@ func (e *env) graph(args []string) int {
 	}
 	fmt.Fprintln(e.out, engine.Graph(repo, e.rel()))
 	return 0
+}
+
+// graphDoc is the `kiln graph --json` document: the whole folded graph as one
+// object. Nodes are always real issues; a target that was declared but never
+// opened is named in missing, so a caller checks membership instead of decoding
+// a per-node flag.
+type graphDoc struct {
+	Summary graphSummary `json:"summary"`
+	Nodes   []graphNode  `json:"nodes"`
+	Missing []string     `json:"missing,omitempty"`
+	Edges   []graphEdge  `json:"edges"`
+}
+
+type graphSummary struct {
+	Issues  int `json:"issues"`
+	Edges   int `json:"edges"`
+	Missing int `json:"missing"`
+}
+
+// graphNode is one issue as the graph sees it: what it is called, where it
+// stands, and what its latest action said it was doing.
+type graphNode struct {
+	ID     string `json:"id"`
+	Domain string `json:"domain,omitempty"`
+	Action string `json:"action"`
+	Done   bool   `json:"done"`
+	Title  string `json:"title,omitempty"`
+}
+
+// graphEdge is one folded relationship, named the way it was declared. directed
+// is always written: true is an arrow, false is a symmetric line — so a caller
+// never needs the relation vocabulary to read the arrow.
+type graphEdge struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Name     string `json:"name"`
+	Directed bool   `json:"directed"`
+}
+
+// graphJSON renders the folded graph as one document. Edges come from the same
+// FoldEdges the ascii and mermaid views draw, so the three renderings agree.
+// Everything is ordered by id or by (from, to, name): the same repository always
+// prints the same document.
+func (e *env) graphJSON(repo *model.Repo) int {
+	rel := e.rel()
+	ids := engine.IDs(repo)
+	edges := engine.FoldEdges(repo, rel)
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].From != edges[j].From {
+			return edges[i].From < edges[j].From
+		}
+		if edges[i].To != edges[j].To {
+			return edges[i].To < edges[j].To
+		}
+		return edges[i].Name < edges[j].Name
+	})
+
+	doc := graphDoc{
+		Nodes: make([]graphNode, 0, len(ids)),
+		Edges: make([]graphEdge, 0, len(edges)),
+	}
+	for _, id := range ids {
+		p := repo.Issues[id]
+		title := ""
+		if last, ok := p.Last(); ok {
+			title = last.Title
+		}
+		doc.Nodes = append(doc.Nodes, graphNode{
+			ID:     id,
+			Domain: p.Domain,
+			Action: p.State(),
+			Done:   e.isDone(p),
+			Title:  title,
+		})
+	}
+
+	missing := map[string]bool{}
+	for _, ed := range edges {
+		if _, ok := repo.Issues[ed.To]; !ok {
+			missing[ed.To] = true
+		}
+		doc.Edges = append(doc.Edges, graphEdge{
+			From:     ed.From,
+			To:       ed.To,
+			Name:     ed.Name,
+			Directed: rel.Inverse(ed.Name) != "",
+		})
+	}
+	for id := range missing {
+		doc.Missing = append(doc.Missing, id)
+	}
+	sort.Strings(doc.Missing)
+	doc.Summary = graphSummary{Issues: len(doc.Nodes), Edges: len(doc.Edges), Missing: len(doc.Missing)}
+	return e.writeJSON(doc)
 }
 
 // loadRepo reads history and aggregates it; returns (nil, exitCode) on failure.

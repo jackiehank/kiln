@@ -1584,12 +1584,13 @@ func TestGraphMermaidFlagMatchesFormatAlias(t *testing.T) {
 	}
 }
 
-// A format other than ascii/mermaid is refused, and so is asking for two
+// A format other than ascii/mermaid/json is refused, and so is asking for two
 // formats at once.
 func TestGraphRejectsUnknownOrConflictingFormats(t *testing.T) {
 	for _, args := range [][]string{
-		{"--format=json"},
-		{"--mermaid", "--format=json"},
+		{"--format=yaml"},
+		{"--mermaid", "--json"},
+		{"--json", "--format=ascii"},
 	} {
 		var out, errb bytes.Buffer
 		if code := newDemoEnv(&out, &errb).graph(args); code != 2 {
@@ -1599,4 +1600,95 @@ func TestGraphRejectsUnknownOrConflictingFormats(t *testing.T) {
 			t.Fatalf("%v: a refused format must print no document: %q", args, out.String())
 		}
 	}
+}
+
+// graph --json is one document: nodes are issues, edges name the declaring
+// side, and a target that was never opened lands in missing rather than nodes.
+func TestGraphJSONRendersTheFoldedGraph(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newRelationEnv(&out, &errb).graph([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc graphDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("graph --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Summary.Issues != 3 || doc.Summary.Edges != 2 || doc.Summary.Missing != 1 {
+		t.Fatalf("summary = %+v, want 3 issues / 2 edges / 1 missing", doc.Summary)
+	}
+	var ids []string
+	for _, n := range doc.Nodes {
+		ids = append(ids, n.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"alpha", "beta", "gamma"}) {
+		t.Fatalf("nodes must be sorted by id: %v", ids)
+	}
+	if got := doc.Nodes[2].Title; got != "依赖" {
+		t.Fatalf("a node carries its latest action's title, got %q", got)
+	}
+	if got := doc.Nodes[0].Action; got != "ask" {
+		t.Fatalf("node action = %q, want ask", got)
+	}
+	want := []graphEdge{
+		{From: "beta", To: "alpha", Name: "relates-to", Directed: false},
+		{From: "gamma", To: "ghost", Name: "caused-by", Directed: true},
+	}
+	if !reflect.DeepEqual(doc.Edges, want) {
+		t.Fatalf("edges = %+v, want %+v", doc.Edges, want)
+	}
+	if !reflect.DeepEqual(doc.Missing, []string{"ghost"}) {
+		t.Fatalf("missing = %v, want [ghost]", doc.Missing)
+	}
+}
+
+// --json is the same document as --format=json, the older spelling.
+func TestGraphJSONMatchesFormatAlias(t *testing.T) {
+	var byFlag, byFormat, flagErr, formatErr bytes.Buffer
+	if code := newDemoEnv(&byFlag, &flagErr).graph([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, flagErr.String())
+	}
+	if code := newDemoEnv(&byFormat, &formatErr).graph([]string{"--format=json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, formatErr.String())
+	}
+	if byFlag.String() != byFormat.String() {
+		t.Fatalf("--json and --format=json must agree:\n%s\nvs\n%s", byFlag.String(), byFormat.String())
+	}
+	if !strings.HasPrefix(strings.TrimSpace(byFlag.String()), "{") {
+		t.Fatalf("json document must be one object:\n%s", byFlag.String())
+	}
+}
+
+// An empty repository prints an empty document, not the text view's （空）.
+func TestGraphJSONOnEmptyRepoIsStillJSON(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{}, out: &out, errw: &errb}
+	if code := e.graph([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc graphDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("empty repo must still be JSON: %v\n%s", err, out.String())
+	}
+	if doc.Summary.Issues != 0 || doc.Summary.Edges != 0 || doc.Summary.Missing != 0 {
+		t.Fatalf("empty summary = %+v", doc.Summary)
+	}
+	if strings.Contains(out.String(), "（空）") {
+		t.Fatalf("the text view's word for empty must not enter the document: %q", out.String())
+	}
+}
+
+// relationRunner holds three issues: two declare the same symmetric relation
+// from both sides, and one points a directed relation at an issue that was
+// never opened.
+func relationRunner() fakeRunner {
+	base := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{commits: []vcs.Commit{
+		{ID: "a1", Date: base, Message: "起点\n\nissue: alpha\naction: ask\ntitle: 起点\nrelates-to: beta"},
+		{ID: "b1", Date: base.Add(time.Hour), Message: "另起\n\nissue: beta\naction: ask\ntitle: 另起\nrelates-to: alpha"},
+		{ID: "c1", Date: base.Add(2 * time.Hour), Message: "依赖\n\nissue: gamma\naction: ask\ntitle: 依赖\ncaused-by: ghost"},
+	}}
+}
+
+func newRelationEnv(out, errw *bytes.Buffer) *env {
+	return &env{actions: model.DefaultActionSet(), repo: relationRunner(), out: out, errw: errw}
 }

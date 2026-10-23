@@ -85,7 +85,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
 | `kiln list [--domain=] [--tag=] [--action=] [--json]` | 按条件过滤 issue |
-| `kiln graph [--format=ascii\|mermaid] [--mermaid]` | 关系图（`--mermaid` 出流程图文本，默认 `ascii`） |
+| `kiln graph [--format=ascii\|mermaid\|json] [--mermaid] [--json]` | 关系图（`--mermaid` 出流程图文本，`--json` 出给 agent 读的一份文档，默认 `ascii`） |
 | `kiln worktree new <issue>` | 建一个专用工作区（详见「工作区模式」） |
 | `kiln worktree list` | 列出全部工作区及各自状态 |
 | `kiln worktree remove <issue> [--force]` | 删除工作区（还有工作的默认拒绝，`--force` 强删） |
@@ -263,7 +263,7 @@ kiln check --json
 kiln 的模型天生适合 agent：
 
 - **约定只一条**：做研究动作时用 `kiln commit`（或 `git commit -m "$(kiln do …)"`）。告诉 agent 这一句就够了。
-- **结构化输出**：`status` / `list` / `check` 加 `--json` 后有**真正的**机器可读格式；`graph` 另有 `--mermaid`（流程图文本，仍不是 JSON）；其余命令（`path` / `show` / `worktree list`）仍是稳定文本——"稳定"靠的是约定，不等于机器可读，见「机器可读输出」。
+- **结构化输出**：`status` / `list` / `check` / `graph` 加 `--json` 后有**真正的**机器可读格式；`graph` 另有 `--mermaid`（流程图文本）；其余命令（`path` / `show` / `worktree list`）仍是稳定文本——"稳定"靠的是约定，不等于机器可读，见「机器可读输出」。
 - **诚实**：`check` 会把"缺终点动作""父 issue 不存在"这类结构问题直接指出来（`--json` 下给的是 rule 码，不是中文）。
 - **隔离**：并行 agent 用 `kiln worktree new` 各占一个区，从**结构上**消除互相污染。
 
@@ -281,7 +281,7 @@ kiln 的模型天生适合 agent：
 - 关系词表规格里还留了 `part-of`（分解），**尚未落地**。
 - `worktree remove` 清不掉"目录已删"的区（那种区得先 `git worktree prune`）。
 - 新区的未提交改动**不会**被搬过去——**刻意为之，不是待办**（kiln 不代管本地状态，与 `.worktreeinclude` 只管被忽略文件是同一条边界，见 [docs/worktree-adopt.md](docs/worktree-adopt.md)）。要带过去得手工：git 用 `stash -u` → 建区 → 区内 `pop`；jj 用 `workspace add -r @` + 主干 `jj edit @-`（**别**用 `jj restore`，那会级联 rebase 把新区连坐）。
-- **机器可读输出只落在三个命令**：`status` / `list` / `check` 有 `--json`，`path` / `show` / `worktree list` 还没有，`--toon` 也尚未评估——见 [docs/machine-readable-output.md](docs/machine-readable-output.md)。
+- **机器可读输出只落在四个命令**：`status` / `list` / `check` / `graph` 有 `--json`，`path` / `show` / `worktree list` 还没有，`--toon` 也尚未评估——见 [docs/machine-readable-output.md](docs/machine-readable-output.md)。
 
 ## 延伸阅读
 
