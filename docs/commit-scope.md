@@ -189,4 +189,22 @@ echo one > a.md; git add -A; git commit -m "kiln-like: a"
 - **T7** 端到端：改后的 kiln 二进制在临时 git 仓与临时 jj 仓各跑一遍上述场景。
 - **风险**：`git add -A` 会把调用方手工暂存的半成品一并收编（需文档）；`--only` 代 add 成功后若提交失败，索引会残留列出的路径（不自动回滚，需文档）。
 
+## test（2026-10-23）
+
+统一语义在临时仓逐条验证（git/jj 各自的临时仓，kiln 尚未改代码，先验证底层能力）：
+
+| 编号 | 场景 | 结果 |
+| --- | --- | --- |
+| T1 | git 快照：未跟踪 `u.md` + 修改 `base.md` + 删除 `gone.md`，`git add -A` 后提交 | exit 0；提交含三处改动（`base.md 2 +-`、`gone.md 1 -`、`u.md 1 +`） |
+| T2 | git 空工作区 `git commit --allow-empty` | exit 0；生成空提交 |
+| T3 | git `--only u.md`（未跟踪）：先 `git add -A -- u.md`，再 `git commit -m … -- u.md` | exit 0；只提交 `u.md`（`create mode`），`base.md` 的改动留在工作区（`M base.md`） |
+| T4 | git `--only gone.md`（已删除的已跟踪文件） | exit 0；提交记录删除（`delete mode 100644 gone.md`） |
+| T5 | git 坏路径 `-- nope.md`（`--allow-empty`） | exit 1；`error: pathspec 'nope.md' did not match any file(s) known to git`，未提交 |
+| T6a | jj fileset 删除路径 `jj commit -m "del gone" gone.md` | exit 0；`@-` 只含 `gone.md \| 1 -` |
+| T6b | jj fileset 目录 `jj commit -m "sub dir" sub` | exit 0；提交 `sub\a.md`、`sub\b.md` 两个文件 |
+| T6c | jj 改动探测 `jj diff --summary -- <paths>` | 无改动输出为空；有改动输出 `M gone.md`——可作 `--only` 前置校验 |
+
+结论：T1–T6 全部符合统一语义；jj 侧的前置校验用 `jj diff --summary -- <paths>` 非空判定，git 侧用 `git status --porcelain -- <paths>` 非空判定；T3 的索引副作用与预期一致（其他暂存/未暂存改动不受影响）。剩余效果验证归 apply 后的端到端测试。
+
+
 
