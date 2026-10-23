@@ -30,3 +30,23 @@
 - 不做 `--toon`（`machine-readable-output` 留的另一项，继续不评估）；
 - 不把 `graph` 的邻域查询搬进 `path`（见新 issue `graph-query`）；
 - 不改 `show` 的 diff 呈现本身。
+
+## 采集（2026-10-23）
+
+三个文本视图与它们手里已有的数据：
+
+- `path`（`internal/cli/cli.go:862–914`）：首行 `<id>  <已完成|进行中>（当前 <动作名>）`；每动作一行 `  N. <kind 左宽 12> <shortid 8> <subject>`；`--shortstat` 行尾追加 `  (<backend shortstat>)`，`--stat` 再追加缩进的 diffstat 块；末尾 `  关系:` 加 `engine.PathLines`（出边用声明名，入边用反名，symmetric 同名，换名首次出现带 `（反名 ＝ 声明名）` 注解）。数据源：`model.Issue.Actions` 的 `ID/Subject/Date/Kind/Title/Refs`、`e.progressWord`、`e.rel()`、backend `ShowStat`。
+- `show`（`cli.go:920–995`）：首行 `<id> · <ordinal>/<total> <kind> · <shortid> · <subject>`、空行、`backend.Show(id)` 的提交全文（trim）；`--stat` 换成 diffstat；选择器为 1-based 序号，或动作名（取该动作的最后一个，重名时 stderr 列出全部序号）。
+- `worktree list`（`cli.go:778–807`）：每区一行 `<path>  <role>  <state>`；role = `main（只读/只合并）` 或 `worktree <issue>`；state 由 `vcs.AreaState{Gone, Dirty, Unmerged}` 拼成 `目录已删` / `有改动` / `未合并`（逗号连接，空则 `干净`），main 为 `—`。
+- 既有 JSON 基建：`writeJSON`（2 空格缩进、只写 stdout、失败写 stderr 并沿用文本视图的退出码）、`issueCore` 可复用；`check` 的布尔/缺键约定照旧。
+
+## 设计（2026-10-23）
+
+三个命令都加 `--json`，各出一份**单对象**；不加 `--json` 时文本视图逐字节不变。stat 不做二选一：`--json --stat` / `--json --shortstat` 把 stat 文本作为字段收进文档。
+
+- `path --json` → `{"issue","action":<当前动作名>,"done":bool,"actions":[{"ordinal","action","id","date","title","refs"?}],"relations":[{"from","to","name","directed"}]}`。`relations` 取 `FoldEdges` 中与该 issue 相邻的边，与 `graph --json` 共用词表：`name` 是声明名、`from` 说清谁声明；入边不换反名。
+- `show --json` → `{"issue","ordinal","total","action","id","date","title","body"}`；`body` 在 `--stat` 时是 diffstat、否则是提交全文；**不放 diff 原文**（大，且文本视图仍能拿），留作以后按需加 `diff`。
+- `worktree list --json` → `{"mode":"git|jj","worktrees":[{"path","main","issue"?,"gone","dirty","unmerged"}]}`；布尔永远写出，`issue` 缺省即 main。
+- 错误与文本视图同一套：未知 issue / 越界序号 exit 1/2，stdout 0 字节。
+
+验收按上文 E1–E6，其中 E1/E3 的 `relations`、`diff` 按本节调整为“共用 graph 词表的相邻边 / 本轮不放 diff”。
