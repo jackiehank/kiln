@@ -85,7 +85,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
 | `kiln list [--domain=] [--tag=] [--action=] [--json]` | 按条件过滤 issue |
-| `kiln graph [--format=ascii]` | 关系图（当前仅 `ascii`） |
+| `kiln graph [--format=ascii\|mermaid] [--mermaid]` | 关系图（`--mermaid` 出流程图文本，默认 `ascii`） |
 | `kiln worktree new <issue>` | 建一个专用工作区（详见「工作区模式」） |
 | `kiln worktree list` | 列出全部工作区及各自状态 |
 | `kiln worktree remove <issue> [--force]` | 删除工作区（还有工作的默认拒绝，`--force` 强删） |
@@ -263,7 +263,7 @@ kiln check --json
 kiln 的模型天生适合 agent：
 
 - **约定只一条**：做研究动作时用 `kiln commit`（或 `git commit -m "$(kiln do …)"`）。告诉 agent 这一句就够了。
-- **结构化输出**：`status` / `list` / `check` 加 `--json` 后有**真正的**机器可读格式；其余命令（`path` / `show` / `graph` / `worktree list`）仍是稳定文本——"稳定"靠的是约定，不等于机器可读，见「机器可读输出」。
+- **结构化输出**：`status` / `list` / `check` 加 `--json` 后有**真正的**机器可读格式；`graph` 另有 `--mermaid`（流程图文本，仍不是 JSON）；其余命令（`path` / `show` / `worktree list`）仍是稳定文本——"稳定"靠的是约定，不等于机器可读，见「机器可读输出」。
 - **诚实**：`check` 会把"缺终点动作""父 issue 不存在"这类结构问题直接指出来（`--json` 下给的是 rule 码，不是中文）。
 - **隔离**：并行 agent 用 `kiln worktree new` 各占一个区，从**结构上**消除互相污染。
 
