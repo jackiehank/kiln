@@ -36,3 +36,14 @@ agent 访谈（2026-10-23）里发现两处既有 JSON 的小缺口，同属"字
 - `internal/cli/cli.go`：`statusIssue` 在 `issueCore` 之后新增 `Title string`（`json:"title,omitempty"`）；`statusJSON` 从 `r.issue.Last()` 取标题，与 `graph --json` 的节点同源。`checkResult` 新增 `Relation string`（`json:"relation,omitempty"`）并在 `checkJSON` 里从 `d.Relation` 抄出。`issueCore` / `listIssue` 一行未动。
 - 测试：`cli_test.go` 的 `TestStatusJSONIsFlatAndOrdered` 期望文档补上三行 `title`（`子` / `父落地` / `游荡验证`）；新增 `TestCheckJSONNamesTheBrokenRelation`——`blocks: ghost` 的 issue 走 `check --json`，断言 `"relation": "blocks"` 且整份文档只有一处 `relation`（其它 rule 不带）。
 - 复核：`go build` / `go vet` / `go test ./...` 全过；真仓 `status --json` 每行带 `title`（55 issue）；临时仓 `blocks: ghost` → `relation-target` finding 带 `relation: "blocks"`、`ref: "ghost"`、exit 0（仅 warn）；两命令文本视图逐字节未变。
+
+## 结论（已定）
+
+两处都按"加键、缺键=无"落地，schema 未换：
+
+| 命令 | 新增键 | 取值 | 出现条件 |
+| --- | --- | --- | --- |
+| `kiln status --json` | `issues[].title` | 该 issue **最后一个动作**的 `--title`（与 `graph --json` 节点同源） | 有动作时；无动作省略 |
+| `kiln check --json` | `results[].relation` | `relation-target` 上被声明的关系名 | 仅 `relation-target`；其它 rule 不带 |
+
+边界：`title` 只属于 `status` 的行，`list --json` 的公共行 `issueCore` 没有动；`relation` 不替代 `ref`——`ref` 仍是被指向的 id，二者合起来才定位一条坏边。`slot` 依旧不暴露。
