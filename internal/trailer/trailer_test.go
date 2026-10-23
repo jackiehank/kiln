@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/model"
 )
 
 var testRel = model.DefaultRelationSet()

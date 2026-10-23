@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"kiln/internal/cli"
+	"github.com/jackiehank/kiln/internal/cli"
 )
 
 func main() {

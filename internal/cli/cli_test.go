@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"kiln/internal/config"
-	"kiln/internal/engine"
-	"kiln/internal/model"
-	"kiln/internal/vcs"
+	"github.com/jackiehank/kiln/internal/config"
+	"github.com/jackiehank/kiln/internal/engine"
+	"github.com/jackiehank/kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/vcs"
 )
 
 func TestDoPrintsCanonicalMessage(t *testing.T) {

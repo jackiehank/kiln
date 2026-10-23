@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/model"
 )
 
 // Fields is the semantic content of one kiln commit message.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"kiln/internal/model"
-	"kiln/internal/vcs"
+	"github.com/jackiehank/kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/vcs"
 )
 
 var testRel = model.DefaultRelationSet()

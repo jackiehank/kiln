@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"kiln/internal/vcs"
+	"github.com/jackiehank/kiln/internal/vcs"
 )
 
 // ExecRunner runs the real `jj` binary in Dir.

@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"kiln/internal/model"
-	"kiln/internal/trailer"
-	"kiln/internal/vcs"
+	"github.com/jackiehank/kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/trailer"
+	"github.com/jackiehank/kiln/internal/vcs"
 )
 
 // ActionsFromCommits keeps only the kiln commits and returns them in

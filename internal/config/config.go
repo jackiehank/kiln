@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/model"
 )
 
 // FileName is the config file, at the repository root.

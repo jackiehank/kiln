@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"kiln/internal/config"
-	"kiln/internal/engine"
-	"kiln/internal/model"
-	"kiln/internal/trailer"
-	"kiln/internal/vcs"
-	"kiln/internal/vcs/git"
-	"kiln/internal/vcs/jj"
+	"github.com/jackiehank/kiln/internal/config"
+	"github.com/jackiehank/kiln/internal/engine"
+	"github.com/jackiehank/kiln/internal/model"
+	"github.com/jackiehank/kiln/internal/trailer"
+	"github.com/jackiehank/kiln/internal/vcs"
+	"github.com/jackiehank/kiln/internal/vcs/git"
+	"github.com/jackiehank/kiln/internal/vcs/jj"
 )
 
 const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建

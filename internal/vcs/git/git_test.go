@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"kiln/internal/vcs"
+	"github.com/jackiehank/kiln/internal/vcs"
 )
 
 // "Nothing to record" is no longer a failure: the unified semantics make an empty
