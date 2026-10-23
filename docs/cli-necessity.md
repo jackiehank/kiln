@@ -867,6 +867,51 @@ Would remove kiln.exe
 
 - **要不要把"本仓已 colocate、勿裸跑 git clean"制度化**（写进 living spec 或本仓文档）——本轮只记在本文与本仓的记忆里。
 
+## 补充：jj 后端与 git 后端的不同（收口用）
+
+> 本节只回答一件事：kiln 已同时支持两种后端，它们在 **kiln 的语义面**上差在哪、哪些差异被适配器吞掉、哪些漏到用户 / agent 眼前。证据来自 `internal/vcs/{git,jj}` 的实现与本文前几轮的实测。
+
+### 1. 按五个原语的对照
+
+| 原语 | git 后端 | jj 后端 |
+| --- | --- | --- |
+| `Detect` | 看 `.git` | 看 `.jj`；colocated 下 **`.jj` 优先**（否则会静默读成 git 视图） |
+| `Log` | `git log --format='%H%x1f%aI%x1f%B%x1e'` | `jj log --no-graph -r 'all() ~ root() ~ @' -T …`：排除虚拟 root 与工作副本提交 `@` |
+| `Action` | `git commit -m`：只提交**已暂存**内容；空工作区失败（`nothing to commit`） | `jj commit --message`：终结**整个**工作副本；空工作区也成功，产出**空提交**（本轮实测：exit 0，`@` 换成新的空提交，动作落在 `@-`） |
+| `Show` / `ShowStat` | 原样 `git show`；`--shortstat` 的计数精确 | `jj show`；jj 无 `--shortstat`，用 `diff --stat` 末行近似（多 `, 0 deletions(-)`） |
+| 隔离区 | `git worktree add -b kiln/<issue>`；状态三态（dirty / unmerged / gone）；remove 连分支一起删 | `jj workspace add --name <issue>`（须先建父目录）；只有 dirty 一态；remove = `workspace forget` + 删目录，提交留在仓里 |
+
+### 2. 被适配器吞掉的差异
+
+- **命令面**：`vcs.Repo` 五个方法（`Log` / `Action` / `Show` / `ShowStat` / 工作区）把两端命令差异全藏在 `internal/vcs/{git,jj}` 里；引擎与 CLI 只吃 `vcs.Commit` 和字符串，**模型与视图零改动**。
+- **"只算已提交动作"**：jj 的工作副本 `@` 本身是提交，`Log` 用 revset 排除它，读视图与 git 对齐——这是本文 test 段最重要的一处适配。
+- **工作区状态**：git 的 `Unmerged` / `Gone` 在 jj 没有对应物（`workspace forget` 不丢提交），适配器把它们如实报为 false，不假装有。
+
+### 3. 漏在用户 / agent 眼前、适配器吞不掉的差异
+
+1. **写侧纪律相反**：git 要 `git add` 挑内容；jj 把整个工作副本收进动作。同一条 `kiln commit`，两种"别夹带无关改动"的纪律——从 git 切到 jj 最容易踩的一步（本仓已 colocated，提交整副本）。
+2. **jj 允许空动作**：工作区为空时 `jj commit --message` 成功（本轮实测），git 后端同场景失败。好处是纯设计动作也能留一笔；代价是"动作 = 一次有内容的提交"不再是 VCS 强制的不变量，只能靠 `check` 管语义。
+3. **标识稳定性**：jj 改写（`describe` / `abandon` / rebase）会让 commit_id 漂移，kiln 印的短 id 跟着漂；change_id 才是跨改写稳定的。kiln 目前仍用 commit_id（与 git hash 同形），`path` 的**序号寻址**不受影响。
+4. **历史可改写性**：jj 的 `undo` / `op log` 让"证据"可被任意改写 / 删除；git 后端改写代价高。**这是取向冲突**（jj 视历史为流体，kiln 视动作为证据），适配器解决不了。
+5. **colocated 陷阱**：jj 用 `.jj/.gitignore`（`/*`）自我忽略，于是 `git clean -xdf` 会把 `.jj/` 一起抹掉；jj 的次 workspace 里 `git log` 失败（不是 git 仓），那里 kiln 自动走 jj 后端。
+
+### 4. 对"必要性"的含义
+
+- **后端的差异不改变必要性的位置**：无论 git 还是 jj，`check`（不变量）、`status` / `graph`（综合视图）、`path`（按 issue 重建路径）、`do` / `commit`（规范化写）这四件事，后端都提供不了。jj 的 UX 再强，也没有"issue / action"模型。
+- **后端只改变写侧的摩擦与风险**：jj 让 agent 少一步暂存、敢试错、可 undo、冲突不阻断；代价是证据可改写、短 id 漂移、整副本提交。git 正相反——历史稳、改写危险、空动作要额外一步。
+- **读侧仍会漏回后端**：逐字原文 / diff 仍以 `git show` / `jj show` 为准；kiln 的 `show` 本就是委托（`--json` 只是把委托结果包成结构化）。这不削弱必要性——锚点是"git 做不到的模型与校验"，不是"替后端打格式化输出"。
+
+## 结论（已定）
+
+1. **增量价值**：`check`（可执行的模型不变量）、`status` / `graph`（综合视图）、`path`（按 issue 重建有序路径）、`do` / `commit`（规范化写）是 git 与 jj 都做不到的四件事。`show` / `path --stat` 这类单提交展示属于**诚实的包装**——有价值，但可被 git 直接替代。
+2. **逐命令体检**：`check` / `path` / `status` / `graph` / `do` / `commit` 必要；`show` 是委托；逐字真值（`%B`、diff 原文）让给后端。
+3. **必要性锚点**：只在"git 表达不了的四件事"——**模型、校验、综合、类型化写**。读与单提交展示应与后端重合、甚至让给后端，不必假装 CLI 更权威。
+4. **方向**：维持 **D（分层）**——后端五原语 + 后端中立的模型 / 校验 / 综合 / 规范写；**不瘦成"spec + check"**（会丢掉 `path` 的序号寻址与 `check` 作为 agent 自纠接口的落点），**不先做 MCP**（typed tools 是外壳，不是价值来源；`--json` 已先补上）。
+
+**后端结论**：两种适配器都保留。jj 适配器不是可选项——纯 jj 仓（`--no-colocate`）没有 `.git`，git 后端在那里不可用；本仓 colocated 后它又成为 dogfood 对象。`change_id` 作稳定标识留作候选（代价：ID 语义变成 jj 专有，与 git hash 不再同形）。"历史可改写 vs 动作为证据"的张力记为**已知取舍**：靠 `check`、约定与（未实现的）op-log 校验兜底，不靠后端保证。
+
+**收口时的现状**：本仓走 jj 后端（colocated），55 条 issue / 239 个动作，`check` 0 错误；`git clean -xdf` 禁令与"提交整副本"纪律记在本文 `test（再续 4）`，不再另开单。
+
 ## 非目标
 
 - 不评估 MCP 的实现细节。
