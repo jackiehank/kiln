@@ -60,3 +60,21 @@
 - `internal/engine/engine.go` `relationLines`：渲染只有 `spawns` / `related` / `derived-from`
   三族，且**不带箭头**——写反的边在 `graph` 里长得和写对的边一样。
 - 真实使用：wsl-agent 的 issue 梳理（2026-10-17）写完三条 `derived-from` 后 owner 提出改名。
+
+## 结论（已定）
+
+**问题已由词表正名解决，issue 收尾。**
+
+- **词表现状**：面向用户的键是 `caused-by`（反向 `causes`）；`derived-from` 只作为**读别名**
+  保留（`spawns` → `causes`），历史提交里的旧键名仍可解析（`internal/model/relation.go:125-143`）。
+  `relation-vocabulary` 第三轮「`derived-from` 保持不动」的结论已被后续正名取代——方向语义
+  （被引发者 → 来源）不变，键名换成了带介词的形态。
+- **写侧方向自明**：`caused-by` 自带介词，方向写在名字里（被引发者 caused-by 来源），不再需要
+  「每写一条停一下」的心理确认；`do` 的 flag 帮助由词表生成，带 `谁引发了我` 的释义
+  （`internal/cli/cli.go:86-88`）。
+- **写反可见**：`graph` / `path` 现在按声明源画箭头（`relation-rendering` / `graph-normalize`），
+  写反的边方向相反，肉眼可辨。
+- **不加 `check` 方向矛盾规则**：互为 `caused-by` 的两条边可能是有意的互引或历史事实，判定面
+  （环？状态先后？）模糊、误报代价高于收益；`check` 继续只校验目标存在（warn）。此项留档为
+  未来可选项，不在本 issue 范围。
+- **非目标不变**：不重开 `relation-vocabulary` 的整体词表结论。
