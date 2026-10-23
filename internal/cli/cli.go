@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"kiln/internal/config"
 	"kiln/internal/engine"
@@ -38,8 +39,9 @@ worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里�
 
 // usageOtherFlags are the per-command flags that are not the do/commit surface.
 const usageOtherFlags = `
-path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）
-show 的 flags:  --stat（只给该动作的文件统计）
+path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）  --json（机器可读输出）
+show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
+worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
@@ -53,14 +55,14 @@ var retiredCommands = map[string]string{"workspace": "worktree"}
 var usageCommands = [][2]string{
 	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
 	{"kiln commit <issue> <action> [flags]", "用规范信息直接提交"},
-	{"kiln path <issue>", "重建问题的研究路径（可加 --stat / --shortstat）"},
-	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat）"},
+	{"kiln path <issue>", "重建问题的研究路径（可加 --stat / --shortstat / --json）"},
+	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
-	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态"},
+	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 	{"kiln --version", "打印版本、可执行文件路径与构建时间（-V / version 同义）"},
@@ -647,11 +649,11 @@ func (e *env) workspace(args []string) int {
 	case "new":
 		return e.workspaceNew(ws, rest)
 	case "list":
-		// `list` takes no flags: a stray one is a user mistake, and a mistake
-		// that changes nothing silently is the bug this issue exists to fix.
+		// The only flag is --json; a stray one is still a mistake, and a mistake
+		// that changes nothing silently is the bug this surface fixed earlier.
 		_, f := parse(rest)
-		warnUnknownFlags(e.errw, f, allowedFlags())
-		return e.workspaceList(ws)
+		warnUnknownFlags(e.errw, f, allowedFlags("json"))
+		return e.workspaceList(ws, f)
 	case "remove":
 		return e.workspaceRemove(ws, rest)
 	default:
@@ -775,7 +777,7 @@ func (e *env) config(args []string) int {
 // width, each row ending in what that area still holds. The state is asked of
 // the backend for every area: the column exists to be trusted, so it is never
 // left to a flag the caller might forget.
-func (e *env) workspaceList(ws vcs.Workspace) int {
+func (e *env) workspaceList(ws vcs.Workspace, f flags) int {
 	areas, err := ws.ListWorkspaces()
 	if err != nil {
 		fmt.Fprintf(e.errw, "读取 worktree 失败: %v\n", err)
@@ -789,6 +791,20 @@ func (e *env) workspaceList(ws vcs.Workspace) int {
 			return 1
 		}
 		states[i] = state
+	}
+	if f.has("json") {
+		doc := worktreeListDoc{Mode: string(e.kind), Worktrees: make([]worktreeEntry, 0, len(areas))}
+		for i, a := range areas {
+			doc.Worktrees = append(doc.Worktrees, worktreeEntry{
+				Path:     a.Path,
+				Main:     a.Main,
+				Issue:    a.Issue,
+				Gone:     states[i].Gone,
+				Dirty:    states[i].Dirty,
+				Unmerged: states[i].Unmerged,
+			})
+		}
+		return e.writeJSON(doc)
 	}
 	pathWidth, roleWidth := 0, 0
 	for _, a := range areas {
@@ -861,9 +877,9 @@ func areaRole(a vcs.WorkspaceInfo) string {
 
 func (e *env) path(args []string) int {
 	pos, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat"))
+	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat", "json"))
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln path <issue> [--stat|--shortstat]")
+		fmt.Fprintln(e.errw, "用法: kiln path <issue> [--stat|--shortstat] [--json]")
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -875,12 +891,15 @@ func (e *env) path(args []string) int {
 		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
 		return 1
 	}
+	mode := statMode(f)
+	if f.has("json") {
+		return e.pathJSON(repo, p, mode)
+	}
 	backend, err := e.backend()
 	if err != nil {
 		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
 		return 1
 	}
-	mode := statMode(f)
 	fmt.Fprintf(e.out, "%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p))
 	for i, a := range p.Actions {
 		line := fmt.Sprintf("  %d. %s %s %s", i+1, pad(a.Kind, 12), pad(shortID(a.ID), 8), a.Subject)
@@ -919,9 +938,9 @@ func (e *env) path(args []string) int {
 // rebase. Rendering is delegated to git.
 func (e *env) show(args []string) int {
 	pos, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("stat"))
+	warnUnknownFlags(e.errw, f, allowedFlags("stat", "json"))
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln show <issue> [n] [--stat]")
+		fmt.Fprintln(e.errw, "用法: kiln show <issue> [n] [--stat] [--json]")
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -971,6 +990,9 @@ func (e *env) show(args []string) int {
 		}
 	}
 	a := p.Actions[ordinal-1]
+	if f.has("json") {
+		return e.showJSON(p, ordinal, a, f.has("stat"))
+	}
 	fmt.Fprintf(e.out, "%s · %d/%d %s · %s · %s\n\n",
 		p.ID, ordinal, len(p.Actions), a.Kind, shortID(a.ID), a.Subject)
 
@@ -992,6 +1014,162 @@ func (e *env) show(args []string) int {
 	fmt.Fprint(e.out, trimNewlines(body))
 	fmt.Fprintln(e.out)
 	return 0
+}
+
+// pathDoc is `kiln path --json`: the whole research path as one object. Actions
+// keep their 1-based ordinal and full commit hash, so a caller can address
+// `kiln show` without parsing the text view.
+type pathDoc struct {
+	Issue     string       `json:"issue"`
+	Action    string       `json:"action"`
+	Done      bool         `json:"done"`
+	Actions   []pathAction `json:"actions"`
+	Relations []graphEdge  `json:"relations"`
+}
+
+// pathAction is one action in the path: what it did, when, under which hash,
+// and — with --stat / --shortstat — the diffstat that belongs to it.
+type pathAction struct {
+	Ordinal int      `json:"ordinal"`
+	Action  string   `json:"action"`
+	ID      string   `json:"id"`
+	Date    string   `json:"date"`
+	Title   string   `json:"title,omitempty"`
+	Refs    []string `json:"refs,omitempty"`
+	Stat    string   `json:"stat,omitempty"`
+}
+
+// showDoc is `kiln show --json`: one action's metadata plus its body. body is
+// the commit's text, or the diffstat when --stat asked for it; the raw diff is
+// deliberately absent — it is large, and the text view still prints it.
+type showDoc struct {
+	Issue   string `json:"issue"`
+	Ordinal int    `json:"ordinal"`
+	Total   int    `json:"total"`
+	Action  string `json:"action"`
+	ID      string `json:"id"`
+	Date    string `json:"date"`
+	Title   string `json:"title,omitempty"`
+	Body    string `json:"body,omitempty"`
+}
+
+// worktreeListDoc is `kiln worktree list --json`: every area with the three
+// judgments `remove` refuses on, so a caller decides without parsing words.
+type worktreeListDoc struct {
+	Mode      string          `json:"mode,omitempty"`
+	Worktrees []worktreeEntry `json:"worktrees"`
+}
+
+// worktreeEntry is one area. main carries no issue; the booleans are always
+// written because they are verdicts, not missing data.
+type worktreeEntry struct {
+	Path     string `json:"path"`
+	Main     bool   `json:"main"`
+	Issue    string `json:"issue,omitempty"`
+	Gone     bool   `json:"gone"`
+	Dirty    bool   `json:"dirty"`
+	Unmerged bool   `json:"unmerged"`
+}
+
+// pathJSON renders the path as one document. Relations reuse the graph's edge
+// shape, restricted to the edges touching this issue, so a caller that already
+// understands `graph --json` needs nothing new. With --stat / --shortstat the
+// diffstat travels in each action's stat field instead of replacing the view.
+func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
+	doc := pathDoc{
+		Issue:     p.ID,
+		Action:    p.State(),
+		Done:      e.isDone(p),
+		Actions:   make([]pathAction, 0, len(p.Actions)),
+		Relations: incidentEdges(repo, e.rel(), p.ID),
+	}
+	var backend vcs.Repo
+	if mode != statNone {
+		b, err := e.backend()
+		if err != nil {
+			fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+			return 1
+		}
+		backend = b
+	}
+	for i, a := range p.Actions {
+		item := pathAction{
+			Ordinal: i + 1,
+			Action:  a.Kind,
+			ID:      a.ID,
+			Date:    a.Date.Format(time.RFC3339),
+			Title:   a.Title,
+			Refs:    a.Refs,
+		}
+		if mode != statNone {
+			stat, err := backend.ShowStat(a.ID, mode == statShort)
+			if err != nil {
+				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+				return 1
+			}
+			item.Stat = strings.TrimSpace(stat)
+		}
+		doc.Actions = append(doc.Actions, item)
+	}
+	return e.writeJSON(doc)
+}
+
+// incidentEdges returns the folded edges touching one issue, declared arrow and
+// ordering included — the same shape `graph --json` writes.
+func incidentEdges(repo *model.Repo, rel *model.RelationSet, id string) []graphEdge {
+	out := make([]graphEdge, 0, 2)
+	for _, ed := range engine.FoldEdges(repo, rel) {
+		if ed.From != id && ed.To != id {
+			continue
+		}
+		out = append(out, graphEdge{
+			From:     ed.From,
+			To:       ed.To,
+			Name:     ed.Name,
+			Directed: rel.Inverse(ed.Name) != "",
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From != out[j].From {
+			return out[i].From < out[j].From
+		}
+		if out[i].To != out[j].To {
+			return out[i].To < out[j].To
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// showJSON renders one action as one document: metadata plus body, where body
+// is git's text (or the diffstat under --stat) with surrounding blank lines
+// trimmed, exactly the text the text view would print.
+func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) int {
+	backend, err := e.backend()
+	if err != nil {
+		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		return 1
+	}
+	var body string
+	if stat {
+		body, err = backend.ShowStat(a.ID, false)
+	} else {
+		body, err = backend.Show(a.ID)
+	}
+	if err != nil {
+		fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+		return 1
+	}
+	return e.writeJSON(showDoc{
+		Issue:   p.ID,
+		Ordinal: ordinal,
+		Total:   len(p.Actions),
+		Action:  a.Kind,
+		ID:      a.ID,
+		Date:    a.Date.Format(time.RFC3339),
+		Title:   a.Title,
+		Body:    trimNewlines(body),
+	})
 }
 
 // statDisplay selects how `path` annotates each action with its diffstat.
@@ -1688,6 +1866,7 @@ func shortID(id string) string {
 func (e *env) writeJSON(v any) int {
 	enc := json.NewEncoder(e.out)
 	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
 		fmt.Fprintf(e.errw, "输出 JSON 失败: %v\n", err)
 		return 1

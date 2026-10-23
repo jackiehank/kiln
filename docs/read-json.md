@@ -50,3 +50,24 @@
 - 错误与文本视图同一套：未知 issue / 越界序号 exit 1/2，stdout 0 字节。
 
 验收按上文 E1–E6，其中 E1/E3 的 `relations`、`diff` 按本节调整为“共用 graph 词表的相邻边 / 本轮不放 diff”。
+
+## apply（2026-10-23）
+
+- `internal/cli/cli.go`：
+  - `path` / `show` / `worktree list` 的 `allowedFlags` 加 `json`；`--json` 时分别走 `pathJSON` / `showJSON` / `workspaceList(ws, f)`，文本分支原样保留。
+  - 新增 `pathDoc` / `pathAction` / `showDoc` / `worktreeListDoc` / `worktreeEntry`；`pathJSON` 的 `relations` 由 `incidentEdges` 给出——取 `FoldEdges` 中与该 issue 相邻的边并按 `(from, to, name)` 排序，`directed` 用 `rel.Inverse(name) != ""` 判定，与 `graph --json` 同义。
+  - `--json --stat` / `--json --shortstat`：`path` 把每动作的 diffstat 收进 `stat` 字段；`show` 把 `body` 换成 diffstat。`worktree list` 的 `gone` / `dirty` / `unmerged` 恒写，`issue` 缺省即 main，`mode` 取后端名（`git` / `jj`）。
+  - `writeJSON` 增加 `SetEscapeHTML(false)`：`show` 的 body 是提交全文，diff 里的 `<` / `>` / `&` 不再被转义成 `\u003c` 之类。
+  - 帮助：`usageCommands` 三条命令补 `--json`，`usageOtherFlags` 按命令列出 `--json`。
+- 测试（`internal/cli/cli_test.go`）：`TestPathJSONRendersThePath`、`TestPathJSONCarriesStatInFields`、`TestPathJSONIncludesIncidentRelations`、`TestShowJSONRendersTheSelectedAction`、`TestReadJSONErrorsPrintNothing`、`TestWorktreeListJSONRendersAreaStates`。
+- 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `path browser-shot --json`（3 个动作，含完整 hash 与 RFC3339 日期）、`show browser-shot conclude --json`（body 为 jj 的提交全文）、`worktree list --json`（`mode: "jj"`、main 行无 `issue`）各冒烟一次；三条命令的文本视图仍由既有逐字节断言守着。
+
+## 结论（已定）
+
+七个读命令全部有 `--json`。三条新命令的契约：
+
+- `path --json`：`issue` / `action`（当前动作名）/ `done` / `actions[]`（`ordinal`、`action`、`id`、`date`（RFC3339）、`title`、`refs`、`stat`）/ `relations[]`（与 `graph --json` 同形的相邻边）。`actions` 与 text 视图同序，`ordinal` 可直接喂给 `kiln show`。
+- `show --json`：`issue` / `ordinal` / `total` / `action` / `id` / `date` / `title` / `body`；`body` 是提交全文（`--stat` 时是 diffstat），**不含 diff 原文**——需要 diff 的调用方仍可用文本视图。
+- `worktree list --json`：`mode` / `worktrees[]`（`path`、`main`、`issue`、`gone`、`dirty`、`unmerged`）；三个状态布尔恒写，`issue` 缺省即 main。
+
+边界：`relations` 里的靶可能从未开过（ghost），文档不另设 `missing` 列表——`to` 是否在 `issues` 里由调用方自己比对；`show` 本轮不放原始 diff；`--toon` 仍未评估。

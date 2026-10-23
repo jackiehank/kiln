@@ -552,6 +552,166 @@ func TestPathWithoutFlagHasNoStat(t *testing.T) {
 	}
 }
 
+// `path --json` is one object: the issue's current state plus every action with
+// its ordinal, hash, date and title — enough to address `kiln show` without
+// reading the text view.
+func TestPathJSONRendersThePath(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).path([]string{"demo", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Issue != "demo" || doc.Action != "collect" || doc.Done {
+		t.Fatalf("header = {issue:%q action:%q done:%v}", doc.Issue, doc.Action, doc.Done)
+	}
+	if len(doc.Actions) != 2 {
+		t.Fatalf("actions = %d, want 2", len(doc.Actions))
+	}
+	first := doc.Actions[0]
+	if first.Ordinal != 1 || first.Action != "ask" || first.ID != "aaaaaaa1" ||
+		first.Date != "2026-01-01T09:00:00Z" || first.Title != "起点" || first.Stat != "" {
+		t.Fatalf("first action = %+v", first)
+	}
+	if doc.Relations == nil || len(doc.Relations) != 0 {
+		t.Fatalf("relations must be an empty array, not null: %+v", doc.Relations)
+	}
+}
+
+// --json and the stat flags coexist: the diffstat travels in each action's stat
+// field instead of replacing the document.
+func TestPathJSONCarriesStatInFields(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).path([]string{"demo", "--json", "--shortstat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --json --shortstat is not one JSON document: %v\n%s", err, out.String())
+	}
+	if got := doc.Actions[0].Stat; got != "1 file changed, 2 insertions(+)" {
+		t.Fatalf("shortstat in field = %q", got)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).path([]string{"demo", "--json", "--stat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	doc = pathDoc{}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --json --stat is not one JSON document: %v\n%s", err, out.String())
+	}
+	if got := doc.Actions[1].Stat; !strings.Contains(got, "docs/b.md | 3 +++") {
+		t.Fatalf("stat block in field = %q", got)
+	}
+}
+
+// path --json relations are the graph's edges restricted to this issue: same
+// declared name, same from/to, same directed flag.
+func TestPathJSONIncludesIncidentRelations(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newRelationEnv(&out, &errb).path([]string{"alpha", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	want := []graphEdge{{From: "beta", To: "alpha", Name: "relates-to", Directed: false}}
+	if !reflect.DeepEqual(doc.Relations, want) {
+		t.Fatalf("relations = %+v, want %+v", doc.Relations, want)
+	}
+}
+
+// `show --json` carries the selected action's metadata and body; --stat swaps
+// the body for the diffstat.
+func TestShowJSONRendersTheSelectedAction(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "2", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc showDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("show --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Issue != "demo" || doc.Ordinal != 2 || doc.Total != 2 || doc.Action != "collect" ||
+		doc.ID != "bbbbbbb2" || doc.Title != "调研" {
+		t.Fatalf("show doc = %+v", doc)
+	}
+	if !strings.Contains(doc.Body, "+new line") {
+		t.Fatalf("body should be the action's text: %q", doc.Body)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "2", "--json", "--stat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	doc = showDoc{}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("show --json --stat is not one JSON document: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(doc.Body, "docs/b.md | 3 +++") {
+		t.Fatalf("--stat body should be the diffstat: %q", doc.Body)
+	}
+}
+
+// A failed `path --json` / `show --json` prints no half document.
+func TestReadJSONErrorsPrintNothing(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).path([]string{"nope", "--json"}); code != 1 {
+		t.Fatalf("path unknown issue: exit code = %d, want 1", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("path unknown issue wrote stdout: %q", out.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "9", "--json"}); code != 2 {
+		t.Fatalf("show out-of-range: exit code = %d, want 2", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("show out-of-range wrote stdout: %q", out.String())
+	}
+}
+
+// `worktree list --json` writes every area with the three states `remove`
+// refuses on, so the caller reads booleans instead of translated words.
+func TestWorktreeListJSONRendersAreaStates(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo: workspaceRunner{state: vcs.AreaState{Gone: true, Unmerged: true}, areas: []vcs.WorkspaceInfo{
+			{Path: "C:/w/kiln", Main: true},
+			{Path: "C:/w/kiln--t1", Issue: "t1"},
+		}},
+		kind: vcs.JJ,
+		out:  &out,
+		errw: &errb,
+	}
+	if code := e.workspace([]string{"list", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc worktreeListDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("worktree list --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Mode != "jj" || len(doc.Worktrees) != 2 {
+		t.Fatalf("doc = %+v", doc)
+	}
+	main := doc.Worktrees[0]
+	if main.Path != "C:/w/kiln" || !main.Main || main.Issue != "" || main.Gone || main.Dirty || main.Unmerged {
+		t.Fatalf("main entry = %+v", main)
+	}
+	t1 := doc.Worktrees[1]
+	if t1.Path != "C:/w/kiln--t1" || t1.Main || t1.Issue != "t1" || !t1.Gone || t1.Dirty || !t1.Unmerged {
+		t.Fatalf("dedicated entry = %+v", t1)
+	}
+}
+
 // `show` with no ordinal expands the last action and delegates to git's show.
 func TestShowDefaultsToLastAction(t *testing.T) {
 	var out, errb bytes.Buffer
