@@ -103,3 +103,58 @@
 ### 验收映射
 
 E1/E2/E3 由前置校验 + 两后端实现覆盖；E4 由既有逐字节回归测试守住；E5/E6 由 fakeRunner argv 断言与临时仓冒烟覆盖。
+
+## hypothesize（2026-10-23，第二回：jj 后端值不值）
+
+用户提出：`--only` 会让命令更复杂，而 agent 的认知成本随命令数上升；应评估 jj 后端的好处，好处不大就考虑改回只支持 git。
+
+### 实测 1：在 jj 默认的 colocated 仓里用 git 提交会打架
+
+临时仓 `jj git init`（默认 colocate）后只走 git 命令：
+
+```
+echo one > a.md; git add -A; git commit -m "kiln-like: a"
+```
+
+结果：
+
+- jj 导入 git 变化后，`jj log` 里多出一个**孤儿空提交**（`d77c7f72`，description 空，不在 `@` 链上）；
+- `jj status` 仍报 `M a.md`——工作副本快照与 git HEAD 失配；
+- 第二次 git commit 前 jj 打 `Reset the working copy parent to the new Git HEAD`，每次提交都留下空提交痕迹。
+
+即：**jj 适配器的独有价值是"在 jj 管理工作副本的仓里保持工作副本一致"**；同一仓里用 git 后端提交，会和 jj 互相踩。
+
+### 实测 2：jj 的其它好处都能在 git 上仿真
+
+| jj 特性 | git 仿真 | 结论 |
+| --- | --- | --- |
+| 工作区快照（无需 add） | `git add -A` + commit | 语义等价 |
+| 允许空动作 | `git commit --allow-empty`（实测 exit 0；不存在的路径仍 `pathspec` 报错 exit 1） | 等价 |
+| `change_id` 稳定 ID | 代码 0 处引用 | 无收益 |
+| op log / undo | 未暴露给 kiln | 无收益 |
+| `jj workspace add` | `git worktree`（已有实现；worktree-* 系列已收口） | 等价 |
+
+### 实测 3：体量
+
+- jj 适配器 329 行 / 4 个测试；git 适配器 456 行 / 4 个测试。
+- README + docs 里 `jj` 提及 436 处、21 个文件（多数是 design 历史文档）。
+- `vcs: auto` 规则：`.jj` 优先，否则 `.git`。
+
+### 认知成本的真实来源
+
+命令面完全一致：agent 用 `kiln commit/path/status`，不需要知道后端名字。真正要多记的是**语义分歧**：写侧（快照 vs 索引）、空动作（允许 vs 失败）、历史可改写（jj 可 `describe/squash`）。统一这些分歧后，agent 只需记一套；删掉 jj 适配器主要省的是**维护面**，不是认知面。
+
+### 选项
+
+- **A. 维持双后端**（现状）：分歧暴露给 agent；cli-necessity 里"纯 jj 仓没有 `.git`"的论据已部分过时——jj 0.45 的 `jj git init` **默认 colocate**，非 colocate 需显式 `--no-colocate` 或配置。
+- **B. git-only**：删 jj 适配器；本仓必须停止用 jj（导出后删 `.jj`），否则 jj 工作副本会与 git 提交打架（实测 1）。命令面不变，但 jj-only 工作流失去支持。
+- **C. 双后端 + 语义统一**：把 git 后端的动作改成"快照整个区域 + `--allow-empty`"，与 jj 对齐；`--only` 两后端同语义。agent 只记一套，jj 适配器保留、只剩维护成本。
+- **D. 显式 `vcs: git|jj`（auto 只认 git）**：能力保留但配置复杂化，不推荐。
+
+### 结论与建议
+
+- jj 的**独有**好处只有两条：**(1) colocated 仓里保持 jj 工作副本一致**（本仓正是）；**(2) 无 git 二进制的环境**（jj 不依赖 git）。其余都能仿真。
+- 从"agent 认知成本"看，收益最大的是 **C**：命令面不变、语义统一、agent 不必在意后端；删 jj（B）省的是维护而不是认知，代价是本仓迁回纯 git。
+- 若目标明确是"少一个后端、少一套文档"，B 可行；迁移步骤是 `jj git export` 后删除 `.jj`（本仓 git HEAD 已与 jj 同步，`git log` 完整），并接受 jj 用户不可用。
+- 本 issue 不扩大范围：`--only` 仍按两后端设计；**语义统一（C）或删后端（B）应另开 issue 裁定**，本 issue 保留该评估作为依据。
+
