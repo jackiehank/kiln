@@ -10,7 +10,8 @@
     "terminal": ["conclude", "apply"]
   },
   // VCS 后端：auto（.jj 优先，否则 .git）/ git / jj
-  "vcs": "auto",
+  // 本仓已从 jj（自举测试）切到纯 git：.jj 已删除，固定用 git。
+  "vcs": "git",
   // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交，开工前先 kiln worktree new <issue>）
   // 本仓显式写 off：单人顺序推进时不加隔离，只在并行跑多个 agent 时才改 on。
   "worktree": "off"
