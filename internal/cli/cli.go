@@ -500,6 +500,17 @@ func (e *env) write(args []string, commit bool) int {
 			return code
 		}
 	}
+	// The action is about to land, and nothing can take it back afterwards. A
+	// backend that allows empty commits — jj does — would record this action with
+	// no change behind it if the caller only thought it edited something; say so
+	// before the commit exists rather than after. The check is the same reading
+	// the isolation hints use, so it costs no extra call, and it must not decide
+	// anything: an empty action is legitimate, so this is a hint, not a refusal.
+	if ws, ok := backend.(vcs.Workspace); ok {
+		if dirty, derr := ws.Dirty(); derr == nil && !dirty {
+			fmt.Fprintln(e.errw, "提示: 当前工作区没有检测到改动，这次动作在 jj 后端会记成空提交（git 后端会直接提交失败）。")
+		}
+	}
 	id, err := backend.Action(msg)
 	if err != nil {
 		fmt.Fprintf(e.errw, "提交失败: %v\n", err)

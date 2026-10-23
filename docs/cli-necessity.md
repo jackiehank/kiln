@@ -890,7 +890,7 @@ Would remove kiln.exe
 ### 3. 漏在用户 / agent 眼前、适配器吞不掉的差异
 
 1. **写侧纪律相反**：git 要 `git add` 挑内容；jj 把整个工作副本收进动作。同一条 `kiln commit`，两种"别夹带无关改动"的纪律——从 git 切到 jj 最容易踩的一步（本仓已 colocated，提交整副本）。
-2. **jj 允许空动作**：工作区为空时 `jj commit --message` 成功（本轮实测），git 后端同场景失败。好处是纯设计动作也能留一笔；代价是"动作 = 一次有内容的提交"不再是 VCS 强制的不变量，只能靠 `check` 管语义。
+2. **jj 允许空动作**：工作区为空时 `jj commit --message` 成功（本轮实测），git 后端同场景失败。好处是纯设计动作也能留一笔；代价是"动作 = 一次有内容的提交"不再是 VCS 强制的不变量，只能靠 `check` 管语义。运行期提示见 `empty-commit-hint`：`kiln commit` 在无改动时给一行提示，不拦截、不改退出码。
 3. **标识稳定性**：jj 改写（`describe` / `abandon` / rebase）会让 commit_id 漂移，kiln 印的短 id 跟着漂；change_id 才是跨改写稳定的。kiln 目前仍用 commit_id（与 git hash 同形），`path` 的**序号寻址**不受影响。
 4. **历史可改写性**：jj 的 `undo` / `op log` 让"证据"可被任意改写 / 删除；git 后端改写代价高。**这是取向冲突**（jj 视历史为流体，kiln 视动作为证据），适配器解决不了。
 5. **colocated 陷阱**：jj 用 `.jj/.gitignore`（`/*`）自我忽略，于是 `git clean -xdf` 会把 `.jj/` 一起抹掉；jj 的次 workspace 里 `git log` 失败（不是 git 仓），那里 kiln 自动走 jj 后端。

@@ -385,7 +385,9 @@ const fakeCommitID = "abc123def4567890"
 // anything landed.
 func TestCommitConfirmsWhatItWrote(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect", "--title", "调研"}, true); code != 0 {
+	e := newWorkspaceEnv(&out, &errb, true)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
+	if code := e.write([]string{"demo", "collect", "--title", "调研"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "已提交 abc123d · collect · demo") {
@@ -867,7 +869,9 @@ func TestCommitRefusalPointsAtAnAreaWhenMainIsClean(t *testing.T) {
 // --force is the explicit escape hatch for committing in the main area.
 func TestCommitInMainWithForce(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect", "--force"}, true); code != 0 {
+	e := newWorkspaceEnv(&out, &errb, false)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
+	if code := e.write([]string{"demo", "collect", "--force"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "issue: demo") {
@@ -878,8 +882,64 @@ func TestCommitInMainWithForce(t *testing.T) {
 // A dedicated area records actions without any guard.
 func TestCommitInDedicatedArea(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect"}, true); code != 0 {
+	e := newWorkspaceEnv(&out, &errb, true)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
+	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+}
+
+// An action recorded with a clean area is the one silent failure the jj backend
+// allows: the commit lands with nothing behind it. The hint says so before the
+// commit exists, and it decides nothing — the exit code and stdout stay as they
+// were, because an empty action is legitimate.
+func TestCommitHintsWhenTheAreaIsClean(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, true) // a dedicated area, nothing dirty
+	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "没有检测到改动") {
+		t.Fatalf("stderr = %q, want the empty-commit hint", errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: demo") {
+		t.Fatalf("the hint must not replace stdout:\n%s", out.String())
+	}
+
+	// The hint is a message, not a different commit: stdout must not move.
+	var dirtyOut, dirtyErr bytes.Buffer
+	d := newWorkspaceEnv(&dirtyOut, &dirtyErr, true)
+	d.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
+	if code := d.write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("dirty exit code = %d, stderr = %q", code, dirtyErr.String())
+	}
+	if dirtyOut.String() != out.String() {
+		t.Fatalf("the hint must not change what is committed:\nclean:\n%s\ndirty:\n%s", out.String(), dirtyOut.String())
+	}
+}
+
+// Work in the area is exactly what the action carries, so the hint would be noise.
+func TestCommitStaysQuietWhenTheAreaIsDirty(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, true)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
+	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "没有检测到改动") {
+		t.Fatalf("a dirty area carries work, so no hint belongs here:\n%s", errb.String())
+	}
+}
+
+// `do` prints the message without recording it, so there is no empty commit to
+// warn about — the risk only exists at commit time.
+func TestDoNeverHintsAboutAnEmptyCommit(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect"}, false); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "没有检测到改动") {
+		t.Fatalf("`do` records nothing, so no empty-commit hint belongs here:\n%s", errb.String())
 	}
 }
 
@@ -1208,6 +1268,7 @@ func TestConfigUnknownSubcommand(t *testing.T) {
 func TestCommitInMainAllowedWhenWorktreeOff(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, false)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
 	e.worktree = config.WorktreeOff
 	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())

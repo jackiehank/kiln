@@ -32,3 +32,29 @@
 - 不拦截空提交、不引入新的拒绝分支；
 - 不改 `status` / `path` 的文本输出（`path --stat`、`path --json` 已经暴露空 stat）；
 - 不做逐动作 diff 审计——那是 `target-honesty` 的范围。
+
+## apply（2026-10-23）
+
+- `internal/cli/cli.go` 的 `write()`：`refuseInMain` 之后、`backend.Action(msg)` 之前加一段——backend 实现 `vcs.Workspace` 且 `Dirty()` 为 false 时，向 stderr 打一行：
+  `提示: 当前工作区没有检测到改动，这次动作在 jj 后端会记成空提交（git 后端会直接提交失败）。`
+  不返回、不改 `msg`、不改退出码。判定复用隔离提示同一读取（jj 是 `jj diff --summary`，零新增调用）。
+- 测试（`internal/cli/cli_test.go`）：
+  - 新增 `TestCommitHintsWhenTheAreaIsClean`（干净区 → 提示 + stdout 不变，且与脏区提交的 stdout 逐字节相同）；
+  - 新增 `TestCommitStaysQuietWhenTheAreaIsDirty`（脏区 → 无提示）；
+  - 新增 `TestDoNeverHintsAboutAnEmptyCommit`（`do` 不提交 → 无提示）；
+  - 既有 commit 测试改为 `dirty: true`，让它们代表"有改动要提交"的常态：`TestCommitConfirmsWhatItWrote`、`TestCommitInDedicatedArea`、`TestCommitInMainWithForce`、`TestCommitInMainAllowedWhenWorktreeOff`。
+- 文档：`docs/cli-necessity.md` 的"jj 允许空动作"一条补一句指向本 issue（运行期提示，不拦截）。
+- 冒烟（临时仓，新二进制）：
+  | 场景 | 结果 |
+  | --- | --- |
+  | jj 干净区 `commit t1 ask` | exit 0、有提示、空提交照常记录 |
+  | jj 改动区 `commit t2 apply` | exit 0、无提示 |
+  | jj 干净区 `do t3 ask` | 无提示（不提交） |
+  | git 干净区 `commit t9 ask` | 有提示，随后 `提交失败: … nothing to commit`，exit 1 |
+- `gofmt` / `go vet` / `go test ./...` 全过。
+
+## 结论（已定）
+
+`kiln commit` 在**工作区没有检测到改动**时向 stderr 打一行提示，然后照常提交：jj 后端会记成空提交，git 后端由 git 自己报 `nothing to commit` 并失败。判定用 `vcs.Workspace.Dirty()`，因此不新增接口、不额外跑 diff；提示不是拒绝——空动作合法（`conclude` 可以只记"决定不改"），`--force` 语义不变，`do` 不提示。
+
+为什么不做成 `check` 规则：`check` 只读提交消息，空动作不是语义错误，且 jj 的 `empty` 在 git 没有对等字段——放进去会让 `check` 从"读历史消息"变成"扫历史 diff"，还带后端不对称。逐动作 diff 审计留在 `target-honesty`。
