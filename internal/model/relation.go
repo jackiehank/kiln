@@ -1,8 +1,9 @@
 package model
 
 import (
-	"fmt"
 	"sort"
+
+	"github.com/jackiehank/kiln/internal/i18n"
 )
 
 // Rel is one relation declaration: a canonical relation name and its target
@@ -60,22 +61,22 @@ func NewRelationSet(slots []RelationSlot, names []RelationName, aliases map[stri
 	}
 	for _, s := range slots {
 		if s.Name == "" {
-			return nil, fmt.Errorf("relation slot 缺 name")
+			return nil, i18n.E("relation slot 缺 name")
 		}
 		rs.slots[s.Name] = s
 	}
 	add := func(n RelationName) error {
 		if n.Name == "" {
-			return fmt.Errorf("relation name 为空")
+			return i18n.E("relation name 为空")
 		}
 		if _, ok := rs.names[n.Name]; ok {
-			return fmt.Errorf("relation 重名: %s", n.Name)
+			return i18n.E("relation 重名: %s", n.Name)
 		}
 		if _, ok := rs.slots[n.Slot]; !ok {
-			return fmt.Errorf("relation %s 的 slot 不存在: %s", n.Name, n.Slot)
+			return i18n.E("relation %s 的 slot 不存在: %s", n.Name, n.Slot)
 		}
 		if n.Rank <= 0 {
-			return fmt.Errorf("relation %s 的 rank 必须为正", n.Name)
+			return i18n.E("relation %s 的 rank 必须为正", n.Name)
 		}
 		rs.names[n.Name] = n
 		rs.order = append(rs.order, n.Name)
@@ -97,7 +98,7 @@ func NewRelationSet(slots []RelationSlot, names []RelationName, aliases map[stri
 	}
 	for a, c := range aliases {
 		if _, ok := rs.names[c]; !ok {
-			return nil, fmt.Errorf("alias %s 指向未知的 relation %s", a, c)
+			return nil, i18n.E("alias %s 指向未知的 relation %s", a, c)
 		}
 		rs.alias[a] = c
 	}
@@ -112,7 +113,7 @@ func NewRelationSet(slots []RelationSlot, names []RelationName, aliases map[stri
 			seen[n.Slot] = map[int]string{}
 		}
 		if other, ok := seen[n.Slot][n.Rank]; ok {
-			return nil, fmt.Errorf("slot %s 内 rank %d 被 %s 与 %s 共用（槽内全序）", n.Slot, n.Rank, other, n.Name)
+			return nil, i18n.E("slot %s 内 rank %d 被 %s 与 %s 共用（槽内全序）", n.Slot, n.Rank, other, n.Name)
 		}
 		seen[n.Slot][n.Rank] = n.Name
 	}

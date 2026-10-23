@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/model"
 	"github.com/jackiehank/kiln/internal/trailer"
 	"github.com/jackiehank/kiln/internal/vcs"
@@ -233,13 +234,13 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 	// Rule 1: a issue must contain the start action (default ask).
 	if !hasKind(p, actions.Start()) {
 		diags = append(diags, Diagnostic{Level: LevelErr, Issue: p.ID, Rule: RuleStartAction,
-			Message: "缺少 " + actions.Start() + "：问题没有起点动作"})
+			Message: i18n.T("缺少 %s：问题没有起点动作", actions.Start())})
 	}
 
 	// Rule 2: the final action must be terminal. Order is not checked.
 	if last, ok := p.Last(); ok && !actions.IsTerminal(last.Kind) {
 		diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleTerminalAction, Action: last.Kind,
-			Message: "缺少终点动作（当前 " + last.Kind + "）"})
+			Message: i18n.T("缺少终点动作（当前 %s）", last.Kind)})
 	}
 
 	// Rule 3: every relation target must exist — for every relation name, not
@@ -247,7 +248,7 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 	for _, r := range p.Relations {
 		if _, ok := repo.Issues[r.Target]; !ok {
 			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleRelationTarget, Ref: r.Target, Relation: r.Name,
-				Message: "关系目标不存在：" + r.Name + " 指向 " + r.Target})
+				Message: i18n.T("关系目标不存在：%s 指向 %s", r.Name, r.Target)})
 		}
 	}
 
@@ -255,13 +256,13 @@ func checkIssue(repo *model.Repo, p *model.Issue, actions *model.ActionSet) []Di
 	for _, a := range p.Actions {
 		for _, key := range a.UnknownTrailerKeys {
 			diags = append(diags, Diagnostic{Level: LevelWarn, Issue: p.ID, Rule: RuleUnknownTrailer, Action: a.Kind, Ref: key,
-				Message: "未知 trailer 键: " + key})
+				Message: i18n.T("未知 trailer 键: %s", key)})
 		}
 	}
 
 	if len(diags) == 0 {
 		diags = append(diags, Diagnostic{Level: LevelOK, Issue: p.ID, Rule: RuleComplete,
-			Message: "完整（" + strings.Join(kinds(p), ", ") + "）"})
+			Message: i18n.T("完整（%s）", strings.Join(kinds(p), ", "))})
 	}
 	return diags
 }
@@ -618,7 +619,7 @@ func PathLines(repo *model.Repo, p *model.Issue, rel *model.RelationSet) []strin
 		line := e.name + " " + e.target
 		if e.flipped && !glossed[e.name] {
 			if g := rel.Gloss(e.name); g != "" {
-				line += "（" + e.name + " ＝ " + g + "）"
+				line += i18n.T("（%s ＝ %s）", e.name, i18n.T(g))
 			}
 		}
 		glossed[e.name] = true

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/vcs"
 )
 
@@ -46,7 +47,7 @@ func (r ExecRunner) Action(message string, paths []string) (string, error) {
 		if bad, err := r.Unchanged(paths); err != nil {
 			return "", err
 		} else if len(bad) > 0 {
-			return "", fmt.Errorf("没有改动可记录: %s", strings.Join(bad, ", "))
+			return "", i18n.E("没有改动可记录: %s", strings.Join(bad, ", "))
 		}
 		if _, err := r.run(append([]string{"add", "-A", "--"}, paths...)...); err != nil {
 			return "", err
@@ -237,7 +238,7 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	}
 	path, ok := vcs.AreaFor(areas, issue)
 	if !ok {
-		return fmt.Errorf("没有 issue 为 %q 的 worktree", issue)
+		return i18n.E("没有 issue 为 %q 的 worktree", issue)
 	}
 	branch := vcs.BranchPrefix + issue
 	if !force {
@@ -246,10 +247,10 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 			return err
 		}
 		if state.Dirty {
-			return fmt.Errorf("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
+			return i18n.E("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
 		}
 		if state.Unmerged {
-			return fmt.Errorf("分支 %s 还有未合并的提交（要丢弃请加 --force）", branch)
+			return i18n.E("分支 %s 还有未合并的提交（要丢弃请加 --force）", branch)
 		}
 	}
 	remove := []string{"worktree", "remove", path}

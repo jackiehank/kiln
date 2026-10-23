@@ -11,12 +11,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/jackiehank/kiln/internal/config"
 	"github.com/jackiehank/kiln/internal/engine"
+	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/model"
 	"github.com/jackiehank/kiln/internal/vcs"
 )
+
+// TestMain pins the output language: Run resolves it from the environment, so a
+// developer whose LANG is English must not turn every golden string English.
+func TestMain(m *testing.M) {
+	os.Setenv("KILN_LANG", "zh")
+	os.Exit(m.Run())
+}
 
 func TestDoPrintsCanonicalMessage(t *testing.T) {
 	var out, errb bytes.Buffer
@@ -2195,5 +2204,99 @@ func TestVersionNeedsNoConfig(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "kiln ") {
 		t.Fatalf("version output missing: %q", out.String())
+	}
+}
+
+// hasCJK reports whether s carries any Han character, the marker the language
+// tests use to tell "still Chinese" from "translated".
+func hasCJK(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0
+}
+
+// English help is the widest surface: every block, table and gloss renders at
+// once, so "no CJK" here proves the whole usage text is translated.
+func TestEnglishHelpSpeaksEnglish(t *testing.T) {
+	t.Setenv("KILN_LANG", "en")
+	var out, errb bytes.Buffer
+	if code := Run([]string{"--help"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if hasCJK(out.String()) {
+		t.Fatalf("english help still has CJK:\n%s", out.String())
+	}
+	for _, want := range []string{
+		"kiln — issue tracking and path rebuilding driven by git trailers",
+		"usage:",
+		"--lang <zh|en>",
+		"metadata:",
+		"relations:",
+		"print the canonical commit message",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("english help missing %q", want)
+		}
+	}
+}
+
+// The error paths are translated too, including the ones that run before any
+// command is dispatched.
+func TestEnglishErrorsSpeakEnglish(t *testing.T) {
+	t.Setenv("KILN_LANG", "en")
+	cases := []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"frobnicate"}, 2, "unknown command: frobnicate"},
+		{[]string{"--lang=de", "status"}, 2, "--lang only accepts zh or en"},
+		{[]string{"status", "--no-such-flag"}, 0, "warning: unknown flag --no-such-flag"},
+	}
+	for _, c := range cases {
+		var out, errb bytes.Buffer
+		if code := Run(c.args, &out, &errb); code != c.code {
+			t.Fatalf("%v: exit code = %d, want %d", c.args, code, c.code)
+		}
+		if !strings.Contains(errb.String(), c.want) {
+			t.Errorf("%v: stderr = %q, want %q", c.args, errb.String(), c.want)
+		}
+		if hasCJK(errb.String()) {
+			t.Errorf("%v: stderr still has CJK: %q", c.args, errb.String())
+		}
+	}
+}
+
+// --lang is a command-line victory over the environment, in the other direction
+// from the environment tests.
+func TestLangFlagBeatsTheEnvironment(t *testing.T) {
+	t.Setenv("KILN_LANG", "en")
+	var out, errb bytes.Buffer
+	if code := Run([]string{"--lang", "zh", "--help"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !hasCJK(out.String()) {
+		t.Fatalf("--lang zh did not produce Chinese help:\n%s", out.String())
+	}
+}
+
+// JSON is data, not prose: the same repository must produce the same bytes
+// whatever language the text views speak.
+func TestJSONIgnoresTheLanguage(t *testing.T) {
+	rel := model.DefaultRelationSet()
+	repo := engine.Build(engine.ActionsFromCommits(demoRunner().commits, rel), rel)
+	steps := model.DefaultActionSet()
+	render := func(l i18n.Lang) string {
+		i18n.Set(l)
+		var out, errb bytes.Buffer
+		e := newDemoEnv(&out, &errb)
+		if code := e.statusJSON(repo, engine.Summarize(repo, steps), nil); code != 0 {
+			t.Fatalf("%s: statusJSON exit = %d, stderr = %q", l, code, errb.String())
+		}
+		return out.String()
+	}
+	zh := render(i18n.Zh)
+	en := render(i18n.En)
+	i18n.Set(i18n.Zh)
+	if zh != en {
+		t.Fatalf("status --json differs by language:\nzh=%s\nen=%s", zh, en)
 	}
 }

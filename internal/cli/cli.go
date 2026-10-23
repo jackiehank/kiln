@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackiehank/kiln/internal/config"
 	"github.com/jackiehank/kiln/internal/engine"
+	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/model"
 	"github.com/jackiehank/kiln/internal/trailer"
 	"github.com/jackiehank/kiln/internal/vcs"
@@ -45,6 +46,7 @@ worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
+--lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
 `
 
 // retiredCommands maps a name kiln no longer answers to its current spelling, so
@@ -76,17 +78,17 @@ type flagHelp struct{ flag, shape, gloss string }
 // and a relation group generated from the vocabulary.
 func doCommitFlagGroups(rel *model.RelationSet) (meta, relations []flagHelp) {
 	meta = []flagHelp{
-		{"--title", "<文本>", "动作标题"},
-		{"--refs", "<条目>[,<条目>]", "引用"},
-		{"--target", "<文件>", "涉及的文件（单个）"},
-		{"--scope", "<文本>", "范围"},
-		{"--domain", "<名字>", "分类"},
-		{"--tag", "<标签>[,<标签>]", "标签"},
+		{"--title", i18n.T("<文本>"), i18n.T("动作标题")},
+		{"--refs", i18n.T("<条目>[,<条目>]"), i18n.T("引用")},
+		{"--target", i18n.T("<文件>"), i18n.T("涉及的文件（单个）")},
+		{"--scope", i18n.T("<文本>"), i18n.T("范围")},
+		{"--domain", i18n.T("<名字>"), i18n.T("分类")},
+		{"--tag", i18n.T("<标签>[,<标签>]"), i18n.T("标签")},
 	}
 	for _, name := range rel.Names() {
-		relations = append(relations, flagHelp{"--" + name, "<issue>[,<issue>]", rel.Gloss(name)})
+		relations = append(relations, flagHelp{"--" + name, "<issue>[,<issue>]", i18n.T(rel.Gloss(name))})
 	}
-	relations = append(relations, flagHelp{"--unrelate", "<issue>[,<issue>]", "撤销与该 issue 的关系"})
+	relations = append(relations, flagHelp{"--unrelate", "<issue>[,<issue>]", i18n.T("撤销与该 issue 的关系")})
 	return meta, relations
 }
 
@@ -102,11 +104,11 @@ func usageText(rel *model.RelationSet) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString(usageHeader)
+	b.WriteString(i18n.T(usageHeader))
 	for _, c := range usageCommands {
-		b.WriteString("  " + pad(c[0], width) + "  " + c[1] + "\n")
+		b.WriteString("  " + pad(c[0], width) + "  " + i18n.T(c[1]) + "\n")
 	}
-	b.WriteString(usagePrologue)
+	b.WriteString(i18n.T(usagePrologue))
 
 	meta, relations := doCommitFlagGroups(rel)
 	flagWidth := 0
@@ -127,11 +129,11 @@ func usageText(rel *model.RelationSet) string {
 			b.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
-	b.WriteString("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n")
-	writeGroup("  元数据:", meta)
-	writeGroup("  关系:  （均可重复、逗号分隔）", relations)
-	b.WriteString("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n")
-	b.WriteString(usageOtherFlags)
+	b.WriteString(i18n.T("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n"))
+	writeGroup(i18n.T("  元数据:"), meta)
+	writeGroup(i18n.T("  关系:  （均可重复、逗号分隔）"), relations)
+	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n"))
+	b.WriteString(i18n.T(usageOtherFlags))
 	return b.String()
 }
 
@@ -273,7 +275,7 @@ func warnUnknownFlags(errw io.Writer, f flags, allowed map[string]bool) {
 	}
 	sort.Strings(unknown)
 	for _, k := range unknown {
-		fmt.Fprintf(errw, "警告: 未知 flag --%s（可用 flag 见 kiln -h）\n", k)
+		fmt.Fprint(errw, i18n.T("警告: 未知 flag --%s（可用 flag 见 kiln -h）\n", k))
 	}
 }
 
@@ -305,11 +307,28 @@ func openRepo(dir, prefer string) (vcs.Repo, vcs.Kind, error) {
 	case vcs.JJ:
 		return jj.ExecRunner{Dir: dir}, kind, nil
 	}
-	return nil, "", fmt.Errorf("未知后端: %s", kind)
+	return nil, "", i18n.E("未知后端: %s", kind)
 }
 
 // Run executes one command and returns the process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
+	// The language switch is global: pull --lang out before dispatch, then pick
+	// the language the environment asks for. It must happen before any output so
+	// even parse errors and the usage text follow the chosen language.
+	args, langFlag, bad, ok := extractLang(args)
+	if langFlag != "" {
+		i18n.Set(langFlag)
+	} else {
+		i18n.Set(i18n.ResolveFromEnv())
+	}
+	if !ok {
+		if bad == "" {
+			fmt.Fprint(stderr, i18n.T("--lang 需要一个值（zh 或 en）\n"))
+		} else {
+			fmt.Fprint(stderr, i18n.T("--lang 只接受 zh 或 en（当前: %s）\n", bad))
+		}
+		return 2
+	}
 	// Load config before help so `-h` reflects the project's relation vocabulary.
 	// Help must not fail on a broken config: fall back to the built-in default.
 	cfg, cfgErr := config.Read(".")
@@ -332,15 +351,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		// handled below
 	default:
 		if now, ok := retiredCommands[cmd]; ok {
-			fmt.Fprintf(stderr, "未知命令: %s（已改名为 `%s`）\n\n%s", cmd, now, usageText(rel))
+			fmt.Fprint(stderr, i18n.T("未知命令: %s（已改名为 `%s`）\n\n%s", cmd, now, usageText(rel)))
 			return 2
 		}
-		fmt.Fprintf(stderr, "未知命令: %s\n\n%s", cmd, usageText(rel))
+		fmt.Fprint(stderr, i18n.T("未知命令: %s\n\n%s", cmd, usageText(rel)))
 		return 2
 	}
 
 	if cfgErr != nil {
-		fmt.Fprintf(stderr, "配置错误: %v\n", cfgErr)
+		fmt.Fprint(stderr, i18n.T("配置错误: %v\n", cfgErr))
 		return 1
 	}
 	e := &env{actions: cfg.Actions, relations: cfg.Relations, dir: ".", vcsPref: cfg.VCS, worktree: cfg.Worktree, out: stdout, errw: stderr}
@@ -369,6 +388,41 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
+// extractLang pulls the global --lang flag out of the arguments before dispatch,
+// so every command shares one switch instead of teaching each parser about it.
+// A bare --lang with no value, or a value kiln does not know, comes back with
+// ok=false and the offending value so Run can print the error in the language
+// the user asked for.
+func extractLang(args []string) (rest []string, lang i18n.Lang, bad string, ok bool) {
+	ok = true
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--lang" {
+			if i+1 >= len(args) {
+				return nil, "", "", false
+			}
+			l, good := i18n.Parse(args[i+1])
+			if !good {
+				return nil, "", args[i+1], false
+			}
+			lang = l
+			i++
+			continue
+		}
+		if v, found := strings.CutPrefix(a, "--lang="); found {
+			l, good := i18n.Parse(v)
+			if !good {
+				return nil, "", v, false
+			}
+			lang = l
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return rest, lang, "", true
+}
+
 // printVersion answers "which kiln am I running, and how old is it?". A stale
 // binary once hid new flags behind a warning, discovered by accident; the facts
 // belong in one command instead of a guess. Version comes from the build info
@@ -381,9 +435,9 @@ func printVersion(w io.Writer) int {
 	}
 	fmt.Fprintf(w, "kiln %s\n", version)
 	if exe, err := os.Executable(); err == nil {
-		fmt.Fprintf(w, "可执行文件: %s\n", exe)
+		fmt.Fprint(w, i18n.T("可执行文件: %s\n", exe))
 		if st, err := os.Stat(exe); err == nil {
-			fmt.Fprintf(w, "构建时间: %s\n", st.ModTime().Format("2006-01-02 15:04:05"))
+			fmt.Fprint(w, i18n.T("构建时间: %s\n", st.ModTime().Format("2006-01-02 15:04:05")))
 		}
 	}
 	fmt.Fprintf(w, "%s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
@@ -447,21 +501,21 @@ func parse(args []string) ([]string, flags) {
 func (e *env) write(args []string, commit bool) int {
 	pos, f := parse(args)
 	if len(pos) < 2 {
-		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [flags]\n", modeName(commit))
+		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> [flags]\n", modeName(commit)))
 		return 2
 	}
 	if len(pos) > 2 {
-		fmt.Fprintf(e.errw, "用法: kiln %s <issue> <action> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit))
+		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit)))
 		return 2
 	}
 	issue := e.normalizedIssue(pos[0])
 	action := strings.ToLower(strings.TrimSpace(pos[1]))
 	if !e.actions.IsValid(action) {
-		fmt.Fprintf(e.errw, "非法 action: %q（可选: %s）\n", action, strings.Join(e.actions.Names(), ", "))
+		fmt.Fprint(e.errw, i18n.T("非法 action: %q（可选: %s）\n", action, strings.Join(e.actions.Names(), ", ")))
 		return 2
 	}
 	if !model.ValidIssueID(issue) {
-		fmt.Fprintf(e.errw, "警告: issue ID %q 不符合单段 kebab-case slug 约定（小写字母 / 数字 / `-`，长度 ≤ 50）\n", issue)
+		fmt.Fprint(e.errw, i18n.T("警告: issue ID %q 不符合单段 kebab-case slug 约定（小写字母 / 数字 / `-`，长度 ≤ 50）\n", issue))
 	}
 	if e.actions.IsStart(action) {
 		if code := e.refuseDuplicateStart(issue); code != 0 {
@@ -474,7 +528,7 @@ func (e *env) write(args []string, commit bool) int {
 	allowed["only"] = true
 	warnUnknownFlags(e.errw, f, allowed)
 	if !commit && f.has("only") {
-		fmt.Fprintln(e.errw, "do 不接受 --only：它只打印 trailer，不提交；只提交哪些文件是 commit 的事。")
+		fmt.Fprintln(e.errw, i18n.T("do 不接受 --only：它只打印 trailer，不提交；只提交哪些文件是 commit 的事。"))
 		return 2
 	}
 	paths := f.list("only")
@@ -499,7 +553,7 @@ func (e *env) write(args []string, commit bool) int {
 	}
 	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
 	if !f.has("force") {
@@ -518,11 +572,11 @@ func (e *env) write(args []string, commit bool) int {
 	if len(paths) > 0 {
 		bad, uerr := backend.Unchanged(paths)
 		if uerr != nil {
-			fmt.Fprintf(e.errw, "检查路径失败: %v\n", uerr)
+			fmt.Fprint(e.errw, i18n.T("检查路径失败: %v\n", uerr))
 			return 1
 		}
 		if len(bad) > 0 {
-			fmt.Fprintf(e.errw, "以下路径没有改动可记录: %s\n", strings.Join(bad, ", "))
+			fmt.Fprint(e.errw, i18n.T("以下路径没有改动可记录: %s\n", strings.Join(bad, ", ")))
 			return 1
 		}
 	} else if got, cerr := backend.Changes(); cerr == nil {
@@ -531,20 +585,20 @@ func (e *env) write(args []string, commit bool) int {
 		filesKnown = false
 	}
 	if len(files) > 0 {
-		fmt.Fprintf(e.out, "将提交 %d 个文件: %s\n", len(files), inventory(files))
+		fmt.Fprint(e.out, i18n.T("将提交 %d 个文件: %s\n", len(files), inventory(files)))
 	} else if len(paths) == 0 && filesKnown {
 		// An empty action is legitimate, so this is a hint, not a refusal: say it
 		// before the commit exists rather than after. The dirty reading is what the
 		// isolation hints already use; a backend without it stays silent.
 		if ws, ok := backend.(vcs.Workspace); ok {
 			if dirty, derr := ws.Dirty(); derr == nil && !dirty {
-				fmt.Fprintln(e.errw, "提示: 当前工作区没有检测到改动，这次动作会记成空提交。")
+				fmt.Fprintln(e.errw, i18n.T("提示: 当前工作区没有检测到改动，这次动作会记成空提交。"))
 			}
 		}
 	}
 	id, err := backend.Action(msg, paths)
 	if err != nil {
-		fmt.Fprintf(e.errw, "提交失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("提交失败: %v\n", err))
 		return 1
 	}
 	fmt.Fprintln(e.out, msg)
@@ -552,9 +606,9 @@ func (e *env) write(args []string, commit bool) int {
 	// the text it already had from `do`, and has to run a second command to learn
 	// whether anything landed — which is exactly the round trip this line saves.
 	if id == "" {
-		fmt.Fprintf(e.out, "\n已提交 · %s · %s\n", action, issue)
+		fmt.Fprint(e.out, i18n.T("\n已提交 · %s · %s\n", action, issue))
 	} else {
-		fmt.Fprintf(e.out, "\n已提交 %s · %s · %s\n", shortID(id), action, issue)
+		fmt.Fprint(e.out, i18n.T("\n已提交 %s · %s · %s\n", shortID(id), action, issue))
 	}
 	return 0
 }
@@ -568,7 +622,7 @@ func inventory(files []string) string {
 	if len(files) <= shown {
 		return strings.Join(files, ", ")
 	}
-	return strings.Join(files[:shown], ", ") + fmt.Sprintf(" 等 %d 个", len(files))
+	return strings.Join(files[:shown], ", ") + i18n.T(" 等 %d 个", len(files))
 }
 
 // refuseInMain enforces kiln's unified layout: the main checkout is read/merge
@@ -594,15 +648,15 @@ func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 	}
 	dedicated, err := ws.IsDedicated()
 	if err != nil {
-		fmt.Fprintf(e.errw, "无法判定 worktree 类型: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("无法判定 worktree 类型: %v\n", err))
 		return 1
 	}
 	if dedicated {
 		return 0
 	}
-	fmt.Fprintln(e.errw, "拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。")
+	fmt.Fprintln(e.errw, i18n.T("拒绝提交：当前是 main（只读/只合并），动作只在 worktree 里提交。"))
 	if dirty, err := ws.Dirty(); err == nil && dirty {
-		fmt.Fprintln(e.errw, "你已有未提交改动——新区是干净检出，直接建区会把改动留在 main：")
+		fmt.Fprintln(e.errw, i18n.T("你已有未提交改动——新区是干净检出，直接建区会把改动留在 main："))
 		if recipe := e.carryRecipe(issue, ws); recipe != "" {
 			fmt.Fprintln(e.errw, recipe)
 		}
@@ -611,11 +665,11 @@ func (e *env) refuseInMain(backend vcs.Repo, issue string) int {
 		// move anything, so it is offered as a condition you have to *want* —
 		// otherwise an agent optimizing for "make the command succeed" takes the
 		// one flag and leaves the work sitting in main.
-		fmt.Fprintln(e.errw, "（--force 只放行护栏、不把改动搬进区——只有你确实要把它留在 main 时才用。）")
+		fmt.Fprintln(e.errw, i18n.T("（--force 只放行护栏、不把改动搬进区——只有你确实要把它留在 main 时才用。）"))
 		return 1
 	}
-	fmt.Fprintf(e.errw, "先 `kiln worktree new %s`，再 cd 到 worktree 提交。\n", issue)
-	fmt.Fprintln(e.errw, "确要在 main 提交时加 --force（一次性豁免）。")
+	fmt.Fprint(e.errw, i18n.T("先 `kiln worktree new %s`，再 cd 到 worktree 提交。\n", issue))
+	fmt.Fprintln(e.errw, i18n.T("确要在 main 提交时加 --force（一次性豁免）。"))
 	return 1
 }
 
@@ -635,7 +689,7 @@ func (e *env) worktreeTip(issue string) string {
 			// Being outside a repository is worth saying: there is no isolation
 			// to ask for, and a caller who just formatted an action should know
 			// it will not be recorded anywhere here.
-			return "提示: " + err.Error()
+			return i18n.T("提示: ") + err.Error()
 		}
 		return ""
 	}
@@ -649,7 +703,7 @@ func (e *env) worktreeTip(issue string) string {
 	if here, err := ws.IsDedicated(); err != nil || here {
 		return "" // already in a dedicated area, or undecidable: stay quiet
 	}
-	head := "提示: 本仓要求动作在 worktree 里提交——开工前先 kiln worktree new " + issue
+	head := i18n.T("提示: 本仓要求动作在 worktree 里提交——开工前先 kiln worktree new ") + issue
 	dirty, err := ws.Dirty()
 	if err != nil || !dirty {
 		return head
@@ -658,7 +712,7 @@ func (e *env) worktreeTip(issue string) string {
 	if recipe == "" {
 		return head
 	}
-	return "提示: 本仓要求动作在 worktree 里提交；你已有未提交改动——" + recipe
+	return i18n.T("提示: 本仓要求动作在 worktree 里提交；你已有未提交改动——") + recipe
 }
 
 // carryRecipe names the commands that move main's uncommitted changes into a new
@@ -669,7 +723,7 @@ func (e *env) carryRecipe(issue string, ws vcs.Workspace) string {
 	switch e.kind {
 	case vcs.Git:
 		// The stash is repository-wide, so it can be popped from inside the area.
-		return fmt.Sprintf("git：git stash -u → kiln worktree new %s → 进区后 git stash pop", issue)
+		return i18n.T("git：git stash -u → kiln worktree new %s → 进区后 git stash pop", issue)
 	case vcs.JJ:
 		// jj keeps the change in the current @, so basing the new workspace on it
 		// is what carries it; jj edit @- then leaves main clean without rewriting
@@ -680,10 +734,9 @@ func (e *env) carryRecipe(issue string, ws vcs.Workspace) string {
 		dir := vcs.StateDir + "/" + vcs.AreasDir
 		mainRoot, err := mainRootOf(ws)
 		if err != nil {
-			return fmt.Sprintf("jj：先在仓库根 mkdir %s，再 jj workspace add --name %s <区路径> -r @（新区即带上它），最后在 main 跑 jj edit @-", dir, issue)
+			return i18n.T("jj：先在仓库根 mkdir %s，再 jj workspace add --name %s <区路径> -r @（新区即带上它），最后在 main 跑 jj edit @-", dir, issue)
 		}
-		return fmt.Sprintf("jj：先在仓库根 mkdir %s，再 jj workspace add --name %s %s -r @（新区即带上它），最后在 main 跑 jj edit @-",
-			dir, issue, vcs.AreaPath(mainRoot, issue))
+		return i18n.T("jj：先在仓库根 mkdir %s，再 jj workspace add --name %s %s -r @（新区即带上它），最后在 main 跑 jj edit @-", dir, issue, vcs.AreaPath(mainRoot, issue))
 	}
 	return ""
 }
@@ -711,7 +764,7 @@ func (e *env) workspace(args []string) int {
 	case "remove":
 		return e.workspaceRemove(ws, rest)
 	default:
-		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue> | kiln worktree list | kiln worktree remove <issue> [--force]")
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln worktree new <issue> | kiln worktree list | kiln worktree remove <issue> [--force]"))
 		return 2
 	}
 }
@@ -720,12 +773,12 @@ func (e *env) workspace(args []string) int {
 func (e *env) workspaceBackend() (vcs.Workspace, int) {
 	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return nil, 1
 	}
 	ws, ok := backend.(vcs.Workspace)
 	if !ok {
-		fmt.Fprintln(e.errw, "当前后端不支持 worktree")
+		fmt.Fprintln(e.errw, i18n.T("当前后端不支持 worktree"))
 		return nil, 1
 	}
 	return ws, 0
@@ -738,31 +791,31 @@ func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
 	pos, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags())
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln worktree new <issue>")
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln worktree new <issue>"))
 		return 2
 	}
 	issue := e.normalizedIssue(pos[0])
 	if !model.ValidIssueID(issue) {
-		fmt.Fprintf(e.errw, "非法 issue ID: %q（须为小写 kebab-case slug）\n", issue)
+		fmt.Fprint(e.errw, i18n.T("非法 issue ID: %q（须为小写 kebab-case slug）\n", issue))
 		return 2
 	}
 	path, err := ws.NewWorkspace(issue)
 	if err != nil {
-		fmt.Fprintf(e.errw, "建立 worktree 失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("建立 worktree 失败: %v\n", err))
 		return 1
 	}
 	fmt.Fprintf(e.out, "worktree: %s\n", path)
 	e.seedArea(ws, path)
-	fmt.Fprintf(e.out, "下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue)
+	fmt.Fprint(e.out, i18n.T("下一步: cd 到该目录，再用 `kiln commit %s <action>` 记录动作\n", issue))
 	// Project-neutral: an area is a bare checkout, whatever the project builds
 	// with. Making it usable is the project's own business, so the hint names no
 	// language, no path and no tool — and it uses the user-facing noun (worktree),
 	// not the internal shorthand.
-	fmt.Fprintln(e.out, "提示: worktree 是一次性检出——被忽略的构建产物与依赖不在其中，请自行 build / 装依赖")
+	fmt.Fprintln(e.out, i18n.T("提示: worktree 是一次性检出——被忽略的构建产物与依赖不在其中，请自行 build / 装依赖"))
 	if cfgPath, created, err := config.Ensure(e.dir); err != nil {
-		fmt.Fprintf(e.errw, "提示: 未能写入默认配置: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("提示: 未能写入默认配置: %v\n", err))
 	} else if created {
-		fmt.Fprintf(e.out, "已写入默认配置: %s\n", cfgPath)
+		fmt.Fprint(e.out, i18n.T("已写入默认配置: %s\n", cfgPath))
 	}
 	return 0
 }
@@ -778,12 +831,11 @@ func (e *env) seedArea(ws vcs.Workspace, areaRoot string) {
 	}
 	copied, err := vcs.SeedArea(mainRoot, areaRoot)
 	if err != nil {
-		fmt.Fprintf(e.errw, "提示: 未能播种本地文件: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("提示: 未能播种本地文件: %v\n", err))
 		return
 	}
 	if len(copied) > 0 {
-		fmt.Fprintf(e.out, "已播种本地文件 %d 个（%s）: %s\n",
-			len(copied), vcs.IncludeFile, strings.Join(copied, ", "))
+		fmt.Fprint(e.out, i18n.T("已播种本地文件 %d 个（%s）: %s\n", len(copied), vcs.IncludeFile, strings.Join(copied, ", ")))
 	}
 }
 
@@ -799,7 +851,7 @@ func mainRootOf(ws vcs.Workspace) (string, error) {
 			return a.Path, nil
 		}
 	}
-	return "", fmt.Errorf("后端未列出 main")
+	return "", i18n.E("后端未列出 main")
 }
 
 // config implements `kiln config path`: it prints where the repository config
@@ -812,17 +864,17 @@ func (e *env) config(args []string) int {
 		sub = pos[0]
 	}
 	if sub != "path" {
-		fmt.Fprintln(e.errw, "用法: kiln config path")
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln config path"))
 		return 2
 	}
 	path, created, err := config.Ensure(e.dir)
 	if err != nil {
-		fmt.Fprintf(e.errw, "定位配置失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("定位配置失败: %v\n", err))
 		return 1
 	}
 	fmt.Fprintln(e.out, path)
 	if created {
-		fmt.Fprintln(e.out, "（原本不存在，已写入一份带注释的默认配置）")
+		fmt.Fprintln(e.out, i18n.T("（原本不存在，已写入一份带注释的默认配置）"))
 	}
 	return 0
 }
@@ -834,14 +886,14 @@ func (e *env) config(args []string) int {
 func (e *env) workspaceList(ws vcs.Workspace, f flags) int {
 	areas, err := ws.ListWorkspaces()
 	if err != nil {
-		fmt.Fprintf(e.errw, "读取 worktree 失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("读取 worktree 失败: %v\n", err))
 		return 1
 	}
 	states := make([]vcs.AreaState, len(areas))
 	for i, a := range areas {
 		state, err := ws.AreaState(a)
 		if err != nil {
-			fmt.Fprintf(e.errw, "读取 worktree 状态失败: %v\n", err)
+			fmt.Fprint(e.errw, i18n.T("读取 worktree 状态失败: %v\n", err))
 			return 1
 		}
 		states[i] = state
@@ -885,18 +937,18 @@ func areaStateWord(a vcs.WorkspaceInfo, s vcs.AreaState) string {
 	}
 	var parts []string
 	if s.Gone {
-		parts = append(parts, "目录已删")
+		parts = append(parts, i18n.T("目录已删"))
 	}
 	if s.Dirty {
-		parts = append(parts, "有改动")
+		parts = append(parts, i18n.T("有改动"))
 	}
 	if s.Unmerged {
-		parts = append(parts, "未合并")
+		parts = append(parts, i18n.T("未合并"))
 	}
 	if len(parts) == 0 {
-		return "干净"
+		return i18n.T("干净")
 	}
-	return strings.Join(parts, "，")
+	return strings.Join(parts, i18n.T("，"))
 }
 
 // workspaceRemove deletes the dedicated area bound to an issue. The name is the
@@ -906,22 +958,22 @@ func (e *env) workspaceRemove(ws vcs.Workspace, args []string) int {
 	pos, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags("force"))
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln worktree remove <issue> [--force]")
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln worktree remove <issue> [--force]"))
 		return 2
 	}
 	issue := pos[0]
 	if err := ws.RemoveWorkspace(issue, f.has("force")); err != nil {
-		fmt.Fprintf(e.errw, "删除 worktree 失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("删除 worktree 失败: %v\n", err))
 		return 1
 	}
-	fmt.Fprintf(e.out, "已删除 worktree: %s\n", issue)
+	fmt.Fprint(e.out, i18n.T("已删除 worktree: %s\n", issue))
 	return 0
 }
 
 // areaRole labels an area in `kiln workspace list`.
 func areaRole(a vcs.WorkspaceInfo) string {
 	if a.Main {
-		return "main（只读/只合并）"
+		return i18n.T("main（只读/只合并）")
 	}
 	if a.Issue == "" {
 		return "worktree"
@@ -933,7 +985,7 @@ func (e *env) path(args []string) int {
 	pos, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat", "json"))
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln path <issue> [--stat|--shortstat] [--json]")
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln path <issue> [--stat|--shortstat] [--json]"))
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -942,7 +994,7 @@ func (e *env) path(args []string) int {
 	}
 	p, ok := repo.Issues[pos[0]]
 	if !ok {
-		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
+		fmt.Fprint(e.errw, i18n.T("未找到问题: %s\n", pos[0]))
 		return 1
 	}
 	mode := statMode(f)
@@ -951,16 +1003,16 @@ func (e *env) path(args []string) int {
 	}
 	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
-	fmt.Fprintf(e.out, "%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p))
+	fmt.Fprint(e.out, i18n.T("%s  %s（当前 %s）\n", p.ID, e.progressWord(p), stateWord(p)))
 	for i, a := range p.Actions {
 		line := fmt.Sprintf("  %d. %s %s %s", i+1, pad(a.Kind, 12), pad(shortID(a.ID), 8), a.Subject)
 		if mode == statShort {
 			stat, err := backend.ShowStat(a.ID, true)
 			if err != nil {
-				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+				fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 				return 1
 			}
 			if s := strings.TrimSpace(stat); s != "" {
@@ -971,14 +1023,14 @@ func (e *env) path(args []string) int {
 		if mode == statBlock {
 			stat, err := backend.ShowStat(a.ID, false)
 			if err != nil {
-				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+				fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 				return 1
 			}
 			fmt.Fprint(e.out, indentStat(stat))
 		}
 	}
 	if lines := engine.PathLines(repo, p, e.rel()); len(lines) > 0 {
-		fmt.Fprintln(e.out, "  关系:")
+		fmt.Fprintln(e.out, i18n.T("  关系:"))
 		for _, l := range lines {
 			fmt.Fprintln(e.out, "    "+l)
 		}
@@ -994,7 +1046,7 @@ func (e *env) show(args []string) int {
 	pos, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags("stat", "json"))
 	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, "用法: kiln show <issue> [n] [--stat] [--json]")
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln show <issue> [n] [--stat] [--json]"))
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -1003,11 +1055,11 @@ func (e *env) show(args []string) int {
 	}
 	p, ok := repo.Issues[pos[0]]
 	if !ok {
-		fmt.Fprintf(e.errw, "未找到问题: %s\n", pos[0])
+		fmt.Fprint(e.errw, i18n.T("未找到问题: %s\n", pos[0]))
 		return 1
 	}
 	if len(p.Actions) == 0 {
-		fmt.Fprintf(e.errw, "问题没有动作: %s\n", pos[0])
+		fmt.Fprint(e.errw, i18n.T("问题没有动作: %s\n", pos[0]))
 		return 1
 	}
 	ordinal := len(p.Actions)
@@ -1017,7 +1069,7 @@ func (e *env) show(args []string) int {
 		case err == nil && n >= 1 && n <= len(p.Actions):
 			ordinal = n
 		case err == nil:
-			fmt.Fprintf(e.errw, "动作序号超出范围: %q（可选 1..%d）\n", pos[1], len(p.Actions))
+			fmt.Fprint(e.errw, i18n.T("动作序号超出范围: %q（可选 1..%d）\n", pos[1], len(p.Actions)))
 			return 2
 		case e.actions.IsValid(pos[1]):
 			// An action name selects the **last** one of that kind — the same "newest
@@ -1028,18 +1080,16 @@ func (e *env) show(args []string) int {
 			// sends them back to count lines in `path`).
 			ords := matchingOrdinals(p, pos[1])
 			if len(ords) == 0 {
-				fmt.Fprintf(e.errw, "没有 %q 动作: %s（它的动作: %s）\n", pos[1], p.ID, ordinalList(p))
+				fmt.Fprint(e.errw, i18n.T("没有 %q 动作: %s（它的动作: %s）\n", pos[1], p.ID, ordinalList(p)))
 				return 1
 			}
 			ordinal = ords[len(ords)-1]
 			if len(ords) > 1 {
-				fmt.Fprintf(e.errw, "提示: %s 有 %d 个 %s（序号 %s）；已显示 %d/%d（最后一个）\n",
-					p.ID, len(ords), pos[1], ordinalNumbers(ords), ordinal, len(p.Actions))
-				fmt.Fprintf(e.errw, "  看别的：kiln show %s %d\n", p.ID, ords[0])
+				fmt.Fprint(e.errw, i18n.T("提示: %s 有 %d 个 %s（序号 %s）；已显示 %d/%d（最后一个）\n", p.ID, len(ords), pos[1], ordinalNumbers(ords), ordinal, len(p.Actions)))
+				fmt.Fprint(e.errw, i18n.T("  看别的：kiln show %s %d\n", p.ID, ords[0]))
 			}
 		default:
-			fmt.Fprintf(e.errw, "无法识别的选择器: %q（用序号 1..%d，或动作名: %s）\n",
-				pos[1], len(p.Actions), strings.Join(e.actions.Names(), ", "))
+			fmt.Fprint(e.errw, i18n.T("无法识别的选择器: %q（用序号 1..%d，或动作名: %s）\n", pos[1], len(p.Actions), strings.Join(e.actions.Names(), ", ")))
 			return 2
 		}
 	}
@@ -1052,7 +1102,7 @@ func (e *env) show(args []string) int {
 
 	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
 	var body string
@@ -1062,7 +1112,7 @@ func (e *env) show(args []string) int {
 		body, err = backend.Show(a.ID)
 	}
 	if err != nil {
-		fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 		return 1
 	}
 	fmt.Fprint(e.out, trimNewlines(body))
@@ -1141,7 +1191,7 @@ func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
 	if mode != statNone {
 		b, err := e.backend()
 		if err != nil {
-			fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+			fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 			return 1
 		}
 		backend = b
@@ -1158,7 +1208,7 @@ func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
 		if mode != statNone {
 			stat, err := backend.ShowStat(a.ID, mode == statShort)
 			if err != nil {
-				fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+				fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 				return 1
 			}
 			item.Stat = strings.TrimSpace(stat)
@@ -1201,7 +1251,7 @@ func incidentEdges(repo *model.Repo, rel *model.RelationSet, id string) []graphE
 func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) int {
 	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
 	var body string
@@ -1211,7 +1261,7 @@ func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) i
 		body, err = backend.Show(a.ID)
 	}
 	if err != nil {
-		fmt.Fprintf(e.errw, "读取变更失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 		return 1
 	}
 	return e.writeJSON(showDoc{
@@ -1282,16 +1332,15 @@ func (e *env) status(args []string) int {
 		return e.statusJSON(repo, s, areas)
 	}
 	if s.Total == 0 {
-		fmt.Fprintf(e.out, "问题总数: 0（完成 0 / 进行中 0）｜%s\n", worktreeSegment(e.worktree, areasOpen(areas)))
-		fmt.Fprintf(e.out, "kiln 动作数: %d\n", s.Actions)
-		fmt.Fprintln(e.out, "提示: 用 `kiln do <issue> <action>` 生成规范提交信息")
+		fmt.Fprint(e.out, i18n.T("问题总数: 0（完成 0 / 进行中 0）｜%s\n", worktreeSegment(e.worktree, areasOpen(areas))))
+		fmt.Fprint(e.out, i18n.T("kiln 动作数: %d\n", s.Actions))
+		fmt.Fprintln(e.out, i18n.T("提示: 用 `kiln do <issue> <action>` 生成规范提交信息"))
 		e.renderWorktreeLegend(areas)
 		return 0
 	}
 	groups := engine.GroupByDomain(repo)
-	fmt.Fprintf(e.out, "问题总数: %d（完成 %d / 进行中 %d）｜domain %d 个｜%s\n",
-		s.Total, s.Complete, s.InProgress, engine.CountDomains(groups), worktreeSegment(e.worktree, areasOpen(areas)))
-	fmt.Fprintf(e.out, "kiln 动作数: %d\n\n", s.Actions)
+	fmt.Fprint(e.out, i18n.T("问题总数: %d（完成 %d / 进行中 %d）｜domain %d 个｜%s\n", s.Total, s.Complete, s.InProgress, engine.CountDomains(groups), worktreeSegment(e.worktree, areasOpen(areas))))
+	fmt.Fprint(e.out, i18n.T("kiln 动作数: %d\n\n", s.Actions))
 	e.renderStatus(e.statusRows(groups, areaIssues(areas)))
 	e.renderWorktreeLegend(areas)
 	return 0
@@ -1345,7 +1394,7 @@ func (e *env) renderStatus(rows []statusRow) {
 			if i > 0 {
 				fmt.Fprintln(e.out)
 			}
-			fmt.Fprintln(e.out, r.head)
+			fmt.Fprintln(e.out, i18n.T(r.head))
 		}
 		mark := " "
 		if e.isDone(r.issue) {
@@ -1420,7 +1469,7 @@ func (e *env) knownAreas() []vcs.WorkspaceInfo {
 // isolation", and a segment whose shape never changes reads better than one that
 // comes and goes.
 func worktreeSegment(mode string, areas int) string {
-	return fmt.Sprintf("worktree %s（已开 %d 个）", worktreeWord(mode), areas)
+	return i18n.T("worktree %s（已开 %d 个）", worktreeWord(mode), areas)
 }
 
 // worktreeWord is the effective isolation mode: an unset value means on, which is
@@ -1440,9 +1489,9 @@ func (e *env) renderWorktreeLegend(areas []vcs.WorkspaceInfo) {
 	if len(areas) == 0 {
 		return
 	}
-	line := AreaMark + " = 已开 worktree——各自状态见 kiln worktree list"
+	line := AreaMark + i18n.T(" = 已开 worktree——各自状态见 kiln worktree list")
 	if here, ok := vcs.AreaAt(areas, "."); ok && !here.Main {
-		line += "｜当前：worktree " + here.Issue
+		line += i18n.T("｜当前：worktree ") + here.Issue
 	}
 	fmt.Fprintln(e.out)
 	fmt.Fprintln(e.out, line)
@@ -1455,7 +1504,7 @@ func (e *env) renderWorktreeLegend(areas []vcs.WorkspaceInfo) {
 func (e *env) normalizedIssue(raw string) string {
 	issue := model.NormalizeIssueID(raw)
 	if issue != raw {
-		fmt.Fprintf(e.errw, "提示: issue ID 已归一化：%q → %q\n", raw, issue)
+		fmt.Fprint(e.errw, i18n.T("提示: issue ID 已归一化：%q → %q\n", raw, issue))
 	}
 	return issue
 }
@@ -1478,9 +1527,8 @@ func (e *env) refuseDuplicateStart(issue string) int {
 			rest = append(rest, name)
 		}
 	}
-	fmt.Fprintf(e.errw, "拒绝: issue %q 已经有起点动作 %q（共 %d 个动作）——同名即同一条 issue，不需要再新建\n",
-		issue, e.actions.Start(), len(p.Actions))
-	fmt.Fprintf(e.errw, "提示: 要继续它，用 kiln commit %s <action>（可选: %s）\n", issue, strings.Join(rest, ", "))
+	fmt.Fprint(e.errw, i18n.T("拒绝: issue %q 已经有起点动作 %q（共 %d 个动作）——同名即同一条 issue，不需要再新建\n", issue, e.actions.Start(), len(p.Actions)))
+	fmt.Fprint(e.errw, i18n.T("提示: 要继续它，用 kiln commit %s <action>（可选: %s）\n", issue, strings.Join(rest, ", ")))
 	return 1
 }
 
@@ -1559,7 +1607,7 @@ func (e *env) check(args []string) int {
 		return e.checkJSON(repo)
 	}
 	if len(repo.Issues) == 0 {
-		fmt.Fprintln(e.out, "没有 kiln 动作（检查提交信息是否同时带了 issue: 与 action:）")
+		fmt.Fprintln(e.out, i18n.T("没有 kiln 动作（检查提交信息是否同时带了 issue: 与 action:）"))
 		return 0
 	}
 	failed := false
@@ -1622,16 +1670,16 @@ func (e *env) graph(args []string) int {
 	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid", "json", "issue", "depth"))
 	format := f.get("format")
 	if f.has("json") && f.has("mermaid") {
-		fmt.Fprintln(e.errw, "--json 与 --mermaid 冲突")
+		fmt.Fprintln(e.errw, i18n.T("--json 与 --mermaid 冲突"))
 		return 2
 	}
 	if f.has("json") && format != "" && format != "json" {
-		fmt.Fprintf(e.errw, "--json 与 --format=%s 冲突\n", format)
+		fmt.Fprint(e.errw, i18n.T("--json 与 --format=%s 冲突\n", format))
 		return 2
 	}
 	if f.has("mermaid") {
 		if format != "" && format != "mermaid" && format != "ascii" {
-			fmt.Fprintf(e.errw, "--mermaid 与 --format=%s 冲突\n", format)
+			fmt.Fprint(e.errw, i18n.T("--mermaid 与 --format=%s 冲突\n", format))
 			return 2
 		}
 		format = "mermaid"
@@ -1643,7 +1691,7 @@ func (e *env) graph(args []string) int {
 		format = "ascii"
 	}
 	if format != "ascii" && format != "mermaid" && format != "json" {
-		fmt.Fprintf(e.errw, "仅支持 --format=ascii|mermaid|json（当前: %s）\n", format)
+		fmt.Fprint(e.errw, i18n.T("仅支持 --format=ascii|mermaid|json（当前: %s）\n", format))
 		return 2
 	}
 	focus, depth, qcode := e.graphQuery(f, format)
@@ -1658,7 +1706,7 @@ func (e *env) graph(args []string) int {
 		return e.graphJSON(repo, focus, depth)
 	}
 	if len(repo.Issues) == 0 {
-		fmt.Fprintln(e.out, "（空）")
+		fmt.Fprintln(e.out, i18n.T("（空）"))
 		return 0
 	}
 	if format == "mermaid" {
@@ -1678,18 +1726,18 @@ func (e *env) graphQuery(f flags, format string) (focus string, depth int, code 
 		return "", 0, 0
 	}
 	if format != "json" {
-		fmt.Fprintln(e.errw, "--issue/--depth 只服务 --json")
+		fmt.Fprintln(e.errw, i18n.T("--issue/--depth 只服务 --json"))
 		return "", 0, 2
 	}
 	if !f.has("issue") {
-		fmt.Fprintln(e.errw, "--depth 需要 --issue")
+		fmt.Fprintln(e.errw, i18n.T("--depth 需要 --issue"))
 		return "", 0, 2
 	}
 	depth = 1
 	if f.has("depth") {
 		n, err := strconv.Atoi(f.get("depth"))
 		if err != nil || n < 0 {
-			fmt.Fprintln(e.errw, "--depth 需要非负整数")
+			fmt.Fprintln(e.errw, i18n.T("--depth 需要非负整数"))
 			return "", 0, 2
 		}
 		depth = n
@@ -1754,7 +1802,7 @@ func (e *env) graphJSON(repo *model.Repo, focus string, depth int) int {
 	})
 	if focus != "" {
 		if _, ok := repo.Issues[focus]; !ok {
-			fmt.Fprintf(e.errw, "没有 issue %q\n", focus)
+			fmt.Fprint(e.errw, i18n.T("没有 issue %q\n", focus))
 			return 1
 		}
 		ids, edges = neighbourhood(ids, edges, focus, depth)
@@ -1849,12 +1897,12 @@ func neighbourhood(ids []string, edges []engine.Edge, focus string, depth int) (
 func (e *env) loadRepo() (*model.Repo, int) {
 	backend, err := e.backend()
 	if err != nil {
-		fmt.Fprintf(e.errw, "打开仓库失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return nil, 1
 	}
 	commits, err := backend.Log()
 	if err != nil {
-		fmt.Fprintf(e.errw, "读取历史失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("读取历史失败: %v\n", err))
 		return nil, 1
 	}
 	return engine.Build(engine.ActionsFromCommits(commits, e.rel()), e.rel()), 0
@@ -1871,14 +1919,14 @@ func stateWord(p *model.Issue) string {
 	if s := p.State(); s != "" {
 		return s
 	}
-	return "未知"
+	return i18n.T("未知")
 }
 
 func (e *env) progressWord(p *model.Issue) string {
 	if last, ok := p.Last(); ok && e.actions.IsTerminal(last.Kind) {
-		return "已完成"
+		return i18n.T("已完成")
 	}
-	return "进行中"
+	return i18n.T("进行中")
 }
 
 func tagsSuffix(p *model.Issue) string {
@@ -1922,7 +1970,7 @@ func (e *env) writeJSON(v any) int {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		fmt.Fprintf(e.errw, "输出 JSON 失败: %v\n", err)
+		fmt.Fprint(e.errw, i18n.T("输出 JSON 失败: %v\n", err))
 		return 1
 	}
 	return 0

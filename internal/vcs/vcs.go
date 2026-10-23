@@ -6,11 +6,12 @@ package vcs
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jackiehank/kiln/internal/i18n"
 )
 
 // Kind names a supported backend.
@@ -212,7 +213,7 @@ func Detect(dir, prefer string) (Kind, error) {
 		if root == "" {
 			return "", notARepository(start)
 		}
-		return "", fmt.Errorf("vcs=git，但 %s 下没有 .git", root)
+		return "", i18n.E("vcs=git，但 %s 下没有 .git", root)
 	case string(JJ):
 		if hasJJ {
 			return JJ, nil
@@ -220,9 +221,9 @@ func Detect(dir, prefer string) (Kind, error) {
 		if root == "" {
 			return "", notARepository(start)
 		}
-		return "", fmt.Errorf("vcs=jj，但 %s 下没有 .jj", root)
+		return "", i18n.E("vcs=jj，但 %s 下没有 .jj", root)
 	default:
-		return "", fmt.Errorf("未知 vcs: %q（可选 auto / git / jj）", prefer)
+		return "", i18n.E("未知 vcs: %q（可选 auto / git / jj）", prefer)
 	}
 	return "", notARepository(start)
 }
@@ -252,9 +253,21 @@ var ErrNoRepository = errors.New("不在仓库里")
 
 // notARepository is the one wording kiln uses for "no repository here", naming
 // where the search started so the message is never the bare "." the caller typed.
+// It unwraps to ErrNoRepository so errors.Is keeps working while the text can
+// follow the active language.
 func notARepository(start string) error {
-	return fmt.Errorf("%w（从 %s 向上也没有 .git / .jj）", ErrNoRepository, start)
+	return &noRepoError{start: start}
 }
+
+// noRepoError carries the start directory; its text is resolved when printed so
+// a language switch after detection still shows the right wording.
+type noRepoError struct{ start string }
+
+func (e *noRepoError) Error() string {
+	return i18n.T("%s（从 %s 向上也没有 .git / .jj）", i18n.T(ErrNoRepository.Error()), e.start)
+}
+
+func (e *noRepoError) Unwrap() error { return ErrNoRepository }
 
 // absDir makes dir absolute, falling back to a cleaned relative path.
 func absDir(dir string) string {

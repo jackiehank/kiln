@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/vcs"
 )
 
@@ -54,7 +55,7 @@ func (r ExecRunner) Action(message string, paths []string) (string, error) {
 		if bad, err := r.Unchanged(paths); err != nil {
 			return "", err
 		} else if len(bad) > 0 {
-			return "", fmt.Errorf("没有改动可记录: %s", strings.Join(bad, ", "))
+			return "", i18n.E("没有改动可记录: %s", strings.Join(bad, ", "))
 		}
 	}
 	args := []string{"commit", "--message", message}
@@ -146,7 +147,7 @@ func (r ExecRunner) IsDedicated() (bool, error) {
 			return !a.Main, nil
 		}
 	}
-	return false, fmt.Errorf("jj workspace list 未列出当前 worktree: %s", current)
+	return false, i18n.E("jj workspace list 未列出当前 worktree: %s", current)
 }
 
 // NewWorkspace creates, or reuses, the jj workspace bound to issue and returns
@@ -221,7 +222,7 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 	}
 	path, ok := vcs.AreaFor(areas, issue)
 	if !ok {
-		return fmt.Errorf("没有 issue 为 %q 的 worktree", issue)
+		return i18n.E("没有 issue 为 %q 的 worktree", issue)
 	}
 	if !force {
 		state, err := r.AreaState(vcs.WorkspaceInfo{Path: path, Issue: issue})
@@ -229,7 +230,7 @@ func (r ExecRunner) RemoveWorkspace(issue string, force bool) error {
 			return err
 		}
 		if state.Dirty {
-			return fmt.Errorf("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
+			return i18n.E("worktree 还有未提交的改动: %s（要丢弃请加 --force）", issue)
 		}
 	}
 	if _, err := r.run("workspace", "forget", issue); err != nil {

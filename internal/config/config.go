@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/model"
 )
 
@@ -73,7 +74,7 @@ func Read(startDir string) (Config, error) {
 		return cfg, nil
 	}
 	if err != nil {
-		return Config{}, fmt.Errorf("读取 %s: %w", path, err)
+		return Config{}, i18n.E("读取 %s: %w", path, err)
 	}
 	stripped, err := stripComments(data)
 	if err != nil {
@@ -83,7 +84,7 @@ func Read(startDir string) (Config, error) {
 	dec := json.NewDecoder(bytes.NewReader(stripped))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
-		return Config{}, fmt.Errorf("解析 %s: %w", path, err)
+		return Config{}, i18n.E("解析 %s: %w", path, err)
 	}
 	if v := strings.TrimSpace(f.VCS); v != "" {
 		cfg.VCS = v
@@ -130,7 +131,7 @@ func worktreeMode(v string) (string, error) {
 	case WorktreeOn:
 		return WorktreeOn, nil
 	}
-	return "", fmt.Errorf("非法 worktree: %q（可选 on / off）", v)
+	return "", i18n.E("非法 worktree: %q（可选 on / off）", v)
 }
 
 // Path resolves the config file for startDir by walking up from it: the first
@@ -175,7 +176,7 @@ func isRepoRoot(dir string) bool {
 func Ensure(startDir string) (path string, created bool, err error) {
 	path, ok := Path(startDir)
 	if !ok {
-		return "", false, fmt.Errorf("不在仓库里，定位不到 %s", FileName)
+		return "", false, i18n.E("不在仓库里，定位不到 %s", FileName)
 	}
 	if _, err := os.Stat(path); err == nil {
 		return path, false, nil
@@ -185,7 +186,7 @@ func Ensure(startDir string) (path string, created bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", false, err
 	}
-	if err := os.WriteFile(path, []byte(defaultFile), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(i18n.T(defaultFile)), 0o644); err != nil {
 		return "", false, err
 	}
 	return path, true, nil
@@ -249,7 +250,7 @@ func stripComments(src []byte) ([]byte, error) {
 			end := bytes.Index(src[i+2:], []byte("*/"))
 			if end < 0 {
 				line := 1 + bytes.Count(src[:i], []byte("\n"))
-				return nil, fmt.Errorf("第 %d 行: 块注释没有闭合的 */", line)
+				return nil, i18n.E("第 %d 行: 块注释没有闭合的 */", line)
 			}
 			j := i + 2 + end + 2
 			for k := i; k < j; k++ {
