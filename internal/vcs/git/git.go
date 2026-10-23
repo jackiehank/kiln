@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,12 +34,33 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 	return parseLog(out), nil
 }
 
-// Action records one action and returns the new commit's id. The caller is
-// expected to have staged the changes; message is passed as a single argv element
-// so newlines are safe.
-func (r ExecRunner) Action(message string) (string, error) {
-	if _, err := r.run("commit", "-m", message); err != nil {
-		return "", err
+// Action records one action and returns the new commit's id.
+//
+// Empty paths means the whole area's changes: git has no snapshot of its own, so
+// kiln stages everything first. Non-empty paths are staged and committed on their
+// own, leaving anything else that happened to be staged for the next action.
+// --allow-empty keeps an action with nothing behind it legal on both backends, so
+// "empty" means the same thing whichever adapter runs.
+func (r ExecRunner) Action(message string, paths []string) (string, error) {
+	if len(paths) > 0 {
+		if bad, err := r.Unchanged(paths); err != nil {
+			return "", err
+		} else if len(bad) > 0 {
+			return "", fmt.Errorf("没有改动可记录: %s", strings.Join(bad, ", "))
+		}
+		if _, err := r.run(append([]string{"add", "-A", "--"}, paths...)...); err != nil {
+			return "", err
+		}
+		if _, err := r.run(append([]string{"commit", "--allow-empty", "-m", message, "--"}, paths...)...); err != nil {
+			return "", err
+		}
+	} else {
+		if _, err := r.run("add", "-A"); err != nil {
+			return "", err
+		}
+		if _, err := r.run("commit", "--allow-empty", "-m", message); err != nil {
+			return "", err
+		}
 	}
 	// Reading the new id back is a nicety: the action is already recorded, so a
 	// failure here must not turn a successful commit into a reported failure.
@@ -47,6 +69,40 @@ func (r ExecRunner) Action(message string) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// Changes lists the paths the next action would record. The listing is taken at
+// the checkout root so the paths are root-relative regardless of where the
+// caller is standing — the same shape `kiln path` and the commit confirmation
+// print.
+func (r ExecRunner) Changes() ([]string, error) {
+	root, err := r.root()
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.runIn(root, "status", "--porcelain", "-z")
+	if err != nil {
+		return nil, err
+	}
+	return parseStatusZ(out), nil
+}
+
+// Unchanged reports which of paths hold no change relative to HEAD — the check
+// Action runs per path. A path that matches nothing (or is ignored) is reported
+// here rather than committed: git would fail on it, but only after staging the
+// others, and jj would accept it as an empty action.
+func (r ExecRunner) Unchanged(paths []string) ([]string, error) {
+	var bad []string
+	for _, p := range paths {
+		out, err := r.run("status", "--porcelain", "-z", "--", p)
+		if err != nil {
+			return nil, err
+		}
+		if strings.Trim(out, "\x00\r\n") == "" {
+			bad = append(bad, p)
+		}
+	}
+	return bad, nil
 }
 
 // Show returns `git show <id>` verbatim: the commit header (author, date,
@@ -232,6 +288,31 @@ func (r ExecRunner) root() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// parseStatusZ reads `git status --porcelain -z`: NUL-separated records of two
+// status letters, one space, and the path. A rename or copy record carries the
+// original path in the next field, which is skipped — the new path is the one the
+// action records. The result is sorted so the same change set always prints the
+// same inventory.
+func parseStatusZ(out string) []string {
+	fields := strings.Split(out, "\x00")
+	paths := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 {
+			continue
+		}
+		path := f[3:]
+		if f[0] == 'R' || f[0] == 'C' {
+			i++ // the next field is the original path, not a second change
+		}
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // parseWorktrees reads `git worktree list --porcelain`: blank-line separated

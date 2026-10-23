@@ -33,7 +33,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 const usagePrologue = `
 action 词表默认: ask | hypothesize | collect | test | conclude | apply
 worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）
-提交范围: git 后端只提交已暂存的改动（kiln 不碰 index，先 git add）| jj 后端固定整个工作副本（无暂存区，无需 add）
+提交范围: 默认提交当前工作区的全部改动（快照）；--only <paths> 只提交列出的路径（两后端同义；空动作允许）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
 `
 
@@ -43,7 +43,7 @@ path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作�
 show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
-commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）
+commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 `
 
@@ -54,7 +54,7 @@ var retiredCommands = map[string]string{"workspace": "worktree"}
 // usageCommands is the command surface rendered by usageText.
 var usageCommands = [][2]string{
 	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
-	{"kiln commit <issue> <action> [flags]", "用规范信息直接提交"},
+	{"kiln commit <issue> <action> [--only <paths>] [flags]", "用规范信息直接提交（--only 只提交列出的路径）"},
 	{"kiln path <issue>", "重建问题的研究路径（可加 --stat / --shortstat / --json）"},
 	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
@@ -470,7 +470,14 @@ func (e *env) write(args []string, commit bool) int {
 	}
 
 	rels := e.relationsFromFlags(f)
-	warnUnknownFlags(e.errw, f, e.doCommitFlags())
+	allowed := e.doCommitFlags()
+	allowed["only"] = true
+	warnUnknownFlags(e.errw, f, allowed)
+	if !commit && f.has("only") {
+		fmt.Fprintln(e.errw, "do 不接受 --only：它只打印 trailer，不提交；只提交哪些文件是 commit 的事。")
+		return 2
+	}
+	paths := f.list("only")
 	msg := trailer.Format(trailer.Fields{
 		Issue:     issue,
 		Action:    action,
@@ -500,18 +507,42 @@ func (e *env) write(args []string, commit bool) int {
 			return code
 		}
 	}
-	// The action is about to land, and nothing can take it back afterwards. A
-	// backend that allows empty commits — jj does — would record this action with
-	// no change behind it if the caller only thought it edited something; say so
-	// before the commit exists rather than after. The check is the same reading
-	// the isolation hints use, so it costs no extra call, and it must not decide
-	// anything: an empty action is legitimate, so this is a hint, not a refusal.
-	if ws, ok := backend.(vcs.Workspace); ok {
-		if dirty, derr := ws.Dirty(); derr == nil && !dirty {
-			fmt.Fprintln(e.errw, "提示: 当前工作区没有检测到改动，这次动作在 jj 后端会记成空提交（git 后端会直接提交失败）。")
+	// The action is about to land, and nothing can take it back afterwards. Two
+	// readings come first so the caller sees what is about to happen while it can
+	// still stop it: every --only path has a change behind it (jj would otherwise
+	// accept a fileset that matches nothing and record an empty action in silence),
+	// and the inventory of what will be recorded is announced on stdout, where a
+	// reader — human or agent — actually sees it.
+	files := paths
+	filesKnown := true
+	if len(paths) > 0 {
+		bad, uerr := backend.Unchanged(paths)
+		if uerr != nil {
+			fmt.Fprintf(e.errw, "检查路径失败: %v\n", uerr)
+			return 1
+		}
+		if len(bad) > 0 {
+			fmt.Fprintf(e.errw, "以下路径没有改动可记录: %s\n", strings.Join(bad, ", "))
+			return 1
+		}
+	} else if got, cerr := backend.Changes(); cerr == nil {
+		files = got
+	} else {
+		filesKnown = false
+	}
+	if len(files) > 0 {
+		fmt.Fprintf(e.out, "将提交 %d 个文件: %s\n", len(files), inventory(files))
+	} else if len(paths) == 0 && filesKnown {
+		// An empty action is legitimate, so this is a hint, not a refusal: say it
+		// before the commit exists rather than after. The dirty reading is what the
+		// isolation hints already use; a backend without it stays silent.
+		if ws, ok := backend.(vcs.Workspace); ok {
+			if dirty, derr := ws.Dirty(); derr == nil && !dirty {
+				fmt.Fprintln(e.errw, "提示: 当前工作区没有检测到改动，这次动作会记成空提交。")
+			}
 		}
 	}
-	id, err := backend.Action(msg)
+	id, err := backend.Action(msg, paths)
 	if err != nil {
 		fmt.Fprintf(e.errw, "提交失败: %v\n", err)
 		return 1
@@ -526,6 +557,18 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprintf(e.out, "\n已提交 %s · %s · %s\n", shortID(id), action, issue)
 	}
 	return 0
+}
+
+// inventory renders the file list an action will record: every path when the list
+// is short, the first five and a count when it would drown the confirmation. The
+// count is what carries the information in the long case; the paths are the
+// paste-ready detail in the common case.
+func inventory(files []string) string {
+	const shown = 5
+	if len(files) <= shown {
+		return strings.Join(files, ", ")
+	}
+	return strings.Join(files[:shown], ", ") + fmt.Sprintf(" 等 %d 个", len(files))
 }
 
 // refuseInMain enforces kiln's unified layout: the main checkout is read/merge

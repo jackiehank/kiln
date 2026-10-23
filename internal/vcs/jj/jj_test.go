@@ -32,6 +32,28 @@ func TestParseLogSkipsEmptyRecords(t *testing.T) {
 
 // `jj workspace list -T` yields name/root records. The "default" workspace is
 // the main checkout; every other one is dedicated and named after its issue.
+// `jj diff --summary` is one status letter and a path per line; Windows renders
+// the separator natively, so the inventory normalizes to slashes and sorts.
+func TestParseSummaryNormalizesAndSorts(t *testing.T) {
+	out := "M a.md\nD b.md\nA dir\\x.md\n"
+	got := parseSummary(out)
+	want := []string{"a.md", "b.md", "dir/x.md"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d paths, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("path %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseSummarySkipsBlankAndMalformedLines(t *testing.T) {
+	if got := parseSummary("\n  \nM\n"); len(got) != 0 {
+		t.Fatalf("got %v, want no paths", got)
+	}
+}
+
 func TestParseWorkspacesReadsNameAndRoot(t *testing.T) {
 	out := "default\x1fC:/w/repo\x1e" +
 		"cli-necessity\x1fC:/w/repo--cli-necessity\x1e"

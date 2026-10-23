@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -44,8 +45,25 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 // is no staging area: the working-copy change is finalized as a commit carrying
 // the message. `jj commit` also starts a fresh working-copy commit, so the action
 // just recorded is `@-` — the commit Log's revset leaves out for that same reason.
-func (r ExecRunner) Action(message string) (string, error) {
-	if _, err := r.run("commit", "--message", message); err != nil {
+//
+// Empty paths records the whole working-copy change (the default snapshot);
+// non-empty paths records only their changes, via jj's native FILESETS. Each path
+// is checked first: jj would otherwise accept a fileset that matches nothing and
+// record an empty action in silence.
+func (r ExecRunner) Action(message string, paths []string) (string, error) {
+	if len(paths) > 0 {
+		if bad, err := r.Unchanged(paths); err != nil {
+			return "", err
+		} else if len(bad) > 0 {
+			return "", fmt.Errorf("没有改动可记录: %s", strings.Join(bad, ", "))
+		}
+	}
+	args := []string{"commit", "--message", message}
+	if len(paths) > 0 {
+		args = append(args, "--")
+		args = append(args, paths...)
+	}
+	if _, err := r.run(args...); err != nil {
 		return "", err
 	}
 	// Reading the new id back is a nicety: the action is already recorded, so a
@@ -55,6 +73,35 @@ func (r ExecRunner) Action(message string) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// Changes lists the paths the next action would record, from `jj diff --summary`.
+// jj renders OS-native separators, so the listing is normalized to slashes: the
+// commit confirmation and `--only` paths are the same surface, and it should not
+// change shape with the platform.
+func (r ExecRunner) Changes() ([]string, error) {
+	out, err := r.run("diff", "--summary")
+	if err != nil {
+		return nil, err
+	}
+	return parseSummary(out), nil
+}
+
+// Unchanged reports which of paths hold no change in the working copy. On this
+// backend the check is load-bearing, not defensive: `jj commit <fileset>` matches
+// nothing without complaint and still records the action.
+func (r ExecRunner) Unchanged(paths []string) ([]string, error) {
+	var bad []string
+	for _, p := range paths {
+		out, err := r.run("diff", "--summary", "--", p)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(out) == "" {
+			bad = append(bad, p)
+		}
+	}
+	return bad, nil
 }
 
 // Show returns `jj show <id>` verbatim: the change header, message and diff, as
@@ -209,6 +256,29 @@ func (r ExecRunner) workspaceRoot() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// parseSummary reads `jj diff --summary`: one line per changed path, led by a
+// status letter and a space. A rename or copy line carries the pair in braces,
+// which is kept whole — it is a display inventory, and the new name is inside it.
+// Paths are normalized to slashes and sorted so the inventory is deterministic.
+func parseSummary(out string) []string {
+	paths := make([]string, 0, 8)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		_, path, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		if path = strings.TrimSpace(path); path != "" {
+			paths = append(paths, filepath.ToSlash(path))
+		}
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // parseWorkspaces splits the workspace-list template output into areas. Each

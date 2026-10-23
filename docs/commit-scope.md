@@ -233,3 +233,26 @@ echo one > a.md; git add -A; git commit -m "kiln-like: a"
 
 
 
+
+## apply
+
+实现落地（2026-10-23），两后端语义一致：
+
+- **接口**（`internal/vcs/vcs.go`）：`Repo.Action(message, paths)` 带路径；新增 `Repo.Changes() []string`（动作将收的路径清单）与 `Repo.Unchanged(paths) []string`（没有改动的路径）。路径校验放在适配器里：jj 的 `commit <fileset>` 匹配不到也会成功并记空动作，这一步是防静默的关键。
+- **git 适配器**（`internal/vcs/git/git.go`）：空 paths → `git add -A` + `git commit --allow-empty -m`；有 paths → `git add -A -- <paths>` + `git commit --allow-empty -m -- <paths>`（只提交这些路径，其余暂存/未暂存改动原地不动）。`Changes` 用 `status --porcelain -z`（root 相对、排序，rename 取新名）；`Unchanged` 逐路径 `status --porcelain -z -- <path>` 判空。
+- **jj 适配器**（`internal/vcs/jj/jj.go`）：空 paths → `jj commit --message`；有 paths → `jj commit --message … -- <paths>`（原生 fileset）；`Changes` 用 `jj diff --summary`（Windows 反斜杠归一成 `/`、排序）；`Unchanged` 逐路径 `jj diff --summary -- <path>` 判空。
+- **CLI**（`internal/cli/cli.go`）：`commit` 收 `--only <paths>`（逗号分隔或重复给）；`do` 收即 exit 2（它只打印 trailer）。提交前顺序固定：路径校验（无改动 → exit 1，stderr 列出路径，stdout 0 字节）→ stdout 打 `将提交 N 个文件: …`（超过 5 个截断为 `等 N 个`）→ 提交。默认快照沿用 stderr 空动作提示，措辞统一为「会记成空提交」。
+- **测试**：git 适配器 5 条（空快照落库 / `--only` 只收列出路径 / 坏路径拒绝且不落库 / 全量 Changes 收 M·D·A / `-z` rename 解析）；jj `parseSummary` 2 条（归一与排序、坏行跳过）；CLI 4 条（`--only` 传参与 stdout 清单、`do` 拒收、坏路径 exit 1 且 stdout 空、长清单截断）。既有空提交提示用例保持原行为。
+
+冒烟（新二进制，两个临时仓）：
+
+- git 仓：改 `a.md` + 新增 `b.md` → `commit … --only a.md` 只收 `a.md`，`b.md` 留在工作区；再快照收 `b.md`；`--only nope.md` exit 1；`do … --only a.md` exit 2。
+- jj 仓：只收 `a.md` 后 `M b.md` / `A c.md` 留存；快照收两个文件；坏路径 exit 1；空动作给提示并成功落库。
+- `gofmt` / `go vet` / `go test ./...` 全过。
+
+边界（留档）：
+
+- git 的 `--only` 会把列出的路径 stage 进 index——这是明确的副作用，失败不自动回滚。
+- `--only` 的路径相对**当前工作目录**解析。
+- 重命名在 git 清单里显示新路径，jj 显示 `{old => new}`——清单只用于人类阅读，不参与提交判定。
+- 空动作在两后端都合法；"动作里该有什么"仍由 `check` 与工作流纪律负责，不由 VCS 强制。

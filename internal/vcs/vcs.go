@@ -57,11 +57,24 @@ type Repo interface {
 	// ShowStat returns the diffstat for one commit; short selects the one-line
 	// summary form.
 	ShowStat(id string, short bool) (string, error)
-	// Action records one kiln action carrying the given commit message.
 	// Action records one action as a commit carrying message, and returns the new
 	// commit's id in the same shape Log reports — so a caller can name what it just
 	// wrote instead of sending the reader off to look it up.
-	Action(message string) (string, error)
+	//
+	// paths scopes what the action records: empty means the whole area's changes —
+	// the default, backend-neutral snapshot — and non-empty means only those paths.
+	// Every listed path must carry a change, or the action is refused before
+	// anything is staged: jj records an empty action silently, so the check is what
+	// keeps "a path that changed nothing" from landing as a commit.
+	Action(message string, paths []string) (string, error)
+	// Changes lists the paths the next action would record, relative to the working
+	// copy root and sorted. It is the inventory a caller prints so the reader can see
+	// what an action contains before it lands.
+	Changes() ([]string, error)
+	// Unchanged returns the subset of paths that carry no change to record. It is
+	// the check Action runs, exposed so a caller can name a bad path before anything
+	// is staged or committed.
+	Unchanged(paths []string) ([]string, error)
 }
 
 // BranchPrefix namespaces the branches of kiln's dedicated areas in git.

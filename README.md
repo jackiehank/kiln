@@ -72,14 +72,14 @@ git commit -m "$(kiln do session-expiry test --title '压测复现')"
 jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 ```
 
-> 提交前要自己暂存改动：**git 后端需要 `git add`**（kiln 不碰暂存区）；**jj 后端不需要**——它没有暂存区，`kiln commit` 直接固定**整个工作副本**。
+> `kiln commit` 自己处理暂存：默认收**整个工作区的改动**（快照，git 侧由 kiln 全量 `add`）；只想提交列出的路径时用 `--only <paths>`（两后端同义：git 只 add 这些路径，jj 用原生 fileset）。提交前 stdout 会打一行 `将提交 N 个文件: …`；空动作允许，只给一条 stderr 提示。
 
 ## 命令一览
 
 | 命令 | 作用 |
 | --- | --- |
 | `kiln do <issue> <action> [flags]` | 生成规范提交信息（**只打印，不提交**） |
-| `kiln commit <issue> <action> [flags]` | 用规范信息直接提交，并在末尾报一行 `已提交 <hash> · <action> · <issue>` |
+| `kiln commit <issue> <action> [--only <paths>] [flags]` | 用规范信息直接提交；默认提交整个工作区（快照），`--only` 只提交列出的路径；stdout 先报 `将提交 N 个文件: …`，末尾报 `已提交 <hash> · <action> · <issue>` |
 | `kiln path <issue>` | 重建该 issue 的研究路径；`--stat` 逐动作附文件统计、`--shortstat` 每动作一行总计 |
 | `kiln show <issue> [n\|action]` | 展开某个动作的完整变更（默认最后一个；`n` 是 `path` 里的序号，**也可给动作名**——取该动作**最后一次**，有多个会在 stderr 提示，没有则列出可控序号）；`--stat` 只给文件统计 |
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
@@ -93,7 +93,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln help` / `kiln -h` | 帮助 |
 
 `do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag --derived-from --spawns --relates-to --blocks --supersedes`
-另：`commit --force`（一次性豁免，见「工作区模式」）。
+另：`commit --force`（一次性豁免，见「工作区模式」）、`commit --only <paths>`（只提交列出的路径，逗号分隔或重复给）。
 `status` / `list` / `check` 的 flags：`--json`（机器可读输出，见「机器可读输出」）。
 
 ## 动作词表
@@ -201,7 +201,8 @@ kiln 有可插拔的后端层，**git 与 jj 都能用**。`vcs: auto`（默认�
 
 | | git | jj |
 | --- | --- | --- |
-| 提交动作 | 需要你先 `git add`（kiln 不碰暂存区） | **不需要**——`kiln commit` 固定整个工作副本 |
+| 提交动作 | 默认由 kiln 全量 `add` 后提交快照；`--only` 只 add 列出的路径 | 默认固定整个工作副本；`--only` 用原生 fileset |
+| 空动作 | 允许（`--allow-empty`） | 允许 |
 | 动作历史 | 只算**已提交**的 | 排除工作副本提交（`@`），同样是"只算已提交的" |
 | 隔离单位的后端叫法 | `worktree` | `workspace`（kiln 的命令面对两者都叫 `kiln worktree`） |
 | 专用区判定 | 当前检出是不是 linked worktree | 当前工作区是不是非 `default` |
@@ -263,7 +264,7 @@ kiln check --json
 kiln 的模型天生适合 agent：
 
 - **约定只一条**：做研究动作时用 `kiln commit`（或 `git commit -m "$(kiln do …)"`）。告诉 agent 这一句就够了。
-- **先开单再落代码**：`ask` 动作里只放 issue doc，提交后再写实现。jj 后端的 `kiln commit` 提交的是**整个工作副本**——反过来做（先写代码后开单），就得把代码临时挪开才能得到一份只含 doc 的开单提交；按顺序做则什么额外能力都不需要。见 [docs/commit-order.md](docs/commit-order.md)。
+- **先开单再落代码**：`ask` 动作里只放 issue doc，提交后再写实现。按顺序做不需要任何额外能力；确实要反过来做时，用 `kiln commit … --only docs/<issue>.md` 只提交 doc（两后端一致），不必把代码挪开。见 [docs/commit-order.md](docs/commit-order.md)、[docs/commit-scope.md](docs/commit-scope.md)。
 - **结构化输出**：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 加 `--json` 后都是**真正的**机器可读格式，stdout 只放一个 JSON 文档；`graph` 另有 `--mermaid`（流程图文本）。见「机器可读输出」。
 - **诚实**：`check` 会把"缺终点动作""父 issue 不存在"这类结构问题直接指出来（`--json` 下给的是 rule 码，不是中文）。
 - **隔离**：并行 agent 用 `kiln worktree new` 各占一个区，从**结构上**消除互相污染。

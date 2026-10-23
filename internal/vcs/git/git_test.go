@@ -10,21 +10,103 @@ import (
 	"kiln/internal/vcs"
 )
 
-// A failed commit must report *why*, and git puts several reasons on stdout
-// ("nothing staged" above all). Reporting the first line would answer "On branch
-// master" to the question "why did this fail?" — so the contract is the last
-// line, which is where git puts the conclusion and the hint.
-func TestActionReportsGitsReason(t *testing.T) {
-	dir := newRepo(t) // clean tree: nothing staged
-	_, err := ExecRunner{Dir: dir}.Action("issue: x\naction: ask")
+// "Nothing to record" is no longer a failure: the unified semantics make an empty
+// action legal on both backends, so kiln stages the whole area and lets git record
+// an empty commit. Reporting git's advice text was the old contract.
+func TestActionRecordsAnEmptySnapshot(t *testing.T) {
+	dir := newRepo(t) // clean tree: no changes at all
+	id, err := ExecRunner{Dir: dir}.Action("issue: x\naction: ask", nil)
+	if err != nil {
+		t.Fatalf("an empty action must land: %v", err)
+	}
+	if id == "" {
+		t.Fatal("Action must return the id it wrote")
+	}
+	out, err := ExecRunner{Dir: dir}.run("log", "-1", "--format=%s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) != "issue: x action: ask" {
+		t.Fatalf("last commit subject = %q", out)
+	}
+}
+
+// A path-scoped action leaves everything else in the area: that is the one
+// difference from the default snapshot, and the reason --only exists.
+func TestActionWithPathsLeavesTheRestInTheArea(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "a.txt", "changed")
+	write(t, dir, "b.txt", "new")
+	r := ExecRunner{Dir: dir}
+	if _, err := r.Action("only a", []string{"a.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := r.Changes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0] != "b.txt" {
+		t.Fatalf("changes after a path-scoped action = %v, want [b.txt]", changes)
+	}
+	out, err := r.run("show", "--stat", "--format=%s", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "a.txt") || strings.Contains(out, "b.txt") {
+		t.Fatalf("the action must carry a.txt alone:\n%s", out)
+	}
+}
+
+// A listed path with no change is refused before anything is committed. jj would
+// report success and record an empty action, so the check is the same on both
+// backends; on git it also keeps a no-op path from landing as a silent commit.
+func TestActionRefusesAPathWithNoChange(t *testing.T) {
+	dir := newRepo(t)
+	_, err := ExecRunner{Dir: dir}.Action("x", []string{"a.txt"})
 	if err == nil {
-		t.Fatal("committing with nothing staged must fail")
+		t.Fatal("a path with no change must be refused")
 	}
-	if !strings.Contains(err.Error(), "nothing to commit") {
-		t.Fatalf("error must carry git's reason, got %q", err.Error())
+	if !strings.Contains(err.Error(), "没有改动可记录") {
+		t.Fatalf("error = %q", err.Error())
 	}
-	if strings.Contains(err.Error(), "On branch") {
-		t.Fatalf("error must not report the context line, got %q", err.Error())
+	out, err := ExecRunner{Dir: dir}.run("log", "--format=%s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "x") {
+		t.Fatalf("the refused action must not land:\n%s", out)
+	}
+}
+
+// The inventory is what the caller prints before committing: modified, deleted
+// and untracked paths, root-relative, sorted.
+func TestChangesReportsTheWholeArea(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "b.txt", "b")
+	gitRun(t, dir, "add", "b.txt")
+	commit(t, dir, "base")
+	write(t, dir, "a.txt", "changed")
+	write(t, dir, "c.txt", "new")
+	if err := os.Remove(filepath.Join(dir, "b.txt")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ExecRunner{Dir: dir}.Changes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a.txt", "b.txt", "c.txt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("changes = %v, want %v", got, want)
+	}
+}
+
+// The status parser reads NUL-separated porcelain: a rename record carries the
+// original path in a second field, which must not be counted as a change.
+func TestParseStatusZSkipsRenameOrigin(t *testing.T) {
+	got := parseStatusZ("R  new.txt\x00old.txt\x00 M a.txt\x00 A c.txt\x00")
+	want := []string{"a.txt", "c.txt", "new.txt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("paths = %v, want %v", got, want)
 	}
 }
 

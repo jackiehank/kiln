@@ -371,10 +371,20 @@ type fakeRunner struct {
 	show    map[string]string
 	stat    map[string]string
 	short   map[string]string
+	changes []string // what Changes reports; nil = nothing to record
+	bad     []string // what Unchanged reports; nil = every path has a change
+	action  func(msg string, paths []string) (string, error)
 }
 
-func (f fakeRunner) Log() ([]vcs.Commit, error)    { return f.commits, nil }
-func (f fakeRunner) Action(string) (string, error) { return fakeCommitID, nil }
+func (f fakeRunner) Log() ([]vcs.Commit, error) { return f.commits, nil }
+func (f fakeRunner) Action(msg string, paths []string) (string, error) {
+	if f.action != nil {
+		return f.action(msg, paths)
+	}
+	return fakeCommitID, nil
+}
+func (f fakeRunner) Changes() ([]string, error)           { return f.changes, nil }
+func (f fakeRunner) Unchanged([]string) ([]string, error) { return f.bad, nil }
 
 // fakeCommitID is what the fake backends report as the commit they just wrote; it
 // is long enough to exercise the short form the confirmation prints.
@@ -928,6 +938,95 @@ func TestCommitStaysQuietWhenTheAreaIsDirty(t *testing.T) {
 	}
 	if strings.Contains(errb.String(), "没有检测到改动") {
 		t.Fatalf("a dirty area carries work, so no hint belongs here:\n%s", errb.String())
+	}
+}
+
+// --only scopes the action to the listed paths, and the inventory on stdout names
+// them before the commit exists. Both halves are what an agent reads to decide
+// whether the commit it asked for is the commit it is about to get.
+func TestCommitOnlyRecordsTheListedPaths(t *testing.T) {
+	var out, errb bytes.Buffer
+	var gotPaths []string
+	fake := demoRunner()
+	fake.action = func(msg string, paths []string) (string, error) {
+		gotPaths = paths
+		return fakeCommitID, nil
+	}
+	e := &env{
+		actions:  model.DefaultActionSet(),
+		repo:     workspaceRunner{fakeRunner: fake, dedicated: true, dirty: true},
+		worktree: config.WorktreeOn,
+		out:      &out,
+		errw:     &errb,
+	}
+	if code := e.write([]string{"demo", "collect", "--only", "docs/a.md,docs/b.md"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if got := strings.Join(gotPaths, ","); got != "docs/a.md,docs/b.md" {
+		t.Fatalf("Action paths = %q, want the listed two", got)
+	}
+	if !strings.Contains(out.String(), "将提交 2 个文件: docs/a.md, docs/b.md") {
+		t.Fatalf("stdout must inventory the listed paths:\n%s", out.String())
+	}
+}
+
+// `do` only prints the trailer; scoping a commit is not part of that command, so
+// --only is a usage error rather than a silently ignored flag.
+func TestDoRejectsOnly(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect", "--only", "a.md"}, false); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "不接受 --only") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("a rejected do must print nothing, got %q", out.String())
+	}
+}
+
+// A listed path with nothing behind it is refused before the commit: exit 1, the
+// path named on stderr, and no trailer on stdout — nothing was recorded.
+func TestCommitRefusesAPathWithoutChange(t *testing.T) {
+	var out, errb bytes.Buffer
+	fake := demoRunner()
+	fake.bad = []string{"ghost.md"}
+	e := &env{
+		actions:  model.DefaultActionSet(),
+		repo:     workspaceRunner{fakeRunner: fake, dedicated: true, dirty: true},
+		worktree: config.WorktreeOn,
+		out:      &out,
+		errw:     &errb,
+	}
+	if code := e.write([]string{"demo", "collect", "--only", "ghost.md"}, true); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "以下路径没有改动") || !strings.Contains(errb.String(), "ghost.md") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("nothing was committed, yet stdout = %q", out.String())
+	}
+}
+
+// The default snapshot inventories the whole area, and a long list is capped: the
+// count is the load-bearing part, the first five the paste-ready detail.
+func TestCommitInventoryCapsLongLists(t *testing.T) {
+	var out, errb bytes.Buffer
+	fake := demoRunner()
+	fake.changes = []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"}
+	e := &env{
+		actions:  model.DefaultActionSet(),
+		repo:     workspaceRunner{fakeRunner: fake, dedicated: true, dirty: true},
+		worktree: config.WorktreeOn,
+		out:      &out,
+		errw:     &errb,
+	}
+	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "将提交 6 个文件: a.md, b.md, c.md, d.md, e.md 等 6 个") {
+		t.Fatalf("stdout must cap the inventory:\n%s", out.String())
 	}
 }
 
