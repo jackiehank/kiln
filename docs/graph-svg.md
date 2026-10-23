@@ -72,3 +72,13 @@ magick -density 110 g.svg g.png # 已验证，420ms
 ```
 
 实现上确定下来的几点（进 apply 时照此做）：分层用最长路径松弛（有环时迭代上限 = 节点数）；列内按 id 排序；长标签截断到 30 字符 + `…`；有向边带箭头 marker、对称边虚线；按 state 给节点上浅色底（终态浅绿）；SVG 里不出现 `script`、外链与字体下载。
+
+## collect（补，2026-10-23）
+
+上表"无头浏览器能绕过沙箱 ❌"需要更正：**沙箱内**确实起不来（Chromium 无法创建 profile 锁 / `ProcessSingleton`，`exit 13`），但**沙箱外**用系统 Edge + Playwright 完全可用——根因是 DSH 文件沙箱，不是浏览器或安装。已把这条基础能力单独做成 issue `browser-shot`（`facf13d`/`15a0d51`/`f00563e`），工具在 `tools/browser-shot/`。
+
+因此本 issue 的路径选择不变、但更稳了：
+
+- **产品出口仍是 `--svg`**：零依赖、用户拿到就能开，不要求本机有浏览器；
+- 浏览器截图是 agent 侧的自查/调试手段（`magick` 管线之外的第二条路），现在也能直接渲染 `kiln graph --mermaid` 的预览页。
+
