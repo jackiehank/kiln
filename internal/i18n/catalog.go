@@ -94,9 +94,13 @@ var enCatalog = map[string]string{
 	"flag --%s 只能给一次（当前给了 %d 次）\n":                                         "flag --%s may be given only once (got %d)\n",
 	"多余的参数: %s\n":                                                          "unexpected argument: %s\n",
 	"用法: %s\n":                                                             "usage: %s\n",
+	"用法:\n":                                                                "usage:\n",
 	"--status 只接受 open 或 done（当前: %s）\n":                                   "--status only accepts open or done (got: %s)\n",
+	"--tag 只接受一个标签（当前: %q）；多个标签暂不支持\n":                                     "--tag takes one tag (got: %q); several tags are not supported yet\n",
 	"--search 需要一个非空查询串":                                                   "--search needs a non-empty query",
-	"没有匹配 %q 的 issue\n":                                                    "no issues match %q\n",
+	"没有匹配 %q 的问题\n":                                                        "no issues match %q\n",
+	"没有匹配 %s 的问题\n":                                                        "no issues match %s\n",
+	"仓库里还没有任何动作（用 kiln do <issue> ask 开一条）\n":                              "no actions in this repository yet (open one with kiln do <issue> ask)\n",
 	"批量取路径只支持 --json（--all 或多条 issue）":                                     "batch paths are JSON-only (--all or several issues)",
 	"重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）": "rebuild the issue's research path (--all reads the whole repository at once; add --stat / --shortstat / --json)",
 	"未找到问题: %s\n":                                 "no such issue: %s\n",
@@ -215,6 +219,7 @@ show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可�
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 list 的 --status:  open（未收尾）| done（末条动作是终点动作）
+list 的 --tag:  单个标签，不切逗号（多标签过滤暂不支持）
 list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感（搜 id / 当前标题 / 动作 subject）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
@@ -226,6 +231,7 @@ show flags:  --stat（the file summary for that action only）  --json（machine
 worktree list flags:  --json（machine-readable output）
 status / list / check flags:  --json（machine-readable output: stdout carries one JSON document only）
 extra list flag:  --status:  open（still in progress）| done（the last action is terminal）
+extra list flag:  --tag:  one literal tag, commas are not split (multi-tag filtering is not supported yet)
 extra list flag:  --search:  whitespace-split terms, AND, literal, case-insensitive (id / title / action subject)
 extra commit flag:  --force（**required** to commit on main while worktree=on, as a one-off waiver）  --only <paths>（commit just the listed paths）
 extra worktree remove flag:  --force（remove even with an unmerged branch / a worktree that still has changes）

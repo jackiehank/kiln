@@ -46,6 +46,7 @@ show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可�
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 list 的 --status:  open（未收尾）| done（末条动作是终点动作）
+list 的 --tag:  单个标签，不切逗号（多标签过滤暂不支持）
 list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感（搜 id / 当前标题 / 动作 subject）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
@@ -196,19 +197,22 @@ func flagLinesFor(cmd string) string {
 	return b.String()
 }
 
-// lineNamesCommand reports whether a usageOtherFlags line documents cmd.
+// lineNamesCommand reports whether a usageOtherFlags line documents cmd. The
+// English block prefixes some lines with "extra " ("extra list flag: …"), and
+// the group line names several commands ("status / list / check … flags:").
 func lineNamesCommand(line, cmd string) bool {
-	fields := strings.Fields(line)
+	trimmed := strings.TrimPrefix(strings.TrimSpace(line), "extra ")
+	fields := strings.Fields(trimmed)
 	if len(fields) == 0 {
 		return false
 	}
 	if fields[0] == "--lang" {
 		return true
 	}
-	// Group lines name several commands: "status / list / check 的 flags: …".
-	if i := strings.Index(line, " flags"); i > 0 {
-		for _, name := range strings.Split(line[:i], " / ") {
-			if strings.TrimSpace(name) == cmd {
+	if i := strings.Index(trimmed, " flags"); i > 0 {
+		for _, name := range strings.Split(trimmed[:i], " / ") {
+			name = strings.TrimSuffix(strings.TrimSpace(name), " 的")
+			if name == cmd {
 				return true
 			}
 		}
@@ -2023,6 +2027,20 @@ func (e *env) list(args []string) int {
 		fmt.Fprint(e.errw, i18n.T("--status 只接受 open 或 done（当前: %s）\n", status))
 		return 2
 	}
+	// The action vocabulary is the same closed set `do` validates against, so a
+	// typo here is a refusal, not an empty result.
+	action := strings.ToLower(strings.TrimSpace(f.get("action")))
+	if action != "" && !e.actions.IsValid(action) {
+		fmt.Fprint(e.errw, i18n.T("非法 action: %q（可选: %s）\n", action, strings.Join(e.actions.Names(), ", ")))
+		return 2
+	}
+	// A tag is one literal value here; `do` splits commas into several tags, and
+	// silently treating "a,b" as one tag returns zero rows that look like a miss.
+	tag := f.get("tag")
+	if strings.Contains(tag, ",") {
+		fmt.Fprint(e.errw, i18n.T("--tag 只接受一个标签（当前: %q）；多个标签暂不支持\n", tag))
+		return 2
+	}
 	query := f.get("search")
 	terms := strings.Fields(query)
 	if f.has("search") && len(terms) == 0 {
@@ -2035,8 +2053,8 @@ func (e *env) list(args []string) int {
 	}
 	opts := engine.FilterOptions{
 		Domain: f.get("domain"),
-		Tag:    f.get("tag"),
-		Action: f.get("action"),
+		Tag:    tag,
+		Action: action,
 	}
 	ids := engine.Filter(repo, opts)
 	if status != "" {
@@ -2045,11 +2063,18 @@ func (e *env) list(args []string) int {
 	if len(terms) > 0 {
 		ids = e.filterSearch(repo, ids, terms)
 	}
-	// A search with no hits is a valid answer (exit 0), but silence reads like a
-	// broken command. The hint goes to stderr in both views, so a JSON consumer
-	// still gets exactly one document on stdout.
-	if len(terms) > 0 && len(ids) == 0 {
-		fmt.Fprint(e.errw, i18n.T("没有匹配 %q 的 issue\n", query))
+	// An empty result is a valid answer (exit 0), but silence reads like a broken
+	// command. The hint goes to stderr in both views, so a JSON consumer still
+	// gets exactly one document on stdout.
+	if len(ids) == 0 {
+		switch {
+		case len(terms) > 0:
+			fmt.Fprint(e.errw, i18n.T("没有匹配 %q 的问题\n", query))
+		case len(repo.Issues) == 0:
+			fmt.Fprintln(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask 开一条）"))
+		default:
+			fmt.Fprint(e.errw, i18n.T("没有匹配 %s 的问题\n", filterSummary(opts, status)))
+		}
 	}
 	if f.has("json") {
 		doc := listDoc{
@@ -2085,6 +2110,25 @@ func (e *env) list(args []string) int {
 		fmt.Fprintf(e.out, "%s %s %s\n", pad(p.ID, 30), pad(stateWord(p), 12), tagsSuffix(p))
 	}
 	return 0
+}
+
+// filterSummary names the conditions actually in force, in the help's order, so
+// an empty result says what matched nothing instead of nothing at all.
+func filterSummary(o engine.FilterOptions, status string) string {
+	var parts []string
+	if o.Domain != "" {
+		parts = append(parts, "domain="+o.Domain)
+	}
+	if o.Tag != "" {
+		parts = append(parts, "tag="+o.Tag)
+	}
+	if o.Action != "" {
+		parts = append(parts, "action="+o.Action)
+	}
+	if status != "" {
+		parts = append(parts, "status="+status)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (e *env) graph(args []string) int {

@@ -2154,7 +2154,7 @@ func TestListSearchNoMatchIsNotAnError(t *testing.T) {
 	if !strings.Contains(out.String(), `"count": 0`) || !strings.Contains(out.String(), `"issues": []`) {
 		t.Fatalf("no-match JSON = %s", out.String())
 	}
-	if !strings.Contains(errb.String(), `没有匹配 "zzz" 的 issue`) {
+	if !strings.Contains(errb.String(), `没有匹配 "zzz" 的问题`) {
 		t.Fatalf("json no-match must hint on stderr, got %q", errb.String())
 	}
 
@@ -2166,7 +2166,7 @@ func TestListSearchNoMatchIsNotAnError(t *testing.T) {
 	if out.Len() != 0 {
 		t.Fatalf("no-match text wrote stdout: %q", out.String())
 	}
-	if !strings.Contains(errb.String(), `没有匹配 "zzz" 的 issue`) {
+	if !strings.Contains(errb.String(), `没有匹配 "zzz" 的问题`) {
 		t.Fatalf("text no-match must hint, got %q", errb.String())
 	}
 }
@@ -3121,5 +3121,110 @@ func TestCommitAcceptsForceBeforeThePositionals(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "issue: demo") {
 		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+// `--tag` takes one literal value here; a comma used to match nothing in
+// silence, which reads exactly like "the tag does not exist".
+func TestListRejectsACommaTag(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--tag=json,path"}); code != 2 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a rejected tag wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "只接受一个标签") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// The action filter is the same closed vocabulary `do` validates against, and
+// the value is canonicalised the same way.
+func TestListValidatesTheActionFilter(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--action=nope"}); code != 2 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "非法 action") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--action=ASK"}); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.Count == 0 {
+		t.Fatalf("count = %d, err = %v", doc.Count, err)
+	}
+	if doc.Filter.Action != "ask" {
+		t.Fatalf("filter.action = %q, want ask", doc.Filter.Action)
+	}
+}
+
+// An empty result says which conditions matched nothing, in both views, while
+// stdout stays a clean document (or empty).
+func TestListEmptyResultNamesTheFilters(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--domain=nope"}); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("text empty result wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "没有匹配 domain=nope 的问题") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--domain=nope", "--status=open"}); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.Count != 0 {
+		t.Fatalf("doc = %+v, err = %v", doc, err)
+	}
+	if !strings.Contains(errb.String(), "domain=nope status=open") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// A repository with no actions at all is not a filter miss, and says so.
+func TestListEmptyRepositorySaysSo(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{}, out: &out, errw: &errb}
+	if code := e.list(nil); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "还没有任何动作") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// The English block words some lines differently ("extra list flag:"), so the
+// per-command filter must still find them; otherwise `<cmd> -h` silently falls
+// back to the full help.
+func TestPerCommandHelpWorksInEnglish(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := Run([]string{"--lang=en", "list", "-h"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"kiln list", "--status", "--tag", "--search"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "kiln graph") {
+		t.Fatalf("help must stay on one command:\n%s", got)
+	}
+	if strings.Contains(got, "用法") {
+		t.Fatalf("the English help must not fall back to Chinese:\n%s", got)
 	}
 }

@@ -556,3 +556,44 @@
 ### 下一批
 
 批 C（过滤与空态）：`--tag` 含逗号 → exit 2、`--action` 按词表校验、空结果/空仓给 stderr 提示。
+
+## apply（批 C，2026-10-27）：过滤语义与空态
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/cli/cli.go` | `list`：`--action` 按动作词表校验并统一小写（与 `do` 同一句错误）；`--tag` 含逗号 → exit 2；空结果按三种情形给 stderr 提示（search 命中 0 / 空仓 / 过滤条件），新增 `filterSummary` 列出实际生效的条件；`<cmd> -h` 的英文行过滤修正（`extra list flag:` 前缀、`… 的 flags` 后缀） |
+| `internal/i18n/catalog.go` | 新增 `--tag 只接受一个标签…`、`没有匹配 %s 的问题`、`仓库里还没有任何动作…`；`没有匹配 %q 的 issue` 改为 `…的问题`；新增 `用法:\n`，修掉英文 `<cmd> -h` 回退中文的标题 |
+| `internal/cli/cli_test.go` | 新增 5 个测试（逗号 tag、action 词表与小写归一、空结果条件回显、空仓提示、英文子命令帮助）；search 0 命中断言的措辞同步为“问题” |
+| `README.md` / `README.en.md` | 过滤一行补 `--action` 校验、`--tag` 单标签、空结果提示 |
+
+### 行为对照
+
+| 输入 | 以前 | 现在 |
+| --- | --- | --- |
+| `kiln list --tag="json,path"` | exit 0、0 行、无提示（像“没有这个标签”） | exit 2：`--tag 只接受一个标签（当前: "json,path"）；多个标签暂不支持` |
+| `kiln list --tag=json` | 1 行 | 不变（单标签仍可用） |
+| `kiln list --action=nope` | exit 0、0 行 | exit 2：`非法 action: "nope"（可选: ask, …）` |
+| `kiln list --action=ASK` | 0 行（大小写敏感） | 按 `ask` 过滤，`filter.action` 回显 `"ask"` |
+| `kiln list --domain=nope` | exit 0、0 B / 0 B | exit 0、stdout 0 B、stderr `没有匹配 domain=nope 的问题` |
+| `kiln list --domain=nope --status=done` | 同上静默 | stderr `没有匹配 domain=nope status=done 的问题` |
+| 空仓 `kiln list` | exit 0、0 B / 0 B | stderr `仓库里还没有任何动作（用 kiln do <issue> ask 开一条）` |
+| `kiln list --search=zzz` | `没有匹配 "zzz" 的 issue` | `没有匹配 "zzz" 的问题`（D 批术语规则提前用在这里） |
+| `kiln --lang=en list -h` | 英文块的行用 `extra list flag:`，过滤不到，且标题是“用法:” | 完整英文：`usage:` + 四条 list flag 行 |
+
+### 验收（实测）
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过。
+- 真仓：`--tag=json,path` exit 2；`--tag=json` → 1 行（`path-action-tags`）；`--action=nope` exit 2；`--action=ASK` → 62 行、`filter.action="ask"`；`--domain=nope` → stderr 提示 + stdout 0 B；`--domain=nope --status=done` 提示带两个条件；`--search=zzzz` 提示“问题”；无过滤输出 3,516 B 未变。
+- 空仓：`list` → 0 B stdout + 空仓提示；`list --json` → 49 B 文档 + 同一提示。
+- 英文子命令帮助：`--lang=en list -h` 全英文且含 `--status/--tag/--search` 三条说明。
+
+### 与 hypothesize 的偏差
+
+- **`--search` 的 0 命中措辞在本批就改成“问题”**：否则同一条命令里会出现“问题”与“issue”并存；D 批只剩 graph 邻域、拒绝新建、worktree 关系、帮助说明等词条。
+- **英文子命令帮助的过滤 bug 在本批修**：它是 B 批新功能的缺口，不修就等于 `--lang=en` 下 `<cmd> -h` 悄悄退回全量帮助。
+
+### 下一批
+
+批 D（中文术语统一）：把 prose 位置的 `issue` 改成「问题」，`issue` 只留标识符位置；另外把 graph 的 `没有 issue %q` 统一成 `未找到问题: %s`。
