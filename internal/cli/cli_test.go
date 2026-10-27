@@ -1361,6 +1361,98 @@ func TestCommitRefusesAPathWithoutChange(t *testing.T) {
 	}
 }
 
+// A target outside what this commit records is refused before anything lands: the
+// trailer must describe this change, not a neighbouring one. do applies the same
+// judgement (it only skips the commit).
+func TestWriteRefusesTargetsOutsideTheChange(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	for _, tc := range []struct {
+		name    string
+		changes []string
+		args    []string
+		want    string
+	}{
+		{"missing file", []string{"docs/a.md"}, []string{"demo", "collect", "--title", "T", "--target", "internal/x.go"}, "internal/x.go"},
+		{"one of a list", []string{"docs/a.md"}, []string{"demo", "collect", "--title", "T", "--target", "docs/a.md,internal/x.go"}, "internal/x.go"},
+		{"empty action", nil, []string{"demo", "collect", "--title", "T", "--target", "docs/a.md"}, "docs/a.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{changes: tc.changes}, worktree: config.WorktreeOff, out: &out, errw: &errb}
+			if code := e.write(tc.args, true); code != 1 {
+				t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+			}
+			if out.Len() != 0 {
+				t.Fatalf("a refused commit wrote stdout: %q", out.String())
+			}
+			if !strings.Contains(errb.String(), "以下 target 没有改动可记录") || !strings.Contains(errb.String(), tc.want) {
+				t.Fatalf("stderr = %q", errb.String())
+			}
+		})
+	}
+
+	// do shares the judgement: same refusal, nothing on stdout.
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{changes: []string{"docs/a.md"}}, out: &out, errw: &errb}
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--target", "internal/x.go"}, false); code != 1 {
+		t.Fatalf("do: exit = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a refused do wrote stdout: %q", out.String())
+	}
+}
+
+// A target inside the change set passes; a directory target covers the files under
+// it, and a collapsed untracked "sub/" covers its contents.
+func TestWriteAcceptsTargetsInsideTheChange(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	for _, tc := range []struct {
+		name    string
+		changes []string
+		target  string
+	}{
+		{"exact files", []string{"docs/a.md", "docs/b.md"}, "docs/a.md,docs/b.md"},
+		{"directory", []string{"docs/a.md"}, "docs/"},
+		{"collapsed dir", []string{"sub/"}, "sub/a.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{changes: tc.changes}, worktree: config.WorktreeOff, out: &out, errw: &errb}
+			if code := e.write([]string{"demo", "collect", "--title", "T", "--target", tc.target}, true); code != 0 {
+				t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+			}
+			if !strings.Contains(out.String(), "已提交") {
+				t.Fatalf("stdout = %q", out.String())
+			}
+		})
+	}
+}
+
+// --only narrows what the commit contains, so it narrows what a target may claim.
+func TestOnlyNarrowsTheTargetSet(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{changes: []string{"docs/a.md", "docs/b.md"}}, worktree: config.WorktreeOff, out: &out, errw: &errb}
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--only", "docs/a.md", "--target", "docs/b.md"}, true); code != 1 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "docs/b.md") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// Outside a repository do cannot compare, so it skips the check and still prints.
+func TestDoSkipsTargetCheckOutsideARepository(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), dir: t.TempDir(), out: &out, errw: &errb}
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--target", "internal/x.go"}, false); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: demo") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
 // The default snapshot inventories the whole area, and a long list is capped: the
 // count is the load-bearing part, the first five the paste-ready detail.
 func TestCommitInventoryCapsLongLists(t *testing.T) {

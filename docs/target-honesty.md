@@ -213,3 +213,39 @@
 ### 5. 不做
 
 - 不做 `check` 规则 / `FileLog` / 历史审计；不改 `--target` 格式（仍标量，比较时按逗号切）；不做 rename / glob / 大小写匹配；不改 `path` / `show`。
+
+## apply（2026-10-28）：写侧校验 `--target`——必须 ⊆ 本次提交的文件
+
+### 改了什么
+
+- `write`（`internal/cli/cli.go`）：
+  - `targets := f.list("target")`：按逗号切分、trim、去空。
+  - `commit`：`files` 算好之后（`--only` 时是那组路径，否则全量改动）、打印清单与提交之前，用 `reportMissingTargets` 校验；缺任一 → **exit 1**，不打印、不提交。
+  - `do`：打印消息之前用 `checkTargets` 比对 `Changes()`；仓库外（打开后端失败）或取不到改动时**跳过**，照常打印。
+  - `targetsNotIn`：路径归一化（`\`→`/`、去掉 `./`）；精确匹配；目标作为目录前缀时覆盖其下文件；改动里的 `sub/`（未跟踪目录折叠）覆盖其下文件。
+- 帮助：`--target` 的词条改成 `<文件>[,<文件>]` +「涉及的文件（必须在本次改动里）」。
+- i18n：`以下 target 没有改动可记录: %s`（en 同步）。
+- **不做**：`check` 规则 / `FileLog` / 历史审计（上一节作废）；`--target` 格式不变（仍标量，可写逗号）。
+
+### 契约（实测）
+
+| 场景 | 结果 |
+| --- | --- |
+| 真仓 `do … --target internal/cli/cli.go`（已改） | exit 0 |
+| 真仓 `do … --target README.md`（未改） | exit 1：`以下 target 没有改动可记录: README.md` |
+| 临时仓 `commit … --target b.txt`（未改） | exit 1，commits 1→1（无提交） |
+| 临时仓 `commit … --target a.txt`（已改） | 通过，commits 1→2 |
+| `--only docs/a.md --target docs/b.md` | exit 1（b 不在这次提交） |
+| 空动作 + `--target` | exit 1 |
+| 无 `--target` | 不校验 |
+
+### 测试
+
+- 5 个新测试：拒绝（缺文件 / 列表缺一 / 空动作）、接受（精确 / 目录 / 折叠目录）、`--only` 收窄、`do` 同判、仓库外跳过。
+- `go test ./...` 全绿；`gofmt -l` 无输出。
+
+### 边界
+
+- 只保护 **kiln 自己写的提交**：`git commit -m "$(kiln do …)"` 只在 `do` 时校验，之后 `amend` / `rebase` 绕过。
+- rename 未特判；大小写按精确比较。
+- 历史那 2 条不实**不会被追**——没有审计，符合 `evidence-fluidity`。

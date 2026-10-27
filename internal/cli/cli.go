@@ -86,7 +86,7 @@ func doCommitFlagGroups(rel *model.RelationSet) (meta, relations []flagHelp) {
 	meta = []flagHelp{
 		{"--title", i18n.T("<文本>"), i18n.T("动作标题（必填）")},
 		{"--refs", i18n.T("<条目>[,<条目>]"), i18n.T("引用")},
-		{"--target", i18n.T("<文件>"), i18n.T("涉及的文件（单个）")},
+		{"--target", i18n.T("<文件>[,<文件>]"), i18n.T("涉及的文件（必须在本次改动里）")},
 		{"--scope", i18n.T("<文本>"), i18n.T("范围")},
 		{"--domain", i18n.T("<名字>"), i18n.T("分类")},
 		{"--tag", i18n.T("<标签>[,<标签>]"), i18n.T("标签")},
@@ -682,6 +682,68 @@ func rejectExtra(errw io.Writer, pos []string, max int, usage string) int {
 	return 2
 }
 
+// checkTargets validates --target for `do`: every declared path must be among the
+// working changes the next commit would record. Outside a repository there is
+// nothing to compare against (the backend fails), so the preview still prints.
+func (e *env) checkTargets(targets []string) int {
+	backend, err := e.backend()
+	if err != nil {
+		return 0
+	}
+	files, cerr := backend.Changes()
+	if cerr != nil {
+		return 0
+	}
+	return reportMissingTargets(e.errw, targets, files)
+}
+
+// reportMissingTargets refuses a target the file set does not cover; it names the
+// missing paths and returns 1, mirroring the --only path refusal.
+func reportMissingTargets(errw io.Writer, targets, files []string) int {
+	missing := targetsNotIn(targets, files)
+	if len(missing) == 0 {
+		return 0
+	}
+	fmt.Fprint(errw, i18n.T("以下 target 没有改动可记录: %s\n", strings.Join(missing, ", ")))
+	return 1
+}
+
+// targetsNotIn reports the declared targets the file set does not cover. Paths are
+// slash-normalised and compared exactly; a target covers a directory when it is a
+// prefix of a changed path, and a changed "sub/" (an untracked directory git
+// collapsed) covers the files under it.
+func targetsNotIn(targets, files []string) []string {
+	norm := func(s string) string {
+		s = strings.ReplaceAll(s, "\\", "/")
+		return strings.TrimPrefix(s, "./")
+	}
+	set := make([]string, 0, len(files))
+	for _, f := range files {
+		if f = norm(f); f != "" {
+			set = append(set, f)
+		}
+	}
+	var missing []string
+	for _, t := range targets {
+		t = norm(t)
+		if t == "" {
+			continue
+		}
+		dir := strings.TrimSuffix(t, "/") + "/"
+		covered := false
+		for _, f := range set {
+			if f == t || strings.HasPrefix(f, dir) || (strings.HasSuffix(f, "/") && strings.HasPrefix(t, f)) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			missing = append(missing, t)
+		}
+	}
+	return missing
+}
+
 // dedupeStrings drops repeats while keeping the first occurrence's order.
 func dedupeStrings(in []string) []string {
 	seen := make(map[string]bool, len(in))
@@ -753,6 +815,7 @@ func (e *env) write(args []string, commit bool) int {
 		return 2
 	}
 	paths := f.list("only")
+	targets := f.list("target")
 	msg := trailer.Format(trailer.Fields{
 		Issue:     issue,
 		Action:    action,
@@ -766,6 +829,15 @@ func (e *env) write(args []string, commit bool) int {
 		Unrelate:  f.list("unrelate"),
 	}, e.rel())
 	if !commit {
+		// do is the same judgement without the commit: a target that is not among
+		// the working changes would produce a message commit refuses. Outside a
+		// repository there is nothing to compare against, so the check is skipped
+		// and the preview still prints.
+		if len(targets) > 0 {
+			if code := e.checkTargets(targets); code != 0 {
+				return code
+			}
+		}
 		fmt.Fprintln(e.out, msg)
 		if tip := e.worktreeTip(issue); tip != "" {
 			fmt.Fprintln(e.errw, tip)
@@ -804,6 +876,15 @@ func (e *env) write(args []string, commit bool) int {
 		files = got
 	} else {
 		filesKnown = false
+	}
+	// Every declared target must be part of what this commit records: a target
+	// that is not in the change set is a claim the commit itself disproves. This
+	// is a write-side guard (it runs before anything lands), not a later audit of
+	// history — check stays about the current structure only.
+	if len(targets) > 0 && filesKnown {
+		if code := reportMissingTargets(e.errw, targets, files); code != 0 {
+			return code
+		}
 	}
 	if len(files) > 0 {
 		fmt.Fprint(e.out, i18n.T("将提交 %d 个文件: %s\n", len(files), inventory(files)))
