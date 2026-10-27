@@ -94,3 +94,73 @@
 - **C / D**：会命中 5/34 的漏报（包括最近自己的提交），噪声高，且与「target 是摘要」的语义冲突。
 - 实现落点：`engine.Check` + 文件清单数据源（批取优先，jj 回退逐条）；缺声明不要求。
 - 格式：默认在 `check` 侧切逗号，写入侧不动（`--target` 仍是标量）。
+
+## hypothesize（2026-10-28）：`check` 只核声明侧——新增 `target-unchanged`（warn）
+
+### 0. 主张
+
+选 **B（松）**：`check` 新增一条 warn 规则——**动作声明了 `target:`，但声明里的某路径不在该动作的实际文件清单里**，就报一条诊断。
+
+- 只核**声明侧**（声明了却没改）；「改了却没声明」**不算**。
+- `target` 按**逗号切分**、trim、去空后比较。
+- 空动作 + `target` → 所有声明路径都缺失（warn）。
+- 没写 `target` → 不检查（合格）。
+- 精确路径匹配；不改 `--target` 格式；warn 级，不影响退出码。
+
+### 1. 为什么是这个形状
+
+- collect 数据：34 个声明、32 个子集、**2 个吹牛**、**5 个漏报**；5 个漏报全是「target = doc 重点，同提交还改代码/测试/README」——即 **target 是摘要，不是 manifest**。
+- 若核「漏报」（C/D）：会命中 5/34 的**正常提交**，而且「哪个文件是重点」无法自动判定。
+- 若核「相等」（D）：27/34 通过，7 条 warn，其中 5 条是摘要语义。
+- B：命中 2/34，**全部是异常**。
+- 级别用 warn：与 `terminal-action` 同档；用 error 会让历史存量（2 条）把 `check` 变红，而 target 不实并不阻塞写侧。
+
+### 2. 精确契约
+
+| 输入 | 结果 |
+| --- | --- |
+| 无 `target` | 不查 |
+| `target` 全部在文件清单里 | 通过 |
+| `target` 部分缺失 | warn，**每个缺失路径一条** |
+| 空动作 + `target` | 全部缺失 → warn |
+| `target:` 空值 | 不查（非空才查） |
+| `target: a.go, b.go`（改了两者） | 通过（切分后逐个比较） |
+
+诊断形状：`Rule = target-unchanged`；`Action` = 该动作名；`Ref` = 缺失路径（一条一个）；级别 **warn**，退出码不变。文本形如 `⚠ <issue> target 声明了但未改动: <path>`。
+
+匹配口径：**精确字符串相等**（git 输出仓库相对路径，target 也是；本仓 34 条均如此）。不做 `./` 归一、大小写、目录前缀、glob、rename——遇到真实样本再议。
+
+### 3. 历史存量（要接受的噪声）
+
+- 2 条吹牛会立刻变成 warn：`0597592`（`agent-ux-review`，缺 2 个路径）、`0bf3490`（`qualified-issue-id`，ask 且**空动作**，缺 2 个）。
+- 两条 issue 现在都是 ✓，会变 ⚠ → `check` 的 warn issue 数 **3 → 5**（诊断数 +4）。
+- 接受：它们确实不实，warn 不阻断；若嫌历史噪声，后续可加「只查最近 N 条」——本批不做。
+
+### 4. 实现落点
+
+- `vcs` 新增可选接口 `FileLog { LogFiles(want func(id string) bool) (map[string][]string, error) }`：
+  - git：一次 `git log --name-only --format=%x00%H%x00`，按 `want`（带 `target` 的动作）筛；
+  - jj：逐条 `jj diff --name-only -r <commit_id>`（只查带 `target` 的动作），失败**降级跳过**。
+- `engine.Check` 增加一份可选的文件清单（`nil` = 不做 target 校验）；cli 在 `check` 前调用可选接口，出错就跳过本规则——**不因基础设施失败阻断 check**。
+- 成本：git +1 个进程；jj +N（N = 带 target 的动作数，当前 34）。
+- 测试：engine 单测（通过 / 缺失 / 空动作 / 逗号 / 无 target）；git 侧 `LogFiles` 批格式单测；cli 端到端一条（`check` 出 warn、`check --json` 带 rule 码）。
+- 文档：`machine-readable-output` 的 rule 码表补 `target-unchanged`。
+
+### 5. 检验办法（预测）
+
+- 本仓：`check` 3 warn → 5 warn；新增 4 条诊断（`0597592` 缺 2、`0bf3490` 缺 2），其余 32 条声明零新 warn。
+- 造用例：`target: a.go` 但只改 `b.go` → 1 条 warn；`target: a.go, b.go` 改两者 → 0；`target: ""` → 0；空动作带 target → warn。
+- `check --json` 的 `rules` 文档与码表一致。
+
+### 6. 反方（保留）
+
+1. **历史 warn 变多（3→5）**：接受；两例确实不实，且 warn 不阻断。
+2. **「target 是摘要，为什么只核声明侧」**：摘要的承诺就是「这些文件变了」；没提的不在承诺里。
+3. **`--target` 为什么不改成 list**：改格式（本 issue 非目标）；`check` 侧切逗号即可，写入侧不受影响。
+4. **精确匹配太窄**（前缀 / rename / 大小写）：本仓 34 条全是精确文件路径；先窄后宽。
+5. **jj 逐条慢**：只查带 `target` 的；出错降级跳过。
+6. **规则会鼓励少写 `target`**：缺声明不查，所以少写确实能绕过——但 `target` 是可选元数据，绕过只是丢信息，不是造假。
+
+### 7. 不做
+
+- 不做漏报 / 相等（C/D）；不改 `--target` 格式；不要求缺失声明；不做前缀 / glob / rename / 大小写匹配；不改 `path` / `show`；不加「只查最近 N 条」。
