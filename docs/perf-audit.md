@@ -141,3 +141,93 @@ kiln 没有索引：每条读命令都从提交历史现算模型——一次 `g
 - `status` 的第二次 git 调用可以省掉或改成惰性，但要接受“不列区就不显示 has-worktree/已开数”或缓存。
 - `commit` 的 7 个进程里至少两个可合并（两次 status、toplevel）。
 - 预算（待定）：读命令 ≤ 500 ms @1000 动作（本机实测 0.32 s）；`--stat` 批量后 ≤ 1 s @1000 动作。
+
+## hypothesize（2026-10-27）：`--stat` 改成一次 `git log --stat`
+
+### 主张
+
+**批量 `--stat` / `--shortstat`（`path --all`、`path <id> <id> …`）不再每个动作 spawn 一次 `git show`，改成一次 `git log --stat`（或 `--shortstat`）取回全部动作的 diffstat，按 commit id 查表。**
+
+- 单条 `path <id> --stat` 与 `show --stat` 保持现状（动作少，批量反而多扫历史）；
+- jj 或批量调用失败时，回退到现有的逐动作 `ShowStat`，行为不变；
+- **文本与 JSON 输出逐字节不变**。
+
+### 证据（collect + 本轮补测）
+
+真仓 296 commits / 281 actions：
+
+| 调用 | 实测 |
+| --- | --- |
+| 现状：282 次 `git show --stat` | **14,396 ms** / 283 进程 |
+| `git log --stat --format=…`（一次） | **384 ms** / 1 进程 |
+| `git log --shortstat --format=…`（一次） | **383 ms** / 1 进程 |
+| `git show --stat <296 ids>`（一次） | 613 ms / 1 进程 |
+| 分块 `git show --stat`（256/块，合成仓 4000 空提交） | **4,993 ms** / 16 进程 |
+| `git log --stat`（合成仓 4000 空提交） | **139 ms** / 1 进程 |
+
+**等价性**：对 3 个提交做原始字节比对，`git log --stat` 的块与 `git show --stat` 的块在去掉前后换行后**完全相同**（148 B / 142 B / 113 B 三例）。`git log` 的格式行会多两个前导换行，`strings.TrimSpace` 即消——现有 `pathDocOf` 已经这么做了。
+
+**为什么不用分块 `show`**：`git show` 按 id 逐个建立提交上下文，4000 个 id 分 16 块要 5.0 s，是 `git log --stat` 的 36 倍；而且一次传 4000 个 id 会超过 Windows 命令行上限（实测启动失败）。
+
+### 契约（落地的验收标准）
+
+- `path --all --json --stat` / `--shortstat` 的输出与改动前**逐字节相同**；
+- `path <id> --stat` 文本、`show --stat` 文本与 JSON 不变；
+- 失败语义不变：某个 action 的 stat 取不到 → 该 issue 进 `errors`（`stat-failed`），其余照常，exit 1；
+- `stat` 仍是后端原始 diffstat 文本，不自己重绘；
+- 不支持批量接口的后端（jj）或批量调用出错 → 逐动作回退，行为与现在完全一致。
+
+### 落点
+
+1. `internal/vcs/vcs.go`：新增**可选**接口
+   ```go
+   // StatLog is implemented by backends that can render every commit's diffstat
+   // in one pass. want filters which commits to keep, so a huge history does not
+   // have to be held in memory.
+   type StatLog interface {
+       LogStats(short bool, want func(id string) bool) (map[string]string, error)
+   }
+   ```
+2. `internal/vcs/git/git.go`：`LogStats` 跑
+   `git log --stat --format=%x00%H%x00`（`short` 时换成 `--shortstat`），按 NUL 切分：
+   `["", id1, block1, id2, block2, …]`，`want(id)` 为真才存；块原样返回，由调用方 `TrimSpace`。
+3. `internal/cli/cli.go`：`pathBatch` 在 `mode != statNone` 且 backend 实现 `StatLog` 时先取一次 map（`want` = 本次所有 issue 的 action id），把 map 传给 `pathDocOf`；`pathDocOf` 增加可选 `stats map[string]string`：命中用 map，未命中（合并提交等）回退 `ShowStat`。单条 `path` 与 `show` 不传 map。
+4. `internal/vcs/jj`：不实现 `StatLog`，走回退路径（行为不变）。
+5. 测试：`fakeRunner` 实现 `LogStats` 并计数；新增
+   - 批量 `--stat` 只调一次 `LogStats`、零次 `ShowStat`；
+   - map 未命中的 action 回退 `ShowStat`；
+   - 后端不实现 `StatLog` 时走逐动作回退；
+   - 输出与既有 `TestPathAllJSONCarriesStats` 一致。
+
+### 预期收益
+
+- 真仓：**14.4 s → 约 0.5 s**（启动 0.10 + `git log` 0.05 + `git log --stat` 0.38 + 渲染）；
+- 4000 动作（空提交）：约 0.3–0.4 s；
+- 代价：`git log --stat` 会为**所有**提交算 diff，混合仓（大量非 action 提交）的成本随总提交数增长。接受这个代价——它仍是一个进程，且比现状的 N 个进程低一个量级；真到不行再考虑按 action 集合收窄（`show` 分块已证明更慢）。
+
+### 检验办法
+
+1. 改动前保存 `path --all --json --stat` 与 `path --all --json --shortstat` 的输出，改动后逐字节对比；
+2. 真仓计时 3 次取中位；合成仓 4000 计时；
+3. 单 issue `path <id> --stat` 与 `show <id> --stat` 输出不变；
+4. jj 用 fake 后端跑回退（本机无 jj 环境）；
+5. `gofmt` / `go vet` / `go test ./...` 全过；`kiln check` 仍全绿。
+
+### 反方（保留）
+
+- **`git log --stat` 扫全史**：如果 action 只占提交的很小一部分，会做无用功；分块 `show` 在 4000 id 时慢 36 倍，但那是空提交、每块 256 的最坏测量。若将来出现“10 万提交 / 500 action”的仓，可再按 action 比例在两种策略间选择——先记录触发条件，不预做。
+- **两进程**：`path --all --stat` 仍要 `git log`（建模型）+ `git log --stat`（取 diffstat），约多 50 ms。要省可以把两者合并成一次带 stat 的 log，但那要动 `engine` 的模型来源，收益 10%，不在本批。
+- **合并提交**：`git log --stat` 默认不给 merge 的 stat；action 提交由 kiln 生成、不是 merge，且未命中会回退 `ShowStat`，风险可控。
+
+### 其他收集发现的处置（不在本批）
+
+- `status` 的第二次 `worktree list`（约 40–60 ms）：保持——`has-worktree` 与“已开 N 个”必须诚实；要省得先接受字段可缺失，另立项。
+- `commit` 的 7 个 git 进程（约 840 ms）：两次 `status` 与 `rev-parse --show-toplevel` 有合并空间（约 100–150 ms），另立项。
+- 预算：本批落地后写进文档——**读命令 ≤ 500 ms @1000 动作（本机）**；`path --all --stat` ≤ 1 s @1000 动作。是否入 README 留到 conclude。
+
+### 不做
+
+- 不用 `--numstat` 自绘 diffstat（要复刻 git 的列宽/二进制/重命名格式，风险高、收益低）；
+- 不分块 `git show`（实测更慢）；
+- 不做并发 spawn（进程成本主导，收益不确定，错误语义与顺序复杂）；
+- 不引入索引、缓存、daemon。
