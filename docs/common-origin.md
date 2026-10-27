@@ -36,3 +36,56 @@
 ## 备注
 
 这条缺口是 `relation-vocabulary` 第四轮测试**顺带发现**的——正好说明"拿 agent 当代理用户"能挖出设计者自己没想到的问题。
+
+## hypothesize（2026-10-28）：A + E——`relates-to` 兜底；来源重要就开成 issue
+
+### 0. 主张
+
+- **A**：两个 issue 共享**非 issue 来源**、且不要求区分时，用 `relates-to`（一条无向边）。
+- **E**：当"共同来源"重要到读者需要看见它时，**把来源本身开成一条 issue**（故障单 / 会议记录 / 需求文档都可以是一个"问题"），两个 issue 各写 `--caused-by <来源 issue>`。
+- **不新增** `same-origin` / `co-derived`，**不做** `source:` 外部引用。
+
+### 1. 为什么是 A（而不是加第 10 个名字）
+
+- **证据弱**：唯一实例是 `relation-vocabulary` 的 #8，而那一轮自己的结论是"场景措辞的锅"（题面写了"引出"），正确答案本来就是 `relates-to`；本仓**零实例**。
+- **词表已冻结**：`design-philosophy` 的 conclude 定了 9 名固定，新语义只走上游默认词表变更。第 10 个名字需要**真实需求**，现在没有。
+- **命名先验有反证**：`relation-vocabulary` 实测"光杆名词 `origin` 2/2 答不准"；`same-origin` 还会撞 CORS / 浏览器安全先验。要加就得先做一轮命名测试——当前不值得先付。
+
+### 2. 为什么 E 成立
+
+- 来源是一个**真实实体**；按"issue 原子化 + 组合"的模型，它可以是 issue。开成 issue 后它**可寻址**（能写标题、日期、后续动作），比一个匿名关系表达得更多——这正是候选 C 想要的好处，但不需要新语法。
+- **模式已被验证**：本仓已有多个"多条 `caused-by` 汇聚到同一 parent"的例子（`cli-necessity` 4 个孩子、`relation-types` 3 个、`relation-vocabulary` / `object-semantics` / `relation-rendering` 各 2 个）。
+- **零代码**：两条 `caused-by` + 一条来源 issue，现有 `check`（关系目标存在）与 `graph` 都能直接处理。
+
+### 3. 为什么拒 B / C
+
+- **B**：第 10 个名字，需求未证、命名先验差；若将来真出现"必须区分同源与碰巧相关、且开来源 issue 太重"的多例，再按 `relation-vocabulary` 的方法做命名测试后加。
+- **C**：`source:` 会打破"关系键只指向 issue"的约定，`check` 也无从校验非 issue 目标；而 E 已经给了来源可寻址的 id，C 没有额外能力。
+
+### 4. 契约（不需要代码）
+
+| 场景 | 做法 |
+| --- | --- |
+| 两个 issue 共享非 issue 来源，仅需"相关" | `--relates-to`，一条无向边 |
+| 共同来源需要被看见 / 被引用 | 开一条来源 issue（`ask`），两边 `--caused-by <来源>` |
+| 两个 issue 之间有直接引发关系 | 仍用 `caused-by`（不是 E 的"兄弟"） |
+| 兄弟之间 | **不要**写 `derived-from`（#8 的错），写 `relates-to` |
+
+- `check` 不新增规则；不要求"同源必须声明"。
+- 文档/释义补一句：**"同源不是引发"**——共享来源用 `relates-to`；来源本身值得被看见时，给它一条 issue。
+
+### 5. 反方（保留）
+
+1. **`relates-to` 抹平信息**：用 E 补；只有在读者反复需要区分、而 E 又太重时，才重开 B。
+2. **来源 issue 会污染 status/path**：来源是真实实体；如果它不值得一条 issue，通常也不值得一个专门的关系。
+3. **agent 仍可能误用 `derived-from`**：#8 的根因是题面措辞；释义里明确"同源不是引发"，比加名字更直接。
+4. **来源 issue 的 `ask` 可能很空**：可以只放一段来源说明；不影响动作模型。
+
+### 6. 检验（无需实测，走查即可）
+
+- 例：两个 issue 都由 `incident-2026-10-14` 引出 → 开来源 issue，两边 `caused-by`；`graph` 显示两条箭头汇聚到来源。
+- 例：来源不重要 → 一条 `relates-to`；`graph` 显示一条无向边，不新增节点。
+
+### 7. 不做
+
+- 不加 `same-origin` / `co-derived`；不加 `source:`；不改代码 / `check`；不做命名测试（等真实需求）。
