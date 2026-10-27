@@ -362,3 +362,47 @@ fzf / skim 把"交互式搜索"做成独立工具（TUI、模糊评分、预览�
 - **独立 `search` 的输出空间更大**：可以做相关度、分页、`--json` 字段选择；`list --search` 被 `listDoc` 绑死。若 agent 需要"最好的前 5 条"，现在的假设会挡路——但那也该先有需求。
 - **`--search` 与 `--status` 的组合语义**：`list --search=foo --status=open` 是 AND，够用；但有人会期望"搜索时忽略状态"——文档要写清是 AND，不搞隐式放宽。
 - **字面量的上限**：拼写记错、词序记错就搜不到；fzf 的模糊与 smart-case 是更好的手感，但那属于交互层。若 CLI 侧频繁抱怨"搜不到"，H7 会被推翻。
+
+## test（2026-10-27）：`list --search` 落地与验证
+
+按二版假设实现，动作记 `test`（还不是 apply）。
+
+### 实现
+
+- `internal/cli/cli.go`：
+  - `list` 的 `allowedFlags` 加 `search`；`--search` 收一个串，**空串 / 纯空白 exit 2**（`--search 需要一个非空查询串`）。
+  - `filterSearch` / `issueMatches`：`strings.Fields` 切词，每个词都要在 **id + `issueTitle(p)` + 所有动作 `subject`** 的并集里出现（`strings.ToLower` 后 `Contains`），字段间用 `\x00` 隔开防止跨字段误配。
+  - `searchHit`：**仅当 id + 标题解释不了命中时**，取最早一条"包含全部词"的动作 `subject` 作为 `hit`；词分散在多条动作、没有单条全含 → 省略。这比假设原文更克制（原文说"某条动作含全部词就给 hit"），避免标题已命中还挂一条箭头。
+  - 输出：JSON 行加 `hit`（`omitempty`），`filter.search` 回显原串；文本视图在 `--search` 时改为 `id + state + title`（命中动作时行尾 `  ← <subject>`），其余 `list` 文本不动。
+  - 帮助：list 行加 `[--search=]`，`usageOtherFlags` 加 `list 的 --search` 一行；中英同步。
+- `internal/i18n/catalog.go`：新错误串与帮助行的英文。
+- 文档：`machine-readable-output.md` §3 的 filter 字段、`hit` 字段、示例与要点；README 双语命令表。
+
+### 测试（`internal/cli/cli_test.go`）
+
+- `TestListSearchFindsIdTitleAndActionSubjects`：id（`cache`）、标题（`淘汰`）、id+标题分词（`cache 淘汰`）→ 无 `hit`；早期动作（`LFU`）→ `hit`；多词同条动作且大小写不敏感（`lru 命中率`）→ `hit`；
+- `TestListSearchLeavesHitEmptyWhenTermsSplitAcrossActions`：`LRU 淘汰` 分散在两条动作 → 命中但 `hit` 为空；
+- `TestListSearchNoMatchIsNotAnError`：`zzz` → `count: 0` / `issues: []` / exit 0，文本零输出；
+- `TestListSearchRejectsAnEmptyQuery`：`--search "   "` 与 `--search`（无值）→ exit 2、stdout 空、stderr 指"非空"；
+- `TestListSearchComposesWithStatus`：`--search=淘汰 --status=done` = 1，`--status=open` = 0；
+- `TestListSearchTextShowsTitleAndHit`：文本含 id、标题与 `← <subject>`。
+
+`gofmt` / `go vet` / `go test ./...` 全过。
+
+### 真仓冒烟（60 issue / 262 动作）
+
+| 查询 | 命中 | 其中带 `hit` | 体量 |
+| --- | --- | --- | --- |
+| `worktree` | 10 | 2 | 2.9 KB |
+| `json` | 13 | 3 | 4.1 KB |
+| `搜索` | 1 | 0（标题已解释） | 0.4 KB |
+| `i18n` | 1 | 0 | 0.4 KB |
+| `zzz` | 0 | 0 | 72 B，exit 0 |
+
+`--search=worktree --status=open` = 0（命中的都已收尾），AND 语义符合预期；文本行形如 `help-relation-flags  apply  <标题>  ← <命中的动作>`。
+
+### 与假设的差异 / 仍未做
+
+- 唯一的实现取舍：**`hit` 只在 id + 标题解释不了时出现**（见上）。
+- 未做：`--regex`、模糊、查询语言、`--match` 字段收窄、`--limit`、独立 `search`。
+- 下一步是 `apply`（把这套契约定性）还是先观察使用手感，待定。

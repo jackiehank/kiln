@@ -46,6 +46,7 @@ show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可�
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 list 的 --status:  open（未收尾）| done（末条动作是终点动作）
+list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感（搜 id / 当前标题 / 动作 subject）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
@@ -63,7 +64,7 @@ var usageCommands = [][2]string{
 	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
-	{"kiln list [--domain=] [--tag=] [--action=] [--status=open|done]", "按条件过滤问题"},
+	{"kiln list [--domain=] [--tag=] [--action=] [--status=open|done] [--search=]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
@@ -1721,6 +1722,60 @@ func (e *env) filterStatus(repo *model.Repo, ids []string, done bool) []string {
 	return kept
 }
 
+// filterSearch keeps the issues whose id, current title or any action subject
+// contains every term, case-insensitively. The query is an AND of literal
+// fragments, not a regular expression: that is the convention for issue/record
+// search (gh, git-bug), while regex stays opt-in elsewhere.
+func (e *env) filterSearch(repo *model.Repo, ids []string, terms []string) []string {
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if issueMatches(repo.Issues[id], terms) {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
+// issueMatches joins the searchable text of one issue — id, current title and
+// every action subject, the same words the views show — and asks whether every
+// term occurs somewhere in it. A separator keeps matching from crossing fields.
+func issueMatches(p *model.Issue, terms []string) bool {
+	fields := make([]string, 0, len(p.Actions)+2)
+	fields = append(fields, p.ID, issueTitle(p))
+	for _, a := range p.Actions {
+		fields = append(fields, a.Subject)
+	}
+	return containsAll(strings.Join(fields, "\x00"), terms)
+}
+
+// searchHit names the text that justifies a hit the row does not already show.
+// When id + title contain every term the row explains itself and hit stays
+// empty; otherwise the earliest action subject holding all terms is used. If the
+// terms are spread over several actions, no single action explains the query and
+// hit is empty too — better silent than pointing at the wrong line.
+func searchHit(p *model.Issue, terms []string) string {
+	if len(terms) == 0 || containsAll(p.ID+"\x00"+issueTitle(p), terms) {
+		return ""
+	}
+	for _, a := range p.Actions {
+		if containsAll(a.Subject, terms) {
+			return a.Subject
+		}
+	}
+	return ""
+}
+
+// containsAll reports whether every term occurs in haystack, case-insensitively.
+func containsAll(haystack string, terms []string) bool {
+	h := strings.ToLower(haystack)
+	for _, term := range terms {
+		if !strings.Contains(h, strings.ToLower(term)) {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *env) check(args []string) int {
 	_, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags("json", "verbose"))
@@ -1758,10 +1813,16 @@ func (e *env) check(args []string) int {
 
 func (e *env) list(args []string) int {
 	_, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action", "status"))
+	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action", "status", "search"))
 	status := f.get("status")
 	if f.has("status") && status != "open" && status != "done" {
 		fmt.Fprint(e.errw, i18n.T("--status 只接受 open 或 done（当前: %s）\n", status))
+		return 2
+	}
+	query := f.get("search")
+	terms := strings.Fields(query)
+	if f.has("search") && len(terms) == 0 {
+		fmt.Fprintln(e.errw, i18n.T("--search 需要一个非空查询串"))
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -1777,9 +1838,12 @@ func (e *env) list(args []string) int {
 	if status != "" {
 		ids = e.filterStatus(repo, ids, status == "done")
 	}
+	if len(terms) > 0 {
+		ids = e.filterSearch(repo, ids, terms)
+	}
 	if f.has("json") {
 		doc := listDoc{
-			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action, Status: status},
+			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action, Status: status, Search: query},
 			Count:  len(ids),
 			Issues: make([]listIssue, 0, len(ids)),
 		}
@@ -1788,10 +1852,22 @@ func (e *env) list(args []string) int {
 			doc.Issues = append(doc.Issues, listIssue{
 				issueCore: issueCore{ID: p.ID, Domain: p.Domain, Action: p.State(), Done: e.isDone(p)},
 				Title:     issueTitle(p),
+				Hit:       searchHit(p, terms),
 				Tags:      p.Tags,
 			})
 		}
 		return e.writeJSON(doc)
+	}
+	if len(terms) > 0 {
+		for _, id := range ids {
+			p := repo.Issues[id]
+			line := fmt.Sprintf("%s %s %s", pad(p.ID, 30), pad(stateWord(p), 12), issueTitle(p))
+			if hit := searchHit(p, terms); hit != "" {
+				line += "  ← " + hit
+			}
+			fmt.Fprintln(e.out, line)
+		}
+		return 0
 	}
 	for _, id := range ids {
 		p := repo.Issues[id]
@@ -2179,11 +2255,13 @@ type filterQuery struct {
 	Tag    string `json:"tag,omitempty"`
 	Action string `json:"action,omitempty"`
 	Status string `json:"status,omitempty"`
+	Search string `json:"search,omitempty"`
 }
 
 type listIssue struct {
 	issueCore
 	Title string   `json:"title,omitempty"`
+	Hit   string   `json:"hit,omitempty"`
 	Tags  []string `json:"tags,omitempty"`
 }
 

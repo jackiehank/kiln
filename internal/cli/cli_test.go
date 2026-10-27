@@ -2069,6 +2069,155 @@ func TestListRejectsAnUnknownStatus(t *testing.T) {
 	}
 }
 
+// searchRunner models one issue whose words are spread over the id, the current
+// title and earlier action subjects — the three places --search looks.
+func searchRunner() fakeRunner {
+	base := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{commits: []vcs.Commit{
+		{ID: "s3", Date: base.Add(2 * time.Hour), Message: "收尾落地\n\nissue: cache-eviction\naction: apply\ntitle: 收尾：淘汰策略落地"},
+		{ID: "s2", Date: base.Add(time.Hour), Message: "测了 LRU 命中率\n\nissue: cache-eviction\naction: test\ntitle: 测了 LRU 命中率"},
+		{ID: "s1", Date: base, Message: "缓存淘汰是否要引入 LFU\n\nissue: cache-eviction\naction: ask\ntitle: 缓存淘汰是否要引入 LFU"},
+	}}
+}
+
+func newSearchEnv(out, errw *bytes.Buffer) *env {
+	return &env{actions: model.DefaultActionSet(), repo: searchRunner(), out: out, errw: errw}
+}
+
+// --search is a literal, case-insensitive AND over id, the current title and
+// every action subject; the row only carries hit when the id and title cannot
+// explain why it matched.
+func TestListSearchFindsIdTitleAndActionSubjects(t *testing.T) {
+	cases := []struct {
+		query string
+		hit   string
+	}{
+		{"cache", ""},    // id alone explains it
+		{"淘汰", ""},       // the current title shows it
+		{"cache 淘汰", ""}, // split over id + title
+		{"LFU", "缓存淘汰是否要引入 LFU"},  // only an early action says it
+		{"lru 命中率", "测了 LRU 命中率"}, // case-insensitive, two terms, one action
+	}
+	for _, c := range cases {
+		var out, errb bytes.Buffer
+		if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", c.query}); code != 0 {
+			t.Fatalf("%q: exit code = %d, stderr = %q", c.query, code, errb.String())
+		}
+		var doc listDoc
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("%q: not one JSON document: %v\n%s", c.query, err, out.String())
+		}
+		if doc.Filter.Search != c.query {
+			t.Fatalf("%q: filter.search = %q", c.query, doc.Filter.Search)
+		}
+		if doc.Count != 1 || len(doc.Issues) != 1 || doc.Issues[0].ID != "cache-eviction" {
+			t.Fatalf("%q: rows = %+v", c.query, doc.Issues)
+		}
+		if got := doc.Issues[0].Hit; got != c.hit {
+			t.Fatalf("%q: hit = %q, want %q", c.query, got, c.hit)
+		}
+	}
+}
+
+// When the terms are spread over several actions, no single action explains the
+// query: the row still matches, hit stays empty rather than pointing at a line
+// that does not contain every term.
+func TestListSearchLeavesHitEmptyWhenTermsSplitAcrossActions(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", "LRU 淘汰"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Count != 1 || len(doc.Issues) != 1 || doc.Issues[0].Hit != "" {
+		t.Fatalf("rows = %+v", doc.Issues)
+	}
+}
+
+// No match is a valid answer: exit 0, an empty array, and an empty text view.
+func TestListSearchNoMatchIsNotAnError(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", "zzz"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), `"count": 0`) || !strings.Contains(out.String(), `"issues": []`) {
+		t.Fatalf("no-match JSON = %s", out.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newSearchEnv(&out, &errb).list([]string{"--search", "zzz"}); code != 0 {
+		t.Fatalf("text exit code = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("no-match text wrote stdout: %q", out.String())
+	}
+}
+
+// An empty query is a usage error, not "no filter".
+func TestListSearchRejectsAnEmptyQuery(t *testing.T) {
+	for _, args := range [][]string{
+		{"--json", "--search", "   "},
+		{"--json", "--search"},
+	} {
+		var out, errb bytes.Buffer
+		if code := newSearchEnv(&out, &errb).list(args); code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2 (stderr %q)", args, code, errb.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%v: a rejected query wrote stdout: %q", args, out.String())
+		}
+		if !strings.Contains(errb.String(), "非空") {
+			t.Fatalf("%v: stderr = %q", args, errb.String())
+		}
+	}
+}
+
+// Search composes with the other conditions as an AND.
+func TestListSearchComposesWithStatus(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", "淘汰", "--status", "done"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var done listDoc
+	if err := json.Unmarshal(out.Bytes(), &done); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if done.Count != 1 {
+		t.Fatalf("search ∩ done count = %d", done.Count)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", "淘汰", "--status", "open"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var open listDoc
+	if err := json.Unmarshal(out.Bytes(), &open); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if open.Count != 0 {
+		t.Fatalf("search ∩ open count = %d", open.Count)
+	}
+}
+
+// The text view of a search shows what it found and why: id, title, and the
+// matched action subject when the title cannot explain it.
+func TestListSearchTextShowsTitleAndHit(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newSearchEnv(&out, &errb).list([]string{"--search", "LFU"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"cache-eviction", "收尾：淘汰策略落地", "← 缓存淘汰是否要引入 LFU"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("search text missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Tags belong to `list`, which is the one view that reports them.
 func TestListJSONReportsTagsAndOmitsUndomainedRows(t *testing.T) {
 	var out, errb bytes.Buffer

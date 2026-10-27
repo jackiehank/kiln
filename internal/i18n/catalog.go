@@ -92,6 +92,7 @@ var enCatalog = map[string]string{
 	"--all 与 issue 参数不能同用":                                                         "cannot combine --all with issue arguments",
 	"flag --%s 不接受值: %s\n":                                                         "flag --%s takes no value: %s\n",
 	"--status 只接受 open 或 done（当前: %s）\n":                                           "--status only accepts open or done (got: %s)\n",
+	"--search 需要一个非空查询串":                                                           "--search needs a non-empty query",
 	"批量取路径只支持 --json（--all 或多条 issue）":                                             "batch paths are JSON-only (--all or several issues)",
 	"重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）":                      "rebuild the issue's research path (--all reads the whole repository at once; add --stat / --shortstat / --json)",
 	"未找到问题: %s\n":                                                                  "no such issue: %s\n",
@@ -210,6 +211,7 @@ show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可�
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
 list 的 --status:  open（未收尾）| done（末条动作是终点动作）
+list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感（搜 id / 当前标题 / 动作 subject）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
@@ -220,6 +222,7 @@ show flags:  --stat（the file summary for that action only）  --json（machine
 worktree list flags:  --json（machine-readable output）
 status / list / check flags:  --json（machine-readable output: stdout carries one JSON document only）
 extra list flag:  --status:  open（still in progress）| done（the last action is terminal）
+extra list flag:  --search:  whitespace-split terms, AND, literal, case-insensitive (id / title / action subject)
 extra commit flag:  --force（**required** to commit on main while worktree=on, as a one-off waiver）  --only <paths>（commit just the listed paths）
 extra worktree remove flag:  --force（remove even with an unmerged branch / a worktree that still has changes）
 --lang <zh|en>:  global language switch (by default detected from KILN_LANG / LC_ALL / LC_MESSAGES / LANG, Chinese when unset)

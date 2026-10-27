@@ -127,7 +127,7 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 ```json
 {
-  "filter": { "domain": "design", "status": "open" },
+  "filter": { "domain": "design", "status": "open", "search": "worktree" },
   "count": 7,
   "issues": [
     { "id": "action-granularity", "domain": "design", "action": "ask", "done": false, "title": "实现一个 issue 时中间动作要不要分阶段提交" },
@@ -138,15 +138,17 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 | 字段 | 来源 | 说明 |
 | --- | --- | --- |
-| `filter.*` | 命令行 `--domain/--tag/--action/--status` | **原样回显**已给的条件（给 CI 日志定位用）；未给则**省略该键**——省略即"没按这条过滤" |
+| `filter.*` | 命令行 `--domain/--tag/--action/--status/--search` | **原样回显**已给的条件（给 CI 日志定位用）；未给则**省略该键**——省略即"没按这条过滤" |
 | `count` | `len(ids)` | 命中数；与 `issues` 长度恒等，但省得消费方自己数 |
 | `issues[].id` / `domain` / `action` / `done` | 同 §2 的 issue 行 | **与 `status` 共用同一个行 schema**（`children` / `has-worktree` 除外） |
 | `issues[].title` | 该 issue **最后一个动作**的 `title`；缺则回退该动作的提交首行 | 空则省略；筛出来的行要能回答"是什么事"（`issue-list-scaling` 的 H4，推翻了 `json-fields` 当时"不给 list 加 title"的非目标） |
+| `issues[].hit` | 命中动作的 `subject` | **只在 id + 标题解释不了命中时出现**：取最早一条"包含全部查询词"的动作；词分散在多条动作、没有单条全含时省略 |
 | `issues[].tags` | `model.Issue.Tags` | 空则省略（文本只在非空时打 `tags=`） |
 
 要点：
 
 - **`--status=open|done`**：`done` = 最后一个动作属于 `actions.terminal`（默认 `conclude` / `apply`），与行里的 `done` **同一谓词**；`open` 是它的补集。非法值 exit 2，不静默回全量。**`done` 不是"永久关闭"**——终点动作之后仍可继续，再提交一个非终点动作就会回到 `open`（见 README「动作词表」与 `-h` 的 do/commit 说明）。
+- **`--search <query>`**：空白分词、**词间 AND**、**字面量**、**大小写不敏感**；每个词都要出现在 `id + 当前标题 + 所有动作 subject` 里（可分散在不同字段）。**不搜正文**（提交正文只有 trailer，没有散文）。空串 / 纯空白 query exit 2；**无命中是正常结果**：`count: 0`、`issues: []`、exit 0。
 - **`list` 不报 `worktree`**：`■` 与 worktree 段**只在 `status` 出现**，这是 `worktree-hint` 已定的"读命令不加 worktree 噪声"；为它给 `list` 多起一次后端查询不值得。
 - **行 schema 与 `status` 的重叠部分是契约**（`id` / `domain` / `action` / `done` / `title`）：同一套字段名，消费方一份解码器覆盖两个命令。
 
