@@ -164,3 +164,52 @@
 ### 7. 不做
 
 - 不做漏报 / 相等（C/D）；不改 `--target` 格式；不要求缺失声明；不做前缀 / glob / rename / 大小写匹配；不改 `path` / `show`；不加「只查最近 N 条」。
+
+## hypothesize（续，2026-10-28）：改成写侧校验——`--target` 必须 ⊆ 本次提交的文件
+
+### 0. 裁决（取代上一节的 check 方案）
+
+- 校验发生在**写侧**（`do` / `commit`）：`--target` 里的每个路径（按逗号切分）都必须在**本次提交的文件**里。
+- 不满足 → **exit 1**，不打印消息、不落提交（`do` 与 `commit` 同判）。
+- 集合口径：`commit --only` 时以 `--only` 为准；否则以全量改动为准。`do` 以当前工作区改动为准。
+- 空动作 + `--target` → 拒绝；没写 `--target` → 不校验。
+- **不做** `check` 规则、`FileLog`、历史审计——上一节的 `target-unchanged` **作废**。
+
+### 1. 为什么
+
+- 写侧有现成集合：`commit` 本来就要算 `files`（`--only` 或全量）；`do` 在仓库里本来就会打开后端（`worktreeTip`），只在给了 `--target` 时多一次 `git status`。
+- 历史审计是永久的：诊断不会消失，除非改写提交——与 `evidence-fluidity` 的「非审计」冲突。
+- 写侧能拦住 2 条吹牛，对 5 条漏报**零误伤**（target ⊆ 改动）。
+
+### 2. 精确契约
+
+| 输入 | 结果 |
+| --- | --- |
+| 改动含 `docs/a.md`，`--target docs/a.md` | 通过 |
+| 改动不含 `docs/a.md`，`--target docs/a.md` | exit 1：`以下 target 没有改动可记录: docs/a.md` |
+| `--only docs/a.md --target internal/x.go` | exit 1（`x.go` 不在这次提交） |
+| `--target a.go,b.go`，两者都在改动里 | 通过 |
+| 同上，缺其一 | exit 1，只列缺失的那个 |
+| 空动作 + `--target` | exit 1 |
+| 无 `--target` | 通过 |
+| `do`，同判；不在仓库里 | 跳过校验（无法知道），照常打印 |
+
+匹配：归一化 `\`→`/`、去掉 `./`；精确路径；目标以 `/` 结尾（或作为目录前缀）时覆盖其下文件；改动里的 `sub/`（未跟踪目录折叠）也覆盖其下文件。
+
+### 3. 落点
+
+- 全部在 `write`（`internal/cli/cli.go`）：
+  - `commit`：`files` 算好之后、打印清单与提交之前校验；
+  - `do`：格式化后、打印前校验（仅当给了 `--target`；仓库外跳过）。
+- 不新增接口，不改 `trailer` / `engine` / `check`。
+- 测试：缺 target 拒绝（无提交）、`--only` 交互、逗号列表、空动作、`do` 同判、仓库外跳过、目录前缀。
+
+### 4. 反方（保留）
+
+1. **git-first 流程可漂移**：`git commit -m "$(kiln do …)"` 只在 `do` 时校验；之后改动 / amend 绕过。接受——写侧护栏，不是不变量。
+2. **目录 / rename 仍是近似**：先精确 + 前缀；rename 未特判。
+3. **与 `--only` 语义相近**：一个拒绝「路径没改动」，一个拒绝「声明没改动」；都 exit 1，消息不同。
+
+### 5. 不做
+
+- 不做 `check` 规则 / `FileLog` / 历史审计；不改 `--target` 格式（仍标量，比较时按逗号切）；不做 rename / glob / 大小写匹配；不改 `path` / `show`。
