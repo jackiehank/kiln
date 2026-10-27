@@ -309,12 +309,175 @@
 
 **分类（必须改 / 可改可不改 / 保持）留待 hypothesize**；本节只给实测、影响面与候选，不改任何行为。
 
+## hypothesize（2026-10-27）：分类与四批
+
+### 结论先行
+
+36 条里 **16 条必须改 / 3 条可改可不改 / 17 条保持**，拆成四批，每批一次 `apply`：
+
+| 批 | 主题 | 条数 | 风险 |
+| --- | --- | --- | --- |
+| **A** | JSON 契约（同键异义 / 词表统一 / 文档纠错） | 5（C01 C03 C04 C09 C10） | 低：无已知消费方读这些键 |
+| **B** | 解析器与帮助（开关 flag、子命令帮助、重复与多余参数） | 6（C12 C13 C15 C18 C19 C20） | 高：每命令都过解析器，测试先行 |
+| **C** | 过滤语义与空态提示 | 4（C16 C17 C22 C35） | 低：只动 `list` |
+| **D** | 中文术语统一 | 1（C32） | 低：只动 zh 词条 |
+
+顺序有理由：先定数据契约（A 决定 B/C 之后 JSON 长什么样），再修入口（B 是用户每天会踩的），再修语义（C），最后动措辞（D）。**文本视图除帮助外逐字节不动**；每一批都能单独回退。
+
+### 判定标准
+
+- **必须改**：同一输入两种后果（C12 C15 C19）、同一键两种含义（C01 C03 C04）、静默给出错误答案（C16 C17）、日常入口失败或帮助与行为不符（C13 C18 C20）、同一状态两套词且值已一致（C09 C10）、空结果零反馈（C22 C35）、用户可见的术语混用（C32）。
+- **可改可不改**：有歧义但没有消费方，或只是措辞级收益（C08 C14 C36）。
+- **保持**：有意为之、已有测试钉住，或改动成本明显大于收益（其余 17 条）。
+
+### 分类表
+
+| # | 判定 | 批 | 理由 |
+| --- | --- | --- | --- |
+| C01 `mode` 双义 | 必须改 | A | `off/on` 与 `git/jj` 共用一键，改两处键名即消失 |
+| C02 `id` / `issue` | 保持 | — | 规则其实成立：`id` = 行主体就是 issue；`issue` = 文档主体或非 issue 行。补文档即可 |
+| C03 `ok` bool/int | 必须改 | A | 同文档同键两类型，对类型化解码器不友好 |
+| C04 `body` 双义 | 必须改 | A | `--stat` 不再替换 `body`；同时纠正 `read-json` 里“不含 diff”的错误描述 |
+| C05 title/commit 作用域 | 保持 | — | 层内一致（行=末条动作，path 动作=该动作）；文档写明 |
+| C06 空容器规则 | 保持 | — | 容器恒写、可选省略、`filter` 回显；写进契约，不改形状 |
+| C07 四种行形状 | 保持 | — | 四视图用途不同；文档给字段矩阵，不强行统一 |
+| C08 `check.actions` 无序号 | 可改可不改 | — | 没有消费方需要从 check 直接定位动作；要做时再加 `ordinals` |
+| C09 done 七套词 | 必须改 | A | 数值已全一致，只统一 `status.summary` 的键为 `done`/`open` |
+| C10 `check.summary` | 必须改 | A | 它数的是 finding 不是 issue，改名 `findings` 即止 |
+| C11 文本五种状态渲染 | 保持 | — | 文本稳定优先；JSON 已有 `done`，文档说明即可 |
+| C12 开关 flag 吞位置参数 | 必须改 | B | 用户每天会踩；`path` 已有修法，推广到全命令 |
+| C13 无子命令帮助 | 必须改 | B | 八个命令五种结果且没有一种成功 |
+| C14 已知 flag 放错命令 | 可改可不改 | — | 警告契约保留；“该 flag 属于 list”的措辞改进留待用户抱怨 |
+| C15 重复 flag 三种语义 | 必须改 | B | 静默丢弃查询/域是数据丢失 |
+| C16 `--tag` 两种文法 | 必须改 | C | 逗号静默返回 0；先明确拒绝，多标签过滤留待有人需要 |
+| C17 过滤值校验不一 | 必须改 | C | `--action` 与 `--status` 同为受控词表，却一个校验一个不校验 |
+| C18 子命令前 flag | 必须改 | B | 与 `config` 对齐的成本很低 |
+| C19 多余位置参数静默 | 必须改 | B | “工具必须诚实”；silent-flag-drop 只豁免了 flag，这次补位置参数 |
+| C20 path usage / 重复 id | 必须改 | B | 帮助与行为不符；重复输出两份没有意义 |
+| C21 退出码矩阵 | 保持 | — | 0/1/2 的分工合理且已稳定；写进文档 |
+| C22 空结果提示只覆盖 search | 必须改 | C | 同一个疑问只有一条路径有回答 |
+| C23 单条/批量错误通道 | 保持 | — | 批量不中断是设计目的；写死“单条 stdout 0、批量文档+errors+1” |
+| C24 token vs prose | 保持 | — | 单条错误无机器消费方；归 `machine-readable-output` 的遗留 |
+| C25 check warn 不失败 | 保持 | — | 行为正确；补一句“只有 error 让 check 非零” |
+| C26 hash 7 vs 40 | 保持 | — | 短 hash 给人扫，JSON 给机器；文档写明 |
+| C27 list 两种文本布局 | 保持 | — | 文本稳定；文档补 `←` 与两种布局 |
+| C28 status 文本少 title | 保持 | — | 概览视图有意精简；文档写 JSON 多出的键 |
+| C29 关系名文本/JSON 不同 | 保持 | — | 已文档化；文本为可读性换反名 |
+| C30 JSON 与语言无关 | 保持 | — | 已实现且有测试；写进 `read-json` 成为契约 |
+| C31 ✓ 只在 status | 保持 | — | 与 C11 同一条：文本稳定优先 |
+| C32 问题/issue 混用 | 必须改 | D | 同一工具两条相邻命令两个词 |
+| C33 worktree/workspace/area | 保持 | — | 用户面已统一；代码注释点明同义即可 |
+| C34 `--status` 与 done | 保持 | — | 值域命名合理；归入 C09 的术语映射表即可 |
+| C35 空仓提示 5/8 | 必须改 | C | 只有 `list` 静默；其余出口已有回答，保持 |
+| C36 未知 domain 三种后果 | 可改可不改 | — | 与 C14 同一条：警告契约保留，措辞改进留待需求 |
+
+### 批次 A：JSON 契约
+
+**改什么**（只动 JSON 键与文档，不动文本）：
+
+| 文档 | 现在 | 改为 |
+| --- | --- | --- |
+| `status --json` | `"summary": {"complete": 53, "in-progress": 9, …}` | `"summary": {"done": 53, "open": 9, …}` |
+| `status --json` | `"worktree": {"mode": "off", "open": 0}` | `"worktree": {"policy": "off", "open": 0}` |
+| `worktree list --json` | `"mode": "git"` | `"backend": "git"` |
+| `check --json` | `"ok": true, "summary": {"ok": 53, …}` | `"passed": true, "findings": {"ok": 53, …}` |
+| `show --json --stat` | `"body": "<diffstat>"` | `"body": "<提交全文>", "stat": "<diffstat>"` |
+
+**同时纠错与补契约（不改实现）**：
+
+- `read-json` 说 `show.body` “不含 diff 原文”，实测 `body` 就是 `git show` 全文、**包含 diff**——按实现改正，并把“是否拆出 `diff` 字段”记为以后的独立决定；
+- `read-json` / `json-fields` 补四条成文规则：`id` vs `issue`（C02）；容器恒写 vs 可选省略；`filter` 回显（C06）；JSON 不随 `--lang` 变（C30）。
+
+**为什么先做**：这 5 条都是“同一份文档里自相矛盾”，与命令面无关；键名定下来，B/C 批的测试与文档才能一次写完。
+
+**验收**：`gofmt` / `go vet` / `go test ./...`；`status` / `check` / `worktree list` / `show --stat --json` 冒烟；`--lang=zh` / `en` 输出仍逐字节相同；`docs/read-json.md`、`docs/json-fields.md` 与新形状一致；dsh-kiln 的 `action.commit` 迁移（见“跨批约束”）。
+
+**不做**：不给 `check` 加 `commit`（仍无消费方）；不改 `path` / `list` / `graph` 的键；不把 `body` 换成“正文不含 diff”（要新后端方法，收益未证）。
+
+### 批次 B：解析器与帮助
+
+**改什么**：
+
+1. `parse(args, switches...)`：`--name` 后面跟非 `--` token 时，**只有非开关 flag 才消耗它**；开关带显式值（`--json=x`）统一 exit 2，消息与 `path` 现在的“flag --json 不接受值: x”一致。
+   - 开关表：do/commit `{force}`；path `{all,json,stat,shortstat}`；show `{stat,json}`；status `{json}`；check `{json,verbose}`；list `{json}`；graph `{json,mermaid}`；worktree `{json,force}`；config 无。
+   - 效果：`show --json cli-consistency`、`show --stat cli-consistency`、`commit --force <issue> <action>`、`worktree --json list` 全部按“flag + 位置参数”解析，不再吞参数。
+2. `kiln <cmd> -h`、`kiln <cmd> --help`、`kiln help <cmd>` 打印该命令的用法行 + 该命令的 flag 段（从 `usageCommands` / `usageOtherFlags` 生成，不新增文案源）；`kiln help` 仍是全量。
+3. 重复 flag：开关幂等；**标量值 flag 重复 → exit 2**（`--domain`/`--action`/`--status`/`--search`、do 的 `--title`/`--target`/`--scope`/`--domain`、graph 的 `--format`/`--issue`/`--depth`）；列表型（tag/refs/关系/unrelate/only）继续累加。
+4. 多余位置参数：list/status/check/graph 期望 0、show ≤2、worktree new/remove 期望 1、worktree list 0、config 1 → 超出 exit 2；`path` 不限（批量），`do/commit` 第三参仍报“object 已退役”。
+5. `worktree` 先 `parse` 再取子命令（与 `config` 对齐）；`path` 的用法行改成 `kiln path <issue> [<issue>…] | --all`，批量 id 去重（保序）。
+
+**为什么第二批**：这是用户每天的第一道门；改完之后，示例与文档都能用“flag 在前”的自然写法，不用绕。
+
+**测试先行**（先写失败的，再改）：`show --json <id>` 成功、`show --json=x` exit 2、`commit --force <id> <action>` 在 fake backend 下成功、`list -h` exit 0 有用法、`kiln help list` 同、`list --search a --search b` exit 2、`list extra` exit 2、`worktree --json list` 成功、`path a a --json` 只出一份。
+
+**风险**：解析器是全局改动。回退单位是整批；`parse` 保持变参形式，调用点机械更新，golden 文本测试提供第二道保险。
+
+### 批次 C：过滤语义与空态
+
+**改什么**（只动 `list`）：
+
+1. `--tag` 含逗号或重复 → exit 2：`--tag 只接受一个标签（当前: "json,path"）`；帮助里写明“多标签过滤暂不支持”。**不**顺手做 AND 语义——`filter.tag` 的 JSON 形状、engine API 都要跟着变，等真有需求再立项。
+2. `--action` 按动作词表校验（复用 `do` 的 `非法 action: %q（可选: %s）`），exit 2。
+3. 空结果提示：过滤后为 0 时，stderr 给一行
+   - 仓里本来没有动作：`仓库里还没有任何动作（用 kiln do <issue> ask 开一条）`；
+   - 否则：`没有匹配 domain=cli status=done 的问题`（把实际生效的条件拼进去；`--search` 沿用现有措辞“没有匹配 %q 的 issue”，到 D 批统一成“问题”，避免两种提示叠加）。
+   - stdout 仍 0 字节；`--json` 仍是一份 `{filter, count: 0, issues: []}`。
+   - 本批新增的文案直接按 D 批的术语规则写（“问题”，不用“issue”）。
+
+**为什么第三批**：B 把输入面修好之后，C 才能保证“用户打的每个条件都被读懂，读不懂就说话”。
+
+**验收**：`list --tag="json,path"` exit 2；`list --action=nope` exit 2；`list --domain=nope` 有 stderr 提示且 stdout 0；空仓 `list` 有提示；`--json` 文档不变。
+
+### 批次 D：中文术语统一
+
+**规则**：**「问题」= 中文叙述里的实体；`issue` 只保留在标识符位置**（`issue:` trailer、`--issue`、JSON `issue` 键、`<issue>` 占位、`issue ID`、`issue 参数`）。
+
+**改这些 zh 词条**（en 只改 key 的映射，不改措辞）：
+
+- `没有匹配 %q 的 issue` → `没有匹配 %q 的问题`
+- `没有 issue %q`（graph 邻域）→ `未找到问题: %s`（与 path/show 同一句）
+- `拒绝: issue %q 已经有起点动作…` → `拒绝: 问题 %q 已经有起点动作…`
+- `没有 issue 为 %q 的 worktree` → `没有属于问题 %q 的 worktree`
+- `issue 不会被关闭`（帮助说明）→ `问题不会被关闭`
+- `--all 与 issue 参数不能同用` → `--all 与问题参数不能同用`
+
+**保持**：`问题总数`、`问题关系图`、`按条件过滤问题`、`kiln do <issue> <action>` 这类占位写法。
+
+**验收**：zh 下不再出现“问题…issue…”同一句混用；`TestEnglishErrorsSpeakEnglish` 与 i18n 键一致性测试仍过；`--lang=en` 输出不变。
+
+### 跨批约束
+
+- 每批一次 `apply`；中间批落地后 issue 会显示“已完成”，下一批动作会把它翻回进行中——这是 `done` 的既定语义，不是 bug。
+- 文本视图（`status` / `list` / `path` / `show` / `graph` / `check` / `worktree list`）除**新增帮助**外逐字节不变；`TestStatusRendersDomainBlocks` 等 golden 是护栏。
+- 每批都要跑：`gofmt` / `go vet` / `go test ./...`、真仓 62 issues 冒烟、空仓冒烟、zh/en 各一次；JSON 双语言哈希仍要相同。
+- **已知消费方 dsh-kiln**：它读 `graph.nodes[]`（不变）与 `path.issue` / `actions[]`（不变），但 `action.id` 在 `b5e6a14` 已改名 `commit` 未同步——**任何一批开始前都应先修它**，否则时间线会展示错误事实。该文件在沙箱工作区外，需用户批准写入。
+- 文档随每批更新：`read-json`、`json-fields`、`machine-readable-output` 的遗留清单、本文件追加 apply 记录。
+
+### 验收（四批全部落地时）
+
+1. 36 条逐条有落点：16 条已改、3 条写明暂不改、17 条写明保持理由；
+2. 四批的验收项全部复跑通过；
+3. `read-json` / `json-fields` 与实现一致，包括 C04 的 body 描述纠错与 C02/C06/C30 的新规则；
+4. dsh-kiln 与 CLI 同步（`action.commit` + 本批键名）；
+5. 没有 golden 文本意外变化；帮助新增的 `<cmd> -h` 有测试；
+6. `kiln check` 仍全绿（53 ok / 9 warn / 0 error）。
+
+### 本轮明确不做
+
+- `check.actions` 加 ordinal（C08）；
+- `graph` / `check` / `status` 的 `--domain` 过滤（C14/C36 的另一半）；
+- 文本状态标记统一、`list` 文本补 title（C11/C27）；
+- 多标签过滤与 `filter.tag` 形状变更（C16）；
+- 单条错误的 JSON 化（C24，归 `machine-readable-output`）；
+- 把 `show.body` 里的 diff 拆出去（要新后端方法，另立项）；
+- 没有消费方的新键（例如给 `check` / `graph` 加 `commit`——`json-commit-hash` 已裁掉的那类）。
+
 ## 验收（盘点完成时）
 
 - 每个维度至少一条**实测样例**（命令 + 现在的输出 + 为什么有歧义/不统一）；
 - 每条给出候选与影响面（改 JSON / 改文本 / 改退出码 / 只改文档）；
 - 分类：**必须改 / 可改可不改 / 保持**；
-- 不在这条 issue 里改任何行为；修复分批进行，每批一个动作。
+- 盘点阶段不改任何行为；分类后按批落地（作为本 issue 的后续动作），每批一个动作。
 
 ## 非目标
 
