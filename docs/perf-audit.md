@@ -231,3 +231,55 @@ kiln 没有索引：每条读命令都从提交历史现算模型——一次 `g
 - 不分块 `git show`（实测更慢）；
 - 不做并发 spawn（进程成本主导，收益不确定，错误语义与顺序复杂）；
 - 不引入索引、缓存、daemon。
+
+## apply（2026-10-27）：批量 `--stat` 改成一次 `git log --stat`
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/vcs/vcs.go` | 新增可选接口 `StatLog { LogStats(short bool, want func(id string) bool) (map[string]string, error) }`——批量取 diffstat，`want` 只为需要的提交保留结果 |
+| `internal/vcs/git/git.go` | `LogStats` 跑 `git log --stat --format=%x00%H%x00`（`short` 时 `--shortstat`）；`parseStatLog` 按 NUL 切成 `["", id1, block1, id2, block2, …]`，块原样返回 |
+| `internal/cli/cli.go` | 新增 `batchStats`：`pathBatch` 在 `--stat/--shortstat` 且后端实现 `StatLog` 时取一次 map（`want` = 本次所有 action id）；`pathDocOf` 多一个可选 `stats`：命中查表、未命中回退 `ShowStat`；单条 `path` 与 `show` 不传 map |
+| `internal/cli/cli_test.go` | `fakeRunner` 实现 `LogStats`（带调用计数/错误注入）；新增 4 个测试：批量只调一次 `LogStats`、无 `StatLog` 时文档相同、批量失败回退、部分未命中回退 |
+| `docs/perf-audit.md` | 本文件 |
+
+### 等价性（验收第一条）
+
+改动前用旧二进制保存 6 份输出，改动后逐字节对比，**全部相同**：
+
+| 输出 | 字节 | 相同 |
+| --- | --- | --- |
+| `path --all --json --stat` | 188,634 | ✅ |
+| `path --all --json --shortstat` | 151,546 | ✅ |
+| `path --all --json`（无 stat） | 134,734 | ✅ |
+| `path <id> --json --stat` | 5,043 | ✅ |
+| `path <id> --stat`（文本） | 3,562 | ✅ |
+| `show <id> 1 --stat --json` | 4,760 | ✅ |
+
+### 性能（同一会话，旧/新二进制背靠背）
+
+| 调用 | 改前 | 改后 | 倍数 |
+| --- | --- | --- | --- |
+| `path --all --json --stat` | 14,490 ms | **296 ms** | 49× |
+| `path --all --json --shortstat` | 14,446 ms | **299 ms** | 48× |
+| `path --all --json`（无 stat） | 110 ms | 110 ms | — |
+| 合成仓 4000 动作 `--stat` | （按动作外推约 200 s） | **220 ms** | — |
+| git 进程数（真仓 282 动作） | 283 | **2**（log + log --stat） | 141× |
+
+改后的 296 ms ≈ 启动 46 + `git log` 55 + `git log --stat` ~190。`--stat` 相对无 stat 只多约 190 ms，且不再随动作数增长（4000 动作只多 68 ms，因为空提交没有 diff 可算）。
+
+### 回退与边界
+
+- **单条 `path <id> --stat`、`show --stat` 不变**：仍逐动作 `ShowStat`（本仓 6 动作约 470 ms；动作少时批量反而多扫历史）。
+- **jj 不实现 `StatLog`**：走回退；有测试证明「无 StatLog 的后端」产出与批量路径**逐字节相同的文档**。
+- **批量调用出错或 map 未命中**（如合并提交）：逐动作回退，单条失败仍进 `errors.stat-failed`、exit 1——语义与改动前一致。
+- **代价**：`git log --stat` 为所有提交算 diff，混合仓会为 non-action 提交做无用功；接受，仍是单进程。真出现“大历史/少量 action”再按比例选策略。
+- **仍有两个进程**（log + log --stat，约多 55 ms）；合并成一次带 stat 的 log 要动模型来源，留给后续。
+
+### 验收
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过；新增 4 个测试覆盖批量/回退。
+- 真仓与合成仓计时如上；进程数用 `GIT_TRACE2_EVENT` 实测 2。
+- `kiln check`：55 ok / 8 warn / 0 error。
+- JSON 契约未变（`stat` 仍是后端原始 diffstat），dsh-kiln 不受影响。

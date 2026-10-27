@@ -1427,7 +1427,7 @@ func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
 	if code != 0 {
 		return code
 	}
-	doc, err := e.pathDocOf(p, mode, backend, engine.FoldEdges(repo, e.rel()))
+	doc, err := e.pathDocOf(p, mode, backend, engine.FoldEdges(repo, e.rel()), nil)
 	if err != nil {
 		fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 		return 1
@@ -1439,11 +1439,17 @@ func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
 // (sorted by id); explicitly named ids keep the order they were given. A single
 // bad id does not sink the document — it lands in errors, the rest still print,
 // and the exit code stays non-zero so a script can notice.
+//
+// With --stat / --shortstat it fetches every action's diffstat in one backend
+// pass when the backend offers StatLog (see batchStats), so the batch does not
+// pay one process per action. A failure there is not fatal: the per-action
+// fallback in pathDocOf keeps today's behavior exactly.
 func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
 	backend, code := e.statBackend(mode)
 	if code != 0 {
 		return code
 	}
+	stats := e.batchStats(repo, backend, ids, mode)
 	edges := engine.FoldEdges(repo, e.rel())
 	doc := pathBatchDoc{Issues: make([]pathDoc, 0, len(ids))}
 	for _, id := range ids {
@@ -1452,7 +1458,7 @@ func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
 			doc.Errors = append(doc.Errors, pathBatchError{Issue: id, Error: errUnknownIssue})
 			continue
 		}
-		d, err := e.pathDocOf(p, mode, backend, edges)
+		d, err := e.pathDocOf(p, mode, backend, edges, stats)
 		if err != nil {
 			doc.Errors = append(doc.Errors, pathBatchError{Issue: id, Error: errStatFailed})
 			continue
@@ -1468,10 +1474,44 @@ func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
 	return 0
 }
 
+// batchStats fetches the diffstats of every action in the batch in one call. It
+// returns nil when no stats were asked for, when the backend has no batch form
+// (jj), or when the batch call failed — nil means "let pathDocOf ask per
+// action", which is the pre-batch behavior and the safety net for both cases.
+func (e *env) batchStats(repo *model.Repo, backend vcs.Repo, ids []string, mode statDisplay) map[string]string {
+	if mode == statNone || backend == nil {
+		return nil
+	}
+	sl, ok := backend.(vcs.StatLog)
+	if !ok {
+		return nil
+	}
+	want := make(map[string]bool)
+	for _, id := range ids {
+		p, ok := repo.Issues[id]
+		if !ok {
+			continue
+		}
+		for _, a := range p.Actions {
+			want[a.ID] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	stats, err := sl.LogStats(mode == statShort, func(id string) bool { return want[id] })
+	if err != nil {
+		return nil
+	}
+	return stats
+}
+
 // pathDocOf fills one path document without writing it. The folded edges are
 // passed in so a batch folds them once instead of once per issue; backend may be
-// nil when no stats were asked for.
-func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edges []engine.Edge) (pathDoc, error) {
+// nil when no stats were asked for. stats is the batch lookup from batchStats:
+// a hit renders without another backend call, a miss (a merge commit, or no
+// batch at all) still asks ShowStat, so no action can silently lose its stat.
+func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edges []engine.Edge, stats map[string]string) (pathDoc, error) {
 	doc := pathDoc{
 		Issue:     p.ID,
 		Action:    p.State(),
@@ -1490,9 +1530,13 @@ func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edge
 			Tags:    a.Tags,
 		}
 		if mode != statNone {
-			stat, err := backend.ShowStat(a.ID, mode == statShort)
-			if err != nil {
-				return pathDoc{}, err
+			stat, ok := stats[a.ID]
+			if !ok {
+				var err error
+				stat, err = backend.ShowStat(a.ID, mode == statShort)
+				if err != nil {
+					return pathDoc{}, err
+				}
 			}
 			item.Stat = strings.TrimSpace(stat)
 		}

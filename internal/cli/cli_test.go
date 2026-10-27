@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -383,6 +384,11 @@ type fakeRunner struct {
 	changes []string // what Changes reports; nil = nothing to record
 	bad     []string // what Unchanged reports; nil = every path has a change
 	action  func(msg string, paths []string) (string, error)
+
+	// Hooks for the batch-stat tests: count the calls and inject the batch error.
+	onStatLog  func()
+	onShowStat func()
+	statLogErr error
 }
 
 func (f fakeRunner) Log() ([]vcs.Commit, error) { return f.commits, nil }
@@ -489,10 +495,36 @@ func (f fakeRunner) Show(id string) (string, error) {
 	return f.show[id], nil
 }
 func (f fakeRunner) ShowStat(id string, short bool) (string, error) {
+	if f.onShowStat != nil {
+		f.onShowStat()
+	}
 	if short {
 		return f.short[id], nil
 	}
 	return f.stat[id], nil
+}
+
+// LogStats is the batch form: a fake backend that reports its stats in one call,
+// so a test can prove `path --all --stat` does not fall back to per-action calls.
+func (f fakeRunner) LogStats(short bool, want func(string) bool) (map[string]string, error) {
+	if f.onStatLog != nil {
+		f.onStatLog()
+	}
+	if f.statLogErr != nil {
+		return nil, f.statLogErr
+	}
+	src := f.stat
+	if short {
+		src = f.short
+	}
+	out := make(map[string]string, len(src))
+	for id, s := range src {
+		if want != nil && !want(id) {
+			continue
+		}
+		out[id] = s
+	}
+	return out, nil
 }
 
 // demoRunner models a two-action issue (ask then collect) with per-action stats.
@@ -3267,4 +3299,107 @@ func TestChineseProseSaysWenTiNotIssue(t *testing.T) {
 	if !strings.Contains(hOut.String(), "问题不会被关闭") {
 		t.Fatalf("help must state the done semantics in Chinese prose:\n%s", hOut.String())
 	}
+}
+
+// repoOnly hides every optional interface (StatLog among them), modelling a
+// backend like jj that only offers the base Repo surface.
+type repoOnly struct{ vcs.Repo }
+
+// A batch asks the backend for every action's stat in one call; the per-action
+// fallback stays dark. This is the whole point of the perf fix: N actions, one
+// process.
+func TestPathBatchStatsUseOneLogPass(t *testing.T) {
+	var out, errb bytes.Buffer
+	logCalls, showCalls := 0, 0
+	runner := demoRunner()
+	runner.onStatLog = func() { logCalls++ }
+	runner.onShowStat = func() { showCalls++ }
+	e := &env{actions: model.DefaultActionSet(), repo: runner, out: &out, errw: &errb}
+	if code := e.path([]string{"--all", "--json", "--stat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if logCalls != 1 || showCalls != 0 {
+		t.Fatalf("batch stats: LogStats=%d ShowStat=%d, want 1/0", logCalls, showCalls)
+	}
+	var doc pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one document: %v\n%s", err, out.String())
+	}
+	if got := doc.Issues[0].Actions[0].Stat; !strings.Contains(got, "docs/a.md | 2 ++") {
+		t.Fatalf("first action stat = %q", got)
+	}
+	if got := doc.Issues[0].Actions[1].Stat; !strings.Contains(got, "docs/b.md | 3 +++") {
+		t.Fatalf("second action stat = %q", got)
+	}
+}
+
+// A backend without StatLog (jj) keeps the old per-action path and produces the
+// identical document, so adding the fast path cannot change what jj prints.
+func TestPathBatchStatsFallBackWithoutStatLog(t *testing.T) {
+	var fastOut, fastErr bytes.Buffer
+	if code := (&env{actions: model.DefaultActionSet(), repo: demoRunner(), out: &fastOut, errw: &fastErr}).path([]string{"--all", "--json", "--stat"}); code != 0 {
+		t.Fatalf("fast path: exit = %d, stderr = %q", code, fastErr.String())
+	}
+
+	var slowOut, slowErr bytes.Buffer
+	slowRunner := repoOnly{demoRunner()}
+	e := &env{actions: model.DefaultActionSet(), repo: slowRunner, out: &slowOut, errw: &slowErr}
+	if code := e.path([]string{"--all", "--json", "--stat"}); code != 0 {
+		t.Fatalf("fallback: exit = %d, stderr = %q", code, slowErr.String())
+	}
+	if slowOut.String() != fastOut.String() {
+		t.Fatalf("fallback changed the document:\nfast:\n%s\nslow:\n%s", fastOut.String(), slowOut.String())
+	}
+}
+
+// A failed batch call is not fatal: every action falls back to ShowStat and the
+// document is the same one the fast path builds.
+func TestPathBatchStatsFallBackOnBatchError(t *testing.T) {
+	runner := demoRunner()
+	runner.statLogErr = errors.New("batch failed")
+	showCalls := 0
+	runner.onShowStat = func() { showCalls++ }
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: runner, out: &out, errw: &errb}
+	if code := e.path([]string{"--all", "--json", "--stat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if showCalls != 2 {
+		t.Fatalf("fallback ShowStat calls = %d, want 2", showCalls)
+	}
+	if !strings.Contains(out.String(), "docs/b.md | 3 +++") {
+		t.Fatalf("document lost a stat:\n%s", out.String())
+	}
+}
+
+// A batch map that misses an action (a merge commit, say) falls back for that
+// action only; the rest still come from the batch.
+func TestPathBatchStatsFallBackOnAMiss(t *testing.T) {
+	var out, errb bytes.Buffer
+	showCalls := 0
+	e := &env{actions: model.DefaultActionSet(), repo: missStatLog{demoRunner(), &showCalls}, out: &out, errw: &errb}
+	if code := e.path([]string{"--all", "--json", "--stat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if showCalls != 2 {
+		t.Fatalf("missed stats must fall back per action, got %d calls", showCalls)
+	}
+	if !strings.Contains(out.String(), "docs/a.md | 2 ++") || !strings.Contains(out.String(), "docs/b.md | 3 +++") {
+		t.Fatalf("document lost a stat:\n%s", out.String())
+	}
+}
+
+// missStatLog answers the batch with an empty map and records ShowStat calls.
+type missStatLog struct {
+	fakeRunner
+	showCalls *int
+}
+
+func (m missStatLog) LogStats(short bool, want func(string) bool) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (m missStatLog) ShowStat(id string, short bool) (string, error) {
+	*m.showCalls++
+	return m.fakeRunner.ShowStat(id, short)
 }

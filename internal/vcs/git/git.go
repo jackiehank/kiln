@@ -35,6 +35,45 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 	return parseLog(out), nil
 }
 
+// statLogFormat brackets each commit id with NULs so the diffstat block git
+// prints after the format can be split off verbatim; NUL cannot appear in a
+// commit message. git also writes two blank lines between the format line and
+// the stat block, which the caller trims exactly as it trims ShowStat.
+const statLogFormat = "%x00%H%x00"
+
+// LogStats renders every commit's diffstat in one `git log` pass — the batch
+// form of ShowStat, and the reason `path --all --stat` no longer spawns one
+// process per action. short selects --shortstat; want keeps only the ids the
+// caller asked for.
+func (r ExecRunner) LogStats(short bool, want func(string) bool) (map[string]string, error) {
+	flag := "--stat"
+	if short {
+		flag = "--shortstat"
+	}
+	out, err := r.run("log", flag, "--format="+statLogFormat)
+	if err != nil {
+		return nil, err
+	}
+	return parseStatLog(out, want), nil
+}
+
+// parseStatLog splits the NUL-delimited stream into (id, block) pairs. The split
+// starts with an empty field (the marker before the first commit) and has no
+// trailing empty field (the last block ends the stream), so pairs live at
+// (1,2), (3,4), ….
+func parseStatLog(out string, want func(string) bool) map[string]string {
+	parts := strings.Split(out, "\x00")
+	stats := make(map[string]string, len(parts)/2)
+	for i := 1; i+1 < len(parts); i += 2 {
+		id := parts[i]
+		if id == "" || (want != nil && !want(id)) {
+			continue
+		}
+		stats[id] = parts[i+1]
+	}
+	return stats
+}
+
 // Action records one action and returns the new commit's id.
 //
 // Empty paths means the whole area's changes: git has no snapshot of its own, so

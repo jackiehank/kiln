@@ -78,6 +78,19 @@ type Repo interface {
 	Unchanged(paths []string) ([]string, error)
 }
 
+// StatLog is the batch form of Repo.ShowStat: a backend that can render every
+// commit's diffstat in one pass implements it, so `path --all --stat` is one
+// call instead of one call per action. short selects the one-line summary form.
+// want filters which commits to keep, so a huge history does not have to be held
+// in memory; a nil want means "every commit".
+//
+// It is optional: a caller falls back to ShowStat when a backend does not
+// implement it (the jj adapter does not, yet), and a LogStats error leaves the
+// caller free to fall back too.
+type StatLog interface {
+	LogStats(short bool, want func(id string) bool) (map[string]string, error)
+}
+
 // BranchPrefix namespaces the branches of kiln's dedicated areas in git.
 const BranchPrefix = "kiln/"
 
