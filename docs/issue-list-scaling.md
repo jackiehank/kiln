@@ -57,3 +57,49 @@
 - 来源：用户在会话中提出——"status 等列出 issue 的命令，输出时要不要全量输出，以后 issue 几十条上百条怎么办？"。用户明确要求**先记、稍后再处理**。
 - 与 `machine-readable-output` 相邻：那一轮把 `status` 定成平铺的一层行、把 `list` 定成"过滤但全量"，本 issue 接着问"行数失控怎么办"。
 - 与 `cli-necessity` 的"查询能力"一条相邻但不同：那是**查询语言**，这里是**默认输出多少**。
+
+## 收集（2026-10-27）
+
+本轮先核实"现有信息"，不裁决。**问题被重新校准了一句**：原文问"要不要全量"，而实际痛点是"issue 多了以后**找不到**某条信息"；用户在下游 `dsh-kiln` 插件里用的办法是**筛选 + 搜索**。所以下面核实的是：现有筛选到什么程度、有没有搜索、缺什么。
+
+### 1. 现仓基线（本仓 60 issue / 260 动作 / 3 domain）
+
+| 出口 | 体量 | 说明 |
+| --- | --- | --- |
+| `status`（文本） | 2,552 B / **70 行** | 60 条 issue 全量 + 3 个块头 |
+| `status --json` | 17,365 B | 行有 `id/domain/action/done/title/has-worktree` |
+| `list --json` | 6,933 B | 行**只有** `id/domain/action/done`——**没有 title** |
+| `graph --json` | 25,659 B | 60 节点（`title` 有则给）、78 边 |
+| `path --all --json` | 121,008 B / 260 动作 | 单进程；单条 path 平均 ~2 KB、最大 7.3 KB（`relation-vocabulary`，18 个动作） |
+| 域分布 | cli 30 / design 29 / tooling 1 | 域筛选最多只砍一半 |
+
+耗时（三次取最快）：`--version` 45 ms（启动地板）、`list` 99 ms、`graph` 100 ms、`path --all --json` 102 ms、`status` 150 ms。**读一次全史 ≈ 100–150 ms**，搜索/筛选若在同一份历史里做，不额外读盘。
+
+### 2. kiln 现有筛选（核实结果）
+
+- **按 issue 名取路径**：`kiln path <id> --json` 可用，但是**精确 id**，没有前缀/模糊匹配；单条平均 ~2 KB。
+- **域筛选**：`kiln list --domain=<d>` 可用（cli 30 / design 29 / tooling 1），但三个短板：
+  1. `list` 的行**不带 title**（`status --json` 才带），筛完还剩"这 id 是什么事"要再查；
+  2. **没有 `--status`**（进行中/完成）；
+  3. 未知 flag **只警告不报错**：`kiln list --status=open --json` 打一行警告后仍**全量 60 条**（exit 0）——看起来筛了，其实没筛。
+- **带标题的出口**只有 `graph --json`（节点有 `title/domain/tags`）与 `status --json`；但 `graph` 只支持 `--issue/--depth` 收窄**邻域**，不能按 domain 筛；`status` 没有任何过滤 flag。
+- 因此今天**没有任何一条命令能"按 domain 筛 + 带标题"**：要么 `list --domain`（无标题），要么 `graph --json` 全量后客户端筛（下游插件正是这么做的），要么逐条 `path`。
+- 组合筛选是 AND（`--domain` × `--tag` × `--action`）；`--tag` 是 issue 级并集（`list --tag=json` 命中 1 条）。
+
+### 3. dsh-kiln 现状（下游真实消费者）
+
+- **取数**：一次快照 = 1 次 `kiln graph --json` + **每条 issue 一次** `kiln path <id> --json`（N ≤ 80、并发 8）；冷启动实测 **1.29 s / 59 条**（dsh-kiln `c58e166` 记录），HEAD 令牌增量约 0.2 s。
+- **筛选**：issue 页按 **domain / 状态**，时间线页按 **动作 / domain**；组内 OR、组间 AND；**纯客户端**（不调 `kiln list`）；tag 刻意不作为筛选维度（动作级 trailer vs issue 级并集）。
+- **搜索**：页头常驻输入框，输入即搜。检索面 = **issue id + 当前标题 + 所有动作标题**；空白切词、大小写不敏感、词间 AND；排序 **id 前缀 > id 命中 > 标题命中 > 动作标题命中**；命中片段高亮，回车按命中类型跳 issue 页或时间线。**不含** tag / domain / 关系名 / 提交正文。
+- **它记的上游缺口已补**：插件 README 仍写"`kiln path a b --json` 静默只回第一个，要再快只能等上游给批量接口"——本仓刚落地 `path --all --json`（一次进程 60 条 / 260 动作 / 182 ms；见 `docs/issues/path-batch.md`）。插件**尚未迁移**到批量，仍逐条取。
+
+### 4. 搜索的空白（留给下一步，不在本轮定）
+
+1. **归属**：只留在插件 = 两套语义（插件能搜，CLI/agent 不能；agent 现在要搜只能自己读 `graph --json` 再在内存里匹）；进 kiln = 要定匹配面、排序、输出形态。
+2. **检索面**：与插件同口径（id + 标题 + 动作标题）最省；要不要加 `tags/domain/refs/scope/target`，或加**提交正文**？正文本来就在 `Log()` 读进来的消息里，**不加进程、不加 IO**，但噪声（trailer 行也会命中）与"搜到的是不是用户想找的"要定。
+3. **形态**：新 `kiln search <词…>`，还是 `list --match <词…>` 与现有 `--domain/--tag/--action` 做 AND？后者不引入新排序，前者可做 id 前缀优先。
+4. **顺带缺口**：`--status`（进行中/完成）与 `--limit/--offset` 都还没有；但"未知 flag 只警告"意味着加这些之前，误用会静默回全量。
+
+### 5. 对原问题的一句话校准
+
+按实测，**"少输出"不是首要矛盾**：100–150 ms、几十 KB、70 行，都还读得动；矛盾是"**找得到**"。默认截断会破坏"全库概览 = 看全"的语义，而筛选/搜索是**无损**路线——这与候选 E 同向。但这只是收集，**是否加、加在哪、搜什么**尚未决定。
