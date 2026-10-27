@@ -3493,3 +3493,48 @@ func TestCommitDoesNotReReadDirtyState(t *testing.T) {
 		t.Fatalf("commit must derive cleanliness from Changes, got %d Dirty calls", dirtyCalls)
 	}
 }
+
+// The streaming writer must emit exactly the bytes writeJSON would emit for the
+// same batch document: the shape is a contract, not an implementation detail.
+func TestPathBatchStreamsTheSameBytesAsWriteJSON(t *testing.T) {
+	var streamed, streamedErr bytes.Buffer
+	e := newBatchEnv(&streamed, &streamedErr)
+	if code := e.path([]string{"--all", "--json"}); code != 0 {
+		t.Fatalf("streamed exit code = %d, stderr = %q", code, streamedErr.String())
+	}
+
+	repo, code := e.loadRepo()
+	if repo == nil {
+		t.Fatalf("loadRepo exit = %d", code)
+	}
+	edges := engine.FoldEdges(repo, e.rel())
+	docs := make([]pathDoc, 0, len(repo.Issues))
+	for _, id := range engine.IDs(repo) {
+		d, err := e.pathDocOf(repo.Issues[id], statNone, nil, edges, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		docs = append(docs, d)
+	}
+	var want bytes.Buffer
+	we := &env{out: &want, errw: &bytes.Buffer{}}
+	if code := we.writeJSON(pathBatchDoc{Issues: docs}); code != 0 {
+		t.Fatalf("writeJSON exit = %d", code)
+	}
+	if streamed.String() != want.String() {
+		t.Fatalf("streamed batch differs from writeJSON:\nstreamed:\n%s\nwant:\n%s", streamed.String(), want.String())
+	}
+}
+
+// A batch that is nothing but failures still writes the empty issues array first
+// and the errors after it, in the same shape as any other batch.
+func TestPathBatchWithOnlyErrors(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newBatchEnv(&out, &errb).path([]string{"nope1", "nope2", "--json"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	want := "{\n  \"issues\": [],\n  \"errors\": [\n    {\n      \"issue\": \"nope1\",\n      \"error\": \"unknown-issue\"\n    },\n    {\n      \"issue\": \"nope2\",\n      \"error\": \"unknown-issue\"\n    }\n  ]\n}\n"
+	if out.String() != want {
+		t.Fatalf("only-errors batch =\n%s\nwant\n%s", out.String(), want)
+	}
+}

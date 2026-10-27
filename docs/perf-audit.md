@@ -380,3 +380,53 @@ kiln 没有索引：每条读命令都从提交历史现算模型——一次 `g
 - 低风险：`path --all` 流式编码，避免整份文档与 stats 常驻内存；
 - `search` 的 haystack 不逐 issue 拼大字符串；
 - `show` / `commit` 的全史依赖需要索引或缓存，与无索引设计冲突，暂不做。
+
+## test（2026-10-27）：`path --all` 流式 JSON
+
+### 改了什么
+
+- `pathBatch` 不再先构造整份 `pathBatchDoc`，而是逐 issue 编码写出：
+  - 新增 `pathBatchWriter`：64 KB `bufio.Writer` + **复用一个** `json.Encoder` 与 scratch buffer（100k 次编码不为每条分配 encoder）；
+  - 输出字节与 `writeJSON` 完全一致（键序、2 空格缩进、不转义 HTML、结尾换行）；
+  - `errors` 很小，仍缓冲到末尾再写；空 `issues` 写 `[]`。
+- 单条 `path`、`show`、`list`、`status`、`check`、`graph` 仍走 `writeJSON`，不动。
+
+### 等价性
+
+用旧二进制保存 5 份输出，新二进制逐字节对比，**全部相同**：
+
+| 输出 | 字节 | 相同 |
+| --- | --- | --- |
+| 真仓 `path --all --json` | 136,540 | ✅ |
+| 真仓 `path --all --json --shortstat` | 153,551 | ✅ |
+| `path <id> <id> --json`（重复 id） | 3,503 | ✅ |
+| `path nope1 nope2 --json`（只有 errors） | 173 | ✅ |
+| 16k 仓 `path --all --json` | 5,610,447 | ✅ |
+
+新增两个测试：流式输出与 `writeJSON` 对同一批文档**逐字节相同**；只有 errors 的 batch 的精确文本。
+
+### 效果
+
+| 规模 | 指标 | 旧 | 新 |
+| --- | --- | --- | --- |
+| 真仓 62 issue | 时间 | 107 ms | 109 ms（噪声内） |
+| 16k issue | 时间 | 339 ms | 336 ms |
+| 16k issue `--shortstat` | 时间 | 421 ms | 411 ms |
+| **100k issue** | 时间 | 1,055–1,075 ms | **1,114–1,223 ms**（+5–10%） |
+| **100k issue** | **峰值内存** | **330 MB** | **183–201 MB（−40%）** |
+| 100k `--stat` | 峰值内存 | 265–299 MB | 199 MB |
+
+- 内存下降来自不再持有整份文档：100k 个 `pathDoc` 结构体 + 35 MB JSON 一起消失，只剩当前 issue 与（`--stat` 时的）stats map。
+- 时间小幅上升是 **100k 次小 JSON 编码**的固定成本（每次约 1 µs）；bufio 与复用 encoder 已经压到最低。真仓与 16k 上看不出差别。
+- 峰值仍随模型增长（模型本身 O(提交数)，无法靠输出层解决）；`--stat` 的 stats map 也仍在。
+
+### 边界
+
+- 只影响 `path --all` / 多 id 的 batch；单条命令仍是原路径。
+- 写错误语义不变：写失败打印 `输出 JSON 失败` 并 exit 1（可能已写出半份文档，与旧行为相同）。
+- 流式后的输出仍是一份合法 JSON，只是产生方式不同。
+
+### 判定（留给 conclude）
+
+- **建议保留**：100k 时内存是更硬的约束（330 → 190 MB），时间代价 5% 且只在极端规模出现；真仓无差别。
+- 若以后更在意大 batch 的延迟，可加“超过阈值才流式”的双路径——代价是两条路径都要测试，暂不做。

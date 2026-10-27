@@ -4,6 +4,8 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1448,27 +1450,133 @@ func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
 	}
 	stats := e.batchStats(repo, backend, ids, mode)
 	edges := engine.FoldEdges(repo, e.rel())
-	doc := pathBatchDoc{Issues: make([]pathDoc, 0, len(ids))}
+	w := newPathBatchWriter(e.out)
+	var errs []pathBatchError
 	for _, id := range ids {
 		p, ok := repo.Issues[id]
 		if !ok {
-			doc.Errors = append(doc.Errors, pathBatchError{Issue: id, Error: errUnknownIssue})
+			errs = append(errs, pathBatchError{Issue: id, Error: errUnknownIssue})
 			continue
 		}
 		d, err := e.pathDocOf(p, mode, backend, edges, stats)
 		if err != nil {
-			doc.Errors = append(doc.Errors, pathBatchError{Issue: id, Error: errStatFailed})
+			errs = append(errs, pathBatchError{Issue: id, Error: errStatFailed})
 			continue
 		}
-		doc.Issues = append(doc.Issues, d)
+		w.issue(d)
+		if w.err != nil {
+			break
+		}
 	}
-	if code := e.writeJSON(doc); code != 0 {
-		return code
+	if err := w.finish(errs); err != nil {
+		fmt.Fprint(e.errw, i18n.T("输出 JSON 失败: %v\n", err))
+		return 1
 	}
-	if len(doc.Errors) > 0 {
+	if len(errs) > 0 {
 		return 1
 	}
 	return 0
+}
+
+// pathBatchWriter streams the batch document one issue at a time, so a large
+// `path --all` never holds the whole document — at 100k actions it is 35 MB of
+// JSON and one pathDoc per action — before the first byte leaves. The bytes are
+// exactly what writeJSON emits for pathBatchDoc: same key order, 2-space indent,
+// no HTML escaping, trailing newline.
+type pathBatchWriter struct {
+	buf     *bufio.Writer
+	enc     *json.Encoder
+	scratch bytes.Buffer
+	first   bool
+	err     error
+}
+
+func newPathBatchWriter(out io.Writer) *pathBatchWriter {
+	w := &pathBatchWriter{buf: bufio.NewWriterSize(out, 64*1024), first: true}
+	w.enc = json.NewEncoder(&w.scratch)
+	w.enc.SetEscapeHTML(false)
+	w.enc.SetIndent("    ", "  ")
+	_, w.err = fmt.Fprint(w.buf, "{\n  \"issues\": [")
+	return w
+}
+
+// encode renders v at the current nesting level. One encoder and one scratch
+// buffer are reused for every issue: 100k allocations of both is measurable.
+func (w *pathBatchWriter) encode(v any) ([]byte, error) {
+	w.scratch.Reset()
+	if err := w.enc.Encode(v); err != nil {
+		return nil, err
+	}
+	body := bytes.TrimSuffix(w.scratch.Bytes(), []byte("\n"))
+	out := make([]byte, 0, 4+len(body))
+	out = append(out, "    "...)
+	out = append(out, body...)
+	return out, nil
+}
+
+// issue writes one element of the issues array.
+func (w *pathBatchWriter) issue(doc pathDoc) {
+	if w.err != nil {
+		return
+	}
+	body, err := w.encode(doc)
+	if err != nil {
+		w.err = err
+		return
+	}
+	if w.first {
+		w.first = false
+		_, w.err = fmt.Fprint(w.buf, "\n")
+	} else {
+		_, w.err = fmt.Fprint(w.buf, ",\n")
+	}
+	if w.err == nil {
+		_, w.err = w.buf.Write(body)
+	}
+}
+
+// finish closes the issues array, adds the errors array when there is one, and
+// closes the document.
+func (w *pathBatchWriter) finish(errs []pathBatchError) error {
+	if w.err != nil {
+		return w.err
+	}
+	if w.first {
+		if _, err := fmt.Fprint(w.buf, "]"); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprint(w.buf, "\n  ]"); err != nil {
+		return err
+	}
+	if len(errs) > 0 {
+		if _, err := fmt.Fprint(w.buf, ",\n  \"errors\": ["); err != nil {
+			return err
+		}
+		for i, e := range errs {
+			body, err := w.encode(e)
+			if err != nil {
+				return err
+			}
+			if i == 0 {
+				_, err = fmt.Fprint(w.buf, "\n")
+			} else {
+				_, err = fmt.Fprint(w.buf, ",\n")
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := w.buf.Write(body); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprint(w.buf, "\n  ]"); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprint(w.buf, "\n}\n"); err != nil {
+		return err
+	}
+	return w.buf.Flush()
 }
 
 // batchStats fetches the diffstats of every action in the batch in one call. It
