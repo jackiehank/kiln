@@ -178,3 +178,15 @@
 - **`graph --json` 已够 agent 用**：25.7 KB 里就有 id/title/domain/done；若 agent 只按 issue 级找，`--match` 只是省 token，不是新能力。先做 H4 的 title，再观察是否真的需要 match。
 - **两套匹配**：插件与 CLI 各一份"包含"逻辑；不做 §6.1 的对拍，语义会慢慢分叉——要先声明谁是契约（倾向 kiln 定义、插件对齐）。
 - **正文约定会变**：一旦要求动作提交写"为什么"段落，H3 失效，检索面必须重议。
+
+## apply（2026-10-27，第一落点：`list` 行补 `title`）
+
+只落 H4 的第一项；`--status` 的**取值名**（"done/完成"与"`conclude`、`apply` 之后仍可继续"这件事有歧义，用户点名要再探讨）与 `--match` 都还没定。
+
+- `internal/cli/cli.go`：`listIssue` 增 `Title string`（`json:"title,omitempty"`）；`list --json` 经 `issueTitle(p)` 取——**最后一个动作的 `title`，缺则回退该动作的提交首行**（`f8413d8` 是这种：首行就是 `issue: help-relation-flags`，`title` 为空）。`issueCore` 未动。
+- **文本视图不动**：`list` 文本仍只有 id / 状态 / domain；标题进文本的时机留给 `--match`（那里才有"命中理由"要显示）。
+- 文档：`docs/machine-readable-output.md` §3 的 list 字段表、示例与共享契约补 `title`；`docs/json-fields.md` 记下其非目标被推翻的原因。
+- 测试：`TestListJSONCarriesTheIssueTitle`（三行 title 与最后动作一致）、`TestListJSONFallsBackToSubjectWithoutTitle`（末条动作无 title → 首行）；既有 `TestListJSONSharesTheIssueRow` 的 golden 补 `title`。
+- 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `list --json --domain=cli` 冒烟（30 行、每行带 title）。
+
+**这不是完成**：本条按 `apply` 记（`kiln status` 会显示已完成），但 `--status` 取值名与 `--match` 仍待议；下一次讨论会以新动作把它拉回"进行中"。

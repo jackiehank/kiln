@@ -130,8 +130,8 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
   "filter": { "domain": "design", "action": "ask" },
   "count": 7,
   "issues": [
-    { "id": "action-granularity", "domain": "design", "action": "ask", "done": false },
-    { "id": "common-origin", "domain": "design", "action": "ask", "done": false }
+    { "id": "action-granularity", "domain": "design", "action": "ask", "done": false, "title": "实现一个 issue 时中间动作要不要分阶段提交" },
+    { "id": "common-origin", "domain": "design", "action": "ask", "done": false, "title": "两个 issue 同源（来源不是 issue）时该怎么表达" }
   ]
 }
 ```
@@ -141,12 +141,13 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 | `filter.*` | 命令行 `--domain/--tag/--action` | **原样回显**已给的条件（给 CI 日志定位用）；未给则**省略该键**——省略即"没按这条过滤" |
 | `count` | `len(ids)` | 命中数；与 `issues` 长度恒等，但省得消费方自己数 |
 | `issues[].id` / `domain` / `action` / `done` | 同 §2 的 issue 行 | **与 `status` 共用同一个行 schema**（`children` / `has-worktree` 除外） |
+| `issues[].title` | 该 issue **最后一个动作**的 `title`；缺则回退该动作的提交首行 | 空则省略；筛出来的行要能回答"是什么事"（`issue-list-scaling` 的 H4，推翻了 `json-fields` 当时"不给 list 加 title"的非目标） |
 | `issues[].tags` | `model.Issue.Tags` | 空则省略（文本只在非空时打 `tags=`） |
 
 要点：
 
 - **`list` 不报 `worktree`**：`■` 与 worktree 段**只在 `status` 出现**，这是 `worktree-hint` 已定的"读命令不加 worktree 噪声"；为它给 `list` 多起一次后端查询不值得。
-- **行 schema 与 `status` 的重叠部分是契约**（`id` / `domain` / `action` / `done`）：同一套字段名，消费方一份解码器覆盖两个命令。
+- **行 schema 与 `status` 的重叠部分是契约**（`id` / `domain` / `action` / `done` / `title`）：同一套字段名，消费方一份解码器覆盖两个命令。
 
 ### 4. `kiln check --json`
 
@@ -267,7 +268,7 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 - **§7 的遗留"嵌套 vs 平铺"已销**（已就地标注）。
 - 这条取舍对 `path` / `show` 同样成立：**数据层一律平铺，视图（缩进 / 树线 / 分组标题）归视图**——将来给它们加 `--json` 时不必再议同一个问题。
-- `status` 与 `list` 的行 schema 从“重叠”变成**同一份契约**：共享 `id` / `domain` / `action` / `done`；`status` 多 `has-worktree`，`list` 多 `tags`。一份解码器覆盖两个命令。两个命令的**排序**不同是刻意的（`status` 走 domain 块，`list` 按 ID），所以共享的是**行本身**，测试按 ID 取行比对。
+- `status` 与 `list` 的行 schema 从“重叠”变成**同一份契约**：共享 `id` / `domain` / `action` / `done` / `title`（`title` 于 `issue-list-scaling` 补进 `list`）；`status` 多 `has-worktree`，`list` 多 `tags`。一份解码器覆盖两个命令。两个命令的**排序**不同是刻意的（`status` 走 domain 块，`list` 按 ID），所以共享的是**行本身**，测试按 ID 取行比对。
 
 ## test：落地三个命令的 `--json`（含真仓端到端）
 

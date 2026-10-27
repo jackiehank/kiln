@@ -1765,6 +1765,7 @@ func (e *env) list(args []string) int {
 			p := repo.Issues[id]
 			doc.Issues = append(doc.Issues, listIssue{
 				issueCore: issueCore{ID: p.ID, Domain: p.Domain, Action: p.State(), Done: e.isDone(p)},
+				Title:     issueTitle(p),
 				Tags:      p.Tags,
 			})
 		}
@@ -2052,6 +2053,21 @@ func tagsSuffix(p *model.Issue) string {
 	return strings.Join(parts, " ")
 }
 
+// issueTitle is the one line that names an issue in a listing: the last action's
+// title, falling back to that action's subject when the commit carried no title
+// trailer (a handful of early actions did not). It never invents a second
+// notion of "the issue's name" — status and graph read the same last action.
+func issueTitle(p *model.Issue) string {
+	last, ok := p.Last()
+	if !ok {
+		return ""
+	}
+	if last.Title != "" {
+		return last.Title
+	}
+	return last.Subject
+}
+
 func shortID(id string) string {
 	if len(id) > 7 {
 		return id[:7]
@@ -2144,7 +2160,8 @@ type filterQuery struct {
 
 type listIssue struct {
 	issueCore
-	Tags []string `json:"tags,omitempty"`
+	Title string   `json:"title,omitempty"`
+	Tags  []string `json:"tags,omitempty"`
 }
 
 // checkDoc is the `kiln check --json` document. OK mirrors the exit code — false

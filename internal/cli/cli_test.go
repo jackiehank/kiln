@@ -1905,7 +1905,8 @@ func TestListJSONSharesTheIssueRow(t *testing.T) {
       "id": "parent",
       "domain": "design",
       "action": "apply",
-      "done": true
+      "done": true,
+      "title": "父落地"
     }
   ]
 }
@@ -1948,6 +1949,50 @@ func TestListJSONSharesTheIssueRow(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fromStatusRow, fromListRow) {
 		t.Fatalf("the shared row differs: status %+v vs list %+v", fromStatusRow, fromListRow)
+	}
+}
+
+// Every list row names its issue, so a filtered result can be read without a
+// second `path` call. Title comes from the last action — the same source as
+// `status` and `graph`.
+func TestListJSONCarriesTheIssueTitle(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("list --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	want := map[string]string{"child": "子", "parent": "父落地", "stray": "游荡验证"}
+	if len(doc.Issues) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(doc.Issues), len(want))
+	}
+	for _, row := range doc.Issues {
+		if row.Title != want[row.ID] {
+			t.Fatalf("%s title = %q, want %q", row.ID, row.Title, want[row.ID])
+		}
+	}
+}
+
+// A last action without a title trailer still names the issue: fall back to the
+// commit's first line instead of leaving the row blank.
+func TestListJSONFallsBackToSubjectWithoutTitle(t *testing.T) {
+	base := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb, repo: fakeRunner{commits: []vcs.Commit{
+		{ID: "n2", Date: base.Add(time.Hour), Message: "落地但没有 title trailer\n\nissue: no-title\naction: apply"},
+		{ID: "n1", Date: base, Message: "开题\n\nissue: no-title\naction: ask\ntitle: 开题"},
+	}}}
+	if code := e.list([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("list --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Issues) != 1 || doc.Issues[0].Title != "落地但没有 title trailer" {
+		t.Fatalf("fallback title = %+v", doc.Issues)
 	}
 }
 

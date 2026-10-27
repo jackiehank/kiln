@@ -47,3 +47,11 @@ agent 访谈（2026-10-23）里发现两处既有 JSON 的小缺口，同属"字
 | `kiln check --json` | `results[].relation` | `relation-target` 上被声明的关系名 | 仅 `relation-target`；其它 rule 不带 |
 
 边界：`title` 只属于 `status` 的行，`list --json` 的公共行 `issueCore` 没有动；`relation` 不替代 `ref`——`ref` 仍是被指向的 id，二者合起来才定位一条坏边。`slot` 依旧不暴露。
+
+## 后续（2026-10-27）：`list` 行补 `title`，推翻本条非目标
+
+`issue-list-scaling` 的 collect / hypothesize 核实：`list` 是唯一按属性过滤的出口，行里只有 `id/domain/action/done`，筛完还得逐条 `path` 才知道"是什么事"。于是把本条非目标"不给 `list --json` 加 `title`"改为**加**：
+
+- `listIssue` 增 `Title string`（`json:"title,omitempty"`），与 `status` 同源——最后一个动作的 `title`；缺则回退该动作的提交首行（`f8413d8` 这种动作就没有 `title`）。
+- 公共行 `issueCore` 仍未动；`status` 与 `list` 的共享契约从 `id/domain/action/done` 扩为**再加 `title`**。
+- 决策与权衡见 `docs/issue-list-scaling.md` 的 collect / hypothesize / apply。
