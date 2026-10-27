@@ -203,3 +203,108 @@
 - 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `list --status=open --json` 冒烟（60 条里 7 条未收尾，与 `status` 的"进行中 7"一致）。
 
 **仍未做**：`--match`（hypothesize 的 H2/H3）与"命中动作标题时的 `match` 字段"；`list` 文本仍不带 title。
+
+## collect（2026-10-27）：CLI 搜索的成熟方案盘点
+
+问题：第三落点 `--match` / `search` 该长什么样。先看广泛采用的 CLI 搜索怎么设计——只记录，不裁决。
+
+### 1. 两种形态，而且不互斥
+
+- **独立搜索动词**：`grep` / `rg` / `fd` / `git grep` / `gh search issues` / `brew search`。
+- **列表上的过滤/搜索**：`gh issue list --search` / `kubectl get -l` / `docker ps --filter` / `git-bug ls [QUERY]`。
+- 同一工具常常两者都有：gh 既提供 `gh search issues`（独立输出、相关度排序），也提供 `gh issue list --search`（复用列表行）。所以"独立命令还是 flag"不是二选一，真正的问题是**要不要独立的输出与排序**。
+- **查询串**：gh 支持 `label:bug author:@me` 这类限定符与 OR/AND（布尔要作为独立参数传，不能包在一个多词字符串里）；git-bug 支持 `status:open sort:edit-desc` + 自然语言全文，且能与 flag 混用。
+- 连 gh 都把语义检索做成了 opt-in：`--search-type lexical|semantic|hybrid`，**默认仍是 lexical**。
+
+→ 共识：**属性条件用 flag/限定符，自由文本只负责"记得的词"；布尔与语法是专家层。**
+
+### 2. 默认匹配语义（手感的核心）
+
+| 工具 | 默认匹配 | 大小写 | 多词 |
+| --- | --- | --- | --- |
+| `grep` | 基本正则 | 敏感（`-i` 才忽略） | 多个 `-e` = OR |
+| `rg` | 正则 | 敏感（`-S` = smart-case） | 多个 `-e` = OR |
+| `fd` | 正则 | **smart-case 为默认**（含大写才敏感） | 单个 pattern |
+| `git log --grep` | 基本正则 | 敏感（`-i`） | 多个 `--grep` = OR；`--all-match` 才 AND |
+| `gh search` / `gh issue list --search` | 关键词（GitHub 搜索语法） | 不敏感 | **AND** |
+| `git-bug ls` | 自然语言全文 + 查询串 | — | 词一起给 |
+| `fzf` | 模糊 | 不敏感 | 空格 = AND，`\|` = OR，`!` = 非 |
+
+两条线很清楚：**文件/行搜索器默认正则（grep 家族），issue/记录搜索默认关键词 AND（gh / GitHub / git-bug）**。kiln 的"记得一个词"属于后者——"默认正则"不是搜索的普遍共识，只是 grep 家族的传统；GitHub 的搜索默认也不是正则。
+
+大小写：grep 家族默认敏感但都提供 `-i` / smart-case；issue 类搜索（gh / GitHub）默认不敏感。`fd` 把 smart-case 做成默认，是"手感更好"的代表。字面量兜底也普遍存在（`rg` / `git grep -F`、`git grep -E`、fzf 的 `'` 精确匹配）；否定（`-v` / `!` / `-label:`）是选项，不是默认。
+
+### 3. 检索面与字段收窄
+
+- gh：默认搜 title + body + comments，`--match {title|body|comments}` 收窄；网页语法有 `in:title`。
+- `git log --grep` 只搜提交信息；`-S` / `-G` 才搜 diff；`git grep` 搜内容。
+- git-bug：自然语言全文 + `--title` 等 flag。
+- `rg` / `fd`：内容 / 文件名，`-g` / `-t` 限定范围。
+
+→ 共识：默认面可以宽，但**必须有"只搜某字段"的开关**；"标题优先"是 issue 工具的常见诉求（gh 的 `--match`、git-bug 的 `--title`）。
+
+### 4. 排序、limit 与截断
+
+- 非交互默认稳定序：`git log` 时间倒序、`rg` 文件遍历顺序（`--sort path` 可确定化）、git-bug `--by creation`、`gh issue list` 默认 open + 最近 30。
+- 相关度是交互/服务端的活：`gh search` 默认 `--sort best-match`、`fzf` 按模糊分数排；**文件搜索器没有相关度**（rg 按遍历序）。
+- limit：gh 两个命令都 `--limit` **默认 30**（文档明确"默认只看最近 30"）；npm search `--searchlimit` 默认 20；kubectl/docker 不截断；`rg -m` 按文件限。
+- 截断可见性：gh 用"most recent 30"说明，但没有"还有 N 条"的尾巴——这是它的短板。
+
+→ 共识：**非交互不搞相关度排序**（留给 fzf / 服务端）；**有默认 limit 就必须让人知道被截断**。kiln 现在不截断，反而少一个坑。
+
+### 5. 输出与退出码
+
+- grep 三态：**0 有命中 / 1 无命中 / 2 错误**；`-l` / `-c` / `-n`；`rg --json` 是 begin/match/end 事件流；颜色只在 TTY。
+- gh：人读表格；`--json <fields>` + `--jq` / `--template` 是机器契约；`--limit`。
+- kubectl / docker：空结果是表头 + "No resources found"（stderr）、**exit 0**。
+- fzf：没选中就没有 stdout（exit 1 / 130）。
+
+→ 两条约定：**搜索动词遵循 grep 三态**（"没命中"是答案，exit 1）；**列表过滤器 exit 0 + 空表**。kiln 的 `list` 属于后者（`--domain` / `--status` 空结果 exit 0，与 kubectl / docker 一致）；只有独立 `search` 才需要决定要不要学 grep 的 1。
+
+### 6. 交互式与管道
+
+fzf / skim 把"交互式搜索"做成独立工具（TUI、模糊评分、预览、多选），靠管道组合（`rg … | fzf`），不塞进数据 CLI。dsh-kiln 的搜索框已经是这一层，kiln 不需要 TUI。
+
+### 7. 广泛接受的约定（清单）
+
+1. 记录类搜索默认**关键词 / 字面量子串**，正则 `--regex` 是专家开关；文件类才默认正则。
+2. **多词默认 AND**（grep 家族的 OR 是例外，git 用 `--all-match` 补上 AND）。
+3. 记录类**大小写不敏感**；文件类敏感 + smart-case。
+4. 字段收窄有开关（`--match` / `--grep` / `-t`）。
+5. 结构化条件用 **flag / 限定符**，不发明自由文本里的魔法词。
+6. 非交互用**稳定顺序**，相关度留给交互层。
+7. **有 limit 就显示截断**；没有 limit 就别假装有。
+8. **搜索动词 grep 三态；列表过滤器空结果 exit 0**。
+9. **颜色只在 TTY；JSON 是机器契约**（gh 的 `--json <fields>` 是标杆）。
+
+### 8. 对 kiln 的含义（观察，不是决定）
+
+1. **形态**：gh 的双形态说明 `list --match` 与独立 `search` 都正当；区别在"要不要独立输出 / 排序"。kiln 现在只有一种行（`listDoc`），`--match` 能直接复用，独立 `search` 才需要新输出。
+2. **默认语义**：kiln 的语料是标题（无正文散文），"记得一个词"→ **字面量子串 + 多词 AND + 大小写不敏感**是共识；正则应 opt-in（这个默认与 gh 一致，不是与 rg 一致）。
+3. **字段**：默认搜 id + 当前标题 + 动作 subject 已覆盖"记得的词"；`--match=title|action` 这类收窄可以晚点加（gh 也是显式字段）。
+4. **结构化**：domain / tag / action / status 已有 flag，不需要查询语言，也不要 `label:` 语法。
+5. **排序**：`list` 按 id，符合非交互共识；相关度留给 dsh-kiln。
+6. **limit**：现在不截断；若加 `--limit`，必须打印"只显示前 N / 共 M"。
+7. **退出码**：`list --match` 空结果继承 `list` 的 exit 0；独立 `search` 才考虑 grep 三态。
+8. **输出**：`--json` 复用 `listDoc`（命中动作时加 `match` 字段）；文本一行一命中；颜色仅在 TTY（kiln 现在无颜色）。
+
+### 9. 留待 hypothesize / conclude 的问题
+
+- **形态**：`--match` vs `search`（盘点给了 gh 的双形态先例，但没替 kiln 选）。
+- **默认**：字面量 AND 已定调；要不要 `--regex` 开关、引号短语怎么切。
+- **字段收窄**（`--match=title|action`）一开始要不要。
+- **`--limit` 与截断提示、空结果退出码**。
+
+### 来源
+
+- GitHub CLI：`gh search issues`、`gh issue list` —— [gh_search_issues](https://cli.github.com/manual/gh_search_issues)、[gh_issue_list](https://cli.github.com/manual/gh_issue_list)
+- ripgrep：[GUIDE.md](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md)、[rg(1)](https://man.archlinux.org/man/rg.1.en)
+- fd：[fd(1)](https://man.archlinux.org/man/fd.1.en)（smart-case 默认）
+- fzf：[fzf(1)](https://manpages.ubuntu.com/manpages/jammy/man1/fzf.1.html)（extended search）
+- git：[git-log(1)](https://git-scm.com/docs/git-log)、[git-grep(1)](https://git-scm.com/docs/git-grep)
+- git-bug：[git-bug-ls(1)](https://man.freebsd.org/cgi/man.cgi?query=git-bug-ls&sektion=1)
+- kubectl：[Labels and Selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/)
+- docker：[docker ps](https://docs.docker.com/engine/reference/commandline/ps/)
+- Homebrew：[brew(1) Manpage](https://docs.brew.sh/Manpage)（substring；`/re/` 才按正则）
+- npm：[npm-search](https://docs.npmjs.com/cli/v10/commands/npm-search)（`--searchlimit` 默认 20）
+- GNU grep：[grep(1)](https://www.gnu.org/software/grep/manual/grep.html)
