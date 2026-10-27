@@ -592,7 +592,7 @@ func TestPathJSONRendersThePath(t *testing.T) {
 		t.Fatalf("actions = %d, want 2", len(doc.Actions))
 	}
 	first := doc.Actions[0]
-	if first.Ordinal != 1 || first.Action != "ask" || first.ID != "aaaaaaa1" ||
+	if first.Ordinal != 1 || first.Action != "ask" || first.Commit != "aaaaaaa1" ||
 		first.Date != "2026-01-01T09:00:00Z" || first.Title != "起点" || first.Stat != "" {
 		t.Fatalf("first action = %+v", first)
 	}
@@ -939,7 +939,7 @@ func TestShowJSONRendersTheSelectedAction(t *testing.T) {
 		t.Fatalf("show --json is not one JSON document: %v\n%s", err, out.String())
 	}
 	if doc.Issue != "demo" || doc.Ordinal != 2 || doc.Total != 2 || doc.Action != "collect" ||
-		doc.ID != "bbbbbbb2" || doc.Title != "调研" {
+		doc.Commit != "bbbbbbb2" || doc.Title != "调研" {
 		t.Fatalf("show doc = %+v", doc)
 	}
 	if !strings.Contains(doc.Body, "+new line") {
@@ -1906,7 +1906,8 @@ func TestListJSONSharesTheIssueRow(t *testing.T) {
       "domain": "design",
       "action": "apply",
       "done": true,
-      "title": "父落地"
+      "title": "父落地",
+      "commit": "d4"
     }
   ]
 }
@@ -2090,13 +2091,13 @@ func newSearchEnv(out, errw *bytes.Buffer) *env {
 func TestListSearchFindsIdTitleAndActionSubjects(t *testing.T) {
 	cases := []struct {
 		query string
-		hit   string
+		hit   *listHit
 	}{
-		{"cache", ""},    // id alone explains it
-		{"淘汰", ""},       // the current title shows it
-		{"cache 淘汰", ""}, // split over id + title
-		{"LFU", "缓存淘汰是否要引入 LFU"},  // only an early action says it
-		{"lru 命中率", "测了 LRU 命中率"}, // case-insensitive, two terms, one action
+		{"cache", nil},    // id alone explains it
+		{"淘汰", nil},       // the current title shows it
+		{"cache 淘汰", nil}, // split over id + title
+		{"LFU", &listHit{Ordinal: 1, Action: "ask", Commit: "s1", Subject: "缓存淘汰是否要引入 LFU"}},   // only an early action says it
+		{"lru 命中率", &listHit{Ordinal: 2, Action: "test", Commit: "s2", Subject: "测了 LRU 命中率"}}, // case-insensitive, two terms, one action
 	}
 	for _, c := range cases {
 		var out, errb bytes.Buffer
@@ -2113,8 +2114,11 @@ func TestListSearchFindsIdTitleAndActionSubjects(t *testing.T) {
 		if doc.Count != 1 || len(doc.Issues) != 1 || doc.Issues[0].ID != "cache-eviction" {
 			t.Fatalf("%q: rows = %+v", c.query, doc.Issues)
 		}
-		if got := doc.Issues[0].Hit; got != c.hit {
-			t.Fatalf("%q: hit = %q, want %q", c.query, got, c.hit)
+		if got := doc.Issues[0].Hit; !reflect.DeepEqual(got, c.hit) {
+			t.Fatalf("%q: hit = %+v, want %+v", c.query, got, c.hit)
+		}
+		if got := doc.Issues[0].Commit; got != "s3" {
+			t.Fatalf("%q: row commit = %q, want the last action s3", c.query, got)
 		}
 	}
 }
@@ -2131,7 +2135,7 @@ func TestListSearchLeavesHitEmptyWhenTermsSplitAcrossActions(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
 	}
-	if doc.Count != 1 || len(doc.Issues) != 1 || doc.Issues[0].Hit != "" {
+	if doc.Count != 1 || len(doc.Issues) != 1 || doc.Issues[0].Hit != nil {
 		t.Fatalf("rows = %+v", doc.Issues)
 	}
 }
@@ -2221,6 +2225,86 @@ func TestListSearchTextShowsTitleAndHit(t *testing.T) {
 	for _, want := range []string{"cache-eviction", "收尾：淘汰策略落地", "← 缓存淘汰是否要引入 LFU"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("search text missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// One rule across the JSON surface: `id` is always an issue id and `commit` is
+// always a full commit hash. path/show name the hash commit too, and the
+// overview views (status/graph/check) do not carry it at all.
+func TestJSONHashKeyIsCommitEverywhere(t *testing.T) {
+	// path: actions carry commit, not id
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).path([]string{"demo", "--json"}); code != 0 {
+		t.Fatalf("path: exit code = %d, stderr = %q", code, errb.String())
+	}
+	var rawPath struct {
+		Actions []map[string]any `json:"actions"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rawPath); err != nil {
+		t.Fatalf("path: decode: %v", err)
+	}
+	if _, ok := rawPath.Actions[0]["id"]; ok {
+		t.Fatalf("path actions must not carry id any more: %v", rawPath.Actions[0])
+	}
+	if got := rawPath.Actions[0]["commit"]; got != "aaaaaaa1" {
+		t.Fatalf("path actions[0].commit = %v", got)
+	}
+
+	// show: same rule
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "2", "--json"}); code != 0 {
+		t.Fatalf("show: exit code = %d, stderr = %q", code, errb.String())
+	}
+	var rawShow map[string]any
+	if err := json.Unmarshal(out.Bytes(), &rawShow); err != nil {
+		t.Fatalf("show: decode: %v", err)
+	}
+	if _, ok := rawShow["id"]; ok {
+		t.Fatalf("show must not carry id any more: %v", rawShow)
+	}
+	if got := rawShow["commit"]; got != "bbbbbbb2" {
+		t.Fatalf("show.commit = %v", got)
+	}
+
+	// list rows: id is the issue, commit is its last action
+	out.Reset()
+	errb.Reset()
+	if code := newJSONEnv(&out, &errb).list([]string{"--json"}); code != 0 {
+		t.Fatalf("list: exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("list: decode: %v", err)
+	}
+	want := map[string]string{"child": "d5", "parent": "d4", "stray": "d2"}
+	if len(doc.Issues) != len(want) {
+		t.Fatalf("list rows = %d, want %d", len(doc.Issues), len(want))
+	}
+	for _, row := range doc.Issues {
+		if row.Commit != want[row.ID] {
+			t.Fatalf("%s: commit = %q, want %q (issue id stays in id)", row.ID, row.Commit, want[row.ID])
+		}
+	}
+
+	// overview outputs stay hash-free
+	overview := []struct {
+		name string
+		run  func(*env) int
+	}{
+		{"status", func(e *env) int { return e.status([]string{"--json"}) }},
+		{"graph", func(e *env) int { return e.graph([]string{"--json"}) }},
+		{"check", func(e *env) int { return e.check([]string{"--json"}) }},
+	}
+	for _, c := range overview {
+		out.Reset()
+		errb.Reset()
+		if code := c.run(newJSONEnv(&out, &errb)); code != 0 {
+			t.Fatalf("%s: exit code = %d, stderr = %q", c.name, code, errb.String())
+		}
+		if strings.Contains(out.String(), `"commit"`) {
+			t.Fatalf("%s --json must not carry commit:\n%s", c.name, out.String())
 		}
 	}
 }

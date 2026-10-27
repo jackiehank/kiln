@@ -215,3 +215,20 @@
 - 测试影响：所有断言 `path` / `show` 的 `id` 的用例改成 `commit`；新增一条契约测试——"`id` 只出现在 issue 级、`commit` 只出现在提交级"（扫 JSON 键，不是逐条比对）。
 - 文档：`read-json.md`、`machine-readable-output.md`、README、`-h` 里的示例全部同步；`show` 的示例也改。
 - 风险：这是一次**破坏性改名**，但无正式版本、唯一已知消费者可控；`hit` 本身也还没发布，一起改成本最低。
+
+## apply（2026-10-27）
+
+- **代码**（`internal/cli/cli.go`）：
+  - `pathAction.ID` → `Commit`（`json:"commit"`）；`showDoc.ID` → `Commit`；`pathDocOf` / `showJSON` 取 `a.ID`。
+  - `listIssue` 增 `Commit string`（`json:"commit,omitempty"`）与 `Hit *listHit`；新增 `listHit{ordinal, action, commit, subject}`；`issueCommit(p)` 取末条动作的 hash。
+  - `searchHit` 从返回字符串改为返回 `*listHit`（nil 即省略），文本视图仍渲染 `← hit.Subject`。
+  - `status` / `graph` / `check` 一个键都没动。
+- **测试**：`TestPathJSONRendersThePath`、`TestShowJSONRendersTheSelectedAction` 的 `ID` 断言改 `Commit`；`TestListJSONSharesTheIssueRow` 的 golden 补 `"commit": "d4"`；搜索用例改成断言 `*listHit`（含 `ordinal` / `action` / `commit` / `subject`）与行级 `commit`；新增 `TestJSONHashKeyIsCommitEverywhere`——path/show 不再有 `id`、`list` 行 `commit` = 末条 hash、`status`/`graph`/`check` 的输出里没有 `commit` 键。
+- **文档**：`read-json.md`（结论 + 文末「后续」）、`machine-readable-output.md`（list 示例/字段表/要点/共享行契约）、本节。
+- **复核**：`gofmt` / `go vet` / `go test ./...` 全过。真仓冒烟：
+  - `path path-batch --json` 动作键为 `ordinal, action, commit, date, title`（无 `id`）；
+  - `show path-batch --json` 键为 `issue, ordinal, total, action, commit, date, title, body`；
+  - `list --search=worktree --json` 行带 `commit`，命中行动作 `hit: {ordinal: 9, action: "apply", commit: "53c8fd12…", subject: …}`；
+  - `status` / `graph` / `check` 的输出里 `"commit"` 出现 **0** 次。
+- **破坏性变更**：`path.actions[].id` 与 `show.id` 已不存在。dsh-kiln 的 `flow.js` `mapActions` 读 `action.id`，需改成 `action.commit` 后再刷新插件；本仓不代改另一仓。
+- **落点之外**：`status` / `graph` / `check` 仍然不带 hash（H3），等 `cli-consistency` 盘点或真实需求再议。

@@ -1195,7 +1195,7 @@ const (
 type pathAction struct {
 	Ordinal int      `json:"ordinal"`
 	Action  string   `json:"action"`
-	ID      string   `json:"id"`
+	Commit  string   `json:"commit"`
 	Date    string   `json:"date"`
 	Title   string   `json:"title,omitempty"`
 	Refs    []string `json:"refs,omitempty"`
@@ -1211,7 +1211,7 @@ type showDoc struct {
 	Ordinal int    `json:"ordinal"`
 	Total   int    `json:"total"`
 	Action  string `json:"action"`
-	ID      string `json:"id"`
+	Commit  string `json:"commit"`
 	Date    string `json:"date"`
 	Title   string `json:"title,omitempty"`
 	Body    string `json:"body,omitempty"`
@@ -1300,7 +1300,7 @@ func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edge
 		item := pathAction{
 			Ordinal: i + 1,
 			Action:  a.Kind,
-			ID:      a.ID,
+			Commit:  a.ID,
 			Date:    a.Date.Format(time.RFC3339),
 			Title:   a.Title,
 			Refs:    a.Refs,
@@ -1383,7 +1383,7 @@ func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) i
 		Ordinal: ordinal,
 		Total:   len(p.Actions),
 		Action:  a.Kind,
-		ID:      a.ID,
+		Commit:  a.ID,
 		Date:    a.Date.Format(time.RFC3339),
 		Title:   a.Title,
 		Body:    trimNewlines(body),
@@ -1748,21 +1748,21 @@ func issueMatches(p *model.Issue, terms []string) bool {
 	return containsAll(strings.Join(fields, "\x00"), terms)
 }
 
-// searchHit names the text that justifies a hit the row does not already show.
-// When id + title contain every term the row explains itself and hit stays
-// empty; otherwise the earliest action subject holding all terms is used. If the
-// terms are spread over several actions, no single action explains the query and
-// hit is empty too — better silent than pointing at the wrong line.
-func searchHit(p *model.Issue, terms []string) string {
+// searchHit names the action that justifies a hit the row does not already
+// show. When id + title contain every term the row explains itself and hit is
+// nil; otherwise the earliest action subject holding all terms is returned. If
+// the terms are spread over several actions, no single action explains the
+// query and hit is nil too — better silent than pointing at the wrong line.
+func searchHit(p *model.Issue, terms []string) *listHit {
 	if len(terms) == 0 || containsAll(p.ID+"\x00"+issueTitle(p), terms) {
-		return ""
+		return nil
 	}
-	for _, a := range p.Actions {
+	for i, a := range p.Actions {
 		if containsAll(a.Subject, terms) {
-			return a.Subject
+			return &listHit{Ordinal: i + 1, Action: a.Kind, Commit: a.ID, Subject: a.Subject}
 		}
 	}
-	return ""
+	return nil
 }
 
 // containsAll reports whether every term occurs in haystack, case-insensitively.
@@ -1858,6 +1858,7 @@ func (e *env) list(args []string) int {
 			doc.Issues = append(doc.Issues, listIssue{
 				issueCore: issueCore{ID: p.ID, Domain: p.Domain, Action: p.State(), Done: e.isDone(p)},
 				Title:     issueTitle(p),
+				Commit:    issueCommit(p),
 				Hit:       searchHit(p, terms),
 				Tags:      p.Tags,
 			})
@@ -1868,8 +1869,8 @@ func (e *env) list(args []string) int {
 		for _, id := range ids {
 			p := repo.Issues[id]
 			line := fmt.Sprintf("%s %s %s", pad(p.ID, 30), pad(stateWord(p), 12), issueTitle(p))
-			if hit := searchHit(p, terms); hit != "" {
-				line += "  ← " + hit
+			if hit := searchHit(p, terms); hit != nil {
+				line += "  ← " + hit.Subject
 			}
 			fmt.Fprintln(e.out, line)
 		}
@@ -2172,6 +2173,17 @@ func issueTitle(p *model.Issue) string {
 	return last.Subject
 }
 
+// issueCommit is the commit the row's action/done/title describe: the last
+// action's full hash. Rows are only built for issues that have actions, so it is
+// empty only in theory; the key is omitted rather than guessed.
+func issueCommit(p *model.Issue) string {
+	last, ok := p.Last()
+	if !ok {
+		return ""
+	}
+	return last.ID
+}
+
 func shortID(id string) string {
 	if len(id) > 7 {
 		return id[:7]
@@ -2266,9 +2278,20 @@ type filterQuery struct {
 
 type listIssue struct {
 	issueCore
-	Title string   `json:"title,omitempty"`
-	Hit   string   `json:"hit,omitempty"`
-	Tags  []string `json:"tags,omitempty"`
+	Title  string   `json:"title,omitempty"`
+	Commit string   `json:"commit,omitempty"`
+	Hit    *listHit `json:"hit,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+}
+
+// listHit is the action a search matched when the row's id and title cannot
+// explain it: the ordinal addresses it in `kiln show`, the commit addresses it
+// in git. It is a pointer so an unexplained search omits the key entirely.
+type listHit struct {
+	Ordinal int    `json:"ordinal"`
+	Action  string `json:"action"`
+	Commit  string `json:"commit"`
+	Subject string `json:"subject"`
 }
 
 // checkDoc is the `kiln check --json` document. OK mirrors the exit code — false

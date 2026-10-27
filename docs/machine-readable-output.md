@@ -130,8 +130,8 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
   "filter": { "domain": "design", "status": "open", "search": "worktree" },
   "count": 7,
   "issues": [
-    { "id": "action-granularity", "domain": "design", "action": "ask", "done": false, "title": "实现一个 issue 时中间动作要不要分阶段提交" },
-    { "id": "common-origin", "domain": "design", "action": "ask", "done": false, "title": "两个 issue 同源（来源不是 issue）时该怎么表达" }
+    { "id": "action-granularity", "domain": "design", "action": "ask", "done": false, "title": "实现一个 issue 时中间动作要不要分阶段提交", "commit": "f6102ce…" },
+    { "id": "common-origin", "domain": "design", "action": "ask", "done": false, "title": "两个 issue 同源（来源不是 issue）时该怎么表达", "commit": "3c0b683…", "hit": { "ordinal": 1, "action": "ask", "commit": "3c0b683…", "subject": "两个 issue 同源时该怎么表达" } }
   ]
 }
 ```
@@ -142,13 +142,15 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 | `count` | `len(ids)` | 命中数；与 `issues` 长度恒等，但省得消费方自己数 |
 | `issues[].id` / `domain` / `action` / `done` | 同 §2 的 issue 行 | **与 `status` 共用同一个行 schema**（`children` / `has-worktree` 除外） |
 | `issues[].title` | 该 issue **最后一个动作**的 `title`；缺则回退该动作的提交首行 | 空则省略；筛出来的行要能回答"是什么事"（`issue-list-scaling` 的 H4，推翻了 `json-fields` 当时"不给 list 加 title"的非目标） |
-| `issues[].hit` | 命中动作的 `subject` | **只在 id + 标题解释不了命中时出现**：取最早一条"包含全部查询词"的动作；词分散在多条动作、没有单条全含时省略 |
+| `issues[].commit` | **最后一个动作**的完整 40 位 hash | 行的 `action` / `done` / `title` 都取这条动作；`id` 仍是 issue id，两者不混（`json-commit-hash`） |
+| `issues[].hit` | 命中动作的地址 | **只在 id + 标题解释不了命中时出现**：`{ordinal, action, commit, subject}`，`ordinal` 可直接喂 `kiln show`，`commit` 给 git；词分散在多条动作、没有单条全含时省略 |
 | `issues[].tags` | `model.Issue.Tags` | 空则省略（文本只在非空时打 `tags=`） |
 
 要点：
 
 - **`--status=open|done`**：`done` = 最后一个动作属于 `actions.terminal`（默认 `conclude` / `apply`），与行里的 `done` **同一谓词**；`open` 是它的补集。非法值 exit 2，不静默回全量。**`done` 不是"永久关闭"**——终点动作之后仍可继续，再提交一个非终点动作就会回到 `open`（见 README「动作词表」与 `-h` 的 do/commit 说明）。
 - **`--search <query>`**：空白分词、**词间 AND**、**字面量**、**大小写不敏感**；每个词都要出现在 `id + 当前标题 + 所有动作 subject` 里（可分散在不同字段）。**不搜正文**（提交正文只有 trailer，没有散文）。空串 / 纯空白 query exit 2；**无命中是正常结果**：`count: 0`、`issues: []`、exit 0，并在 **stderr** 给一行 `没有匹配 "<query>" 的 issue`（stdout 仍只有一个文档）。
+- **`id` 与 `commit` 的分工（全局）**：`id` 只指 issue，`commit` 只指提交 hash（完整 40 位）——`path.actions[]` / `show` / `list` 行都叫 `commit`。hash 是**取数时的快照地址**，rebase / amend 会变，不是主键；稳定寻址用 issue id + 动作序号。
 - **`list` 不报 `worktree`**：`■` 与 worktree 段**只在 `status` 出现**，这是 `worktree-hint` 已定的"读命令不加 worktree 噪声"；为它给 `list` 多起一次后端查询不值得。
 - **行 schema 与 `status` 的重叠部分是契约**（`id` / `domain` / `action` / `done` / `title`）：同一套字段名，消费方一份解码器覆盖两个命令。
 
@@ -271,7 +273,7 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 - **§7 的遗留"嵌套 vs 平铺"已销**（已就地标注）。
 - 这条取舍对 `path` / `show` 同样成立：**数据层一律平铺，视图（缩进 / 树线 / 分组标题）归视图**——将来给它们加 `--json` 时不必再议同一个问题。
-- `status` 与 `list` 的行 schema 从“重叠”变成**同一份契约**：共享 `id` / `domain` / `action` / `done` / `title`（`title` 于 `issue-list-scaling` 补进 `list`）；`status` 多 `has-worktree`，`list` 多 `tags`。一份解码器覆盖两个命令。两个命令的**排序**不同是刻意的（`status` 走 domain 块，`list` 按 ID），所以共享的是**行本身**，测试按 ID 取行比对。
+- `status` 与 `list` 的行 schema 从“重叠”变成**同一份契约**：共享 `id` / `domain` / `action` / `done` / `title`（`title` 于 `issue-list-scaling` 补进 `list`）；`status` 多 `has-worktree`，`list` 多 `commit` / `hit` / `tags`。一份解码器覆盖两个命令。两个命令的**排序**不同是刻意的（`status` 走 domain 块，`list` 按 ID），所以共享的是**行本身**，测试按 ID 取行比对。
 
 ## test：落地三个命令的 `--json`（含真仓端到端）
 
