@@ -789,6 +789,8 @@ K4 的收益，恰好回应「名字还不成熟」：
 - **默认词表 = 9 个可写名**（`relation-vocabulary` 定稿）：`causes`/`caused-by`、`part-of`/`has-part`、`blocks`/`blocked-by`、`supersedes`/`superseded-by`、`relates-to`。
 - **aliases**：`derived-from`→`caused-by`、`spawns`→`causes`（实测 16 条旧边无损可读）。
 
+> **后续（2026-10-28）**：本条「名字层可配」已裁定**不可变**——`relations` 段不接线，词表固定 9 名，别名只读、只在上游加。理由与重开条件见 [design-philosophy](design-philosophy.md) 的 conclude。
+
 ### 8. 渲染接口（与 `relation-rendering` 对齐）
 
 **写 9 / 句渲 2（正反，主语=X）/ 图渲 1（声明源箭头）**。

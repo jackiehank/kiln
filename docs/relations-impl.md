@@ -72,7 +72,7 @@
 
 ### 未做（后续）
 
-1. **`.kilnconfig.jsonc` 的 `relations` 段**：目前只把默认词表接进 `Config`，还没解析文件里的自定义槽/名/别名（设计已定，纯 plumbing）。
+1. **`.kilnconfig.jsonc` 的 `relations` 段**：**不做（2026-10-28 裁定）**——词表固定 9 名，别名只读、只在上游加；`relations` 段保持被拒。理由与重开条件见 [design-philosophy](design-philosophy.md) 的 conclude。
 2. **`-h` 重排/动态生成**：归 `help-relation-flags`。
 3. **blocking 槽的环检测**：设计已定，未实现。
 4. **`check` 的双侧声明冗余 / `part-of` AND**：见 `relation-revision` 结论，分批。

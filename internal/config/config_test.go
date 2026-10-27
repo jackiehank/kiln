@@ -123,6 +123,20 @@ func TestReadRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+// The relation vocabulary is fixed (design-philosophy's conclusion): a
+// `relations` section is an unknown key, not a supported customisation point.
+func TestReadRejectsRelationsSection(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"relations": {"aliases": {"foo": "relates-to"}}}`)
+	_, err := Read(root)
+	if err == nil {
+		t.Fatal("expected an error for a relations section")
+	}
+	if !strings.Contains(err.Error(), "relations") {
+		t.Fatalf("the error should name the unknown field: %v", err)
+	}
+}
+
 func TestReadRejectsInconsistentConfig(t *testing.T) {
 	root := mkRepo(t)
 	writeConfig(t, root, `{"actions": {"names": ["a", "b"], "start": "zzz", "terminal": ["b"]}}`)

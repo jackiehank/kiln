@@ -155,7 +155,7 @@ do/commit 的 flags:
 2. **`--derived-from X` → 输出 `caused-by: X`**（alias 兼容）。
 3. `--relate part-of=X` → `part-of: X`；`--relate nonsense=X` → ⚠。
 4. 未知 `--bogus` → ⚠。
-5. `-h` 关系小节从词表生成（改 `relations.names` 会变）。
+5. `-h` 关系小节从词表生成；词表固定 9 名（不可配，见 `design-philosophy` 的 conclude）。
 6. 全在 `do`（不提交）下即可验。
 
 ### 7. 非目标
