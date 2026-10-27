@@ -91,7 +91,7 @@
 - **取数**：一次快照 = 1 次 `kiln graph --json` + **每条 issue 一次** `kiln path <id> --json`（N ≤ 80、并发 8）；冷启动实测 **1.29 s / 59 条**（dsh-kiln `c58e166` 记录），HEAD 令牌增量约 0.2 s。
 - **筛选**：issue 页按 **domain / 状态**，时间线页按 **动作 / domain**；组内 OR、组间 AND；**纯客户端**（不调 `kiln list`）；tag 刻意不作为筛选维度（动作级 trailer vs issue 级并集）。
 - **搜索**：页头常驻输入框，输入即搜。检索面 = **issue id + 当前标题 + 所有动作标题**；空白切词、大小写不敏感、词间 AND；排序 **id 前缀 > id 命中 > 标题命中 > 动作标题命中**；命中片段高亮，回车按命中类型跳 issue 页或时间线。**不含** tag / domain / 关系名 / 提交正文。
-- **它记的上游缺口已补**：插件 README 仍写"`kiln path a b --json` 静默只回第一个，要再快只能等上游给批量接口"——本仓刚落地 `path --all --json`（一次进程 60 条 / 260 动作 / 182 ms；见 `docs/issues/path-batch.md`）。插件**尚未迁移**到批量，仍逐条取。
+- **它记的上游缺口已补**：插件 README 仍写"`kiln path a b --json` 静默只回第一个，要再快只能等上游给批量接口"——本仓刚落地 `path --all --json`（一次进程 60 条 / 260 动作 / 182 ms；见 `docs/path-batch.md`）。插件**尚未迁移**到批量，仍逐条取。
 
 ### 4. 搜索的空白（留给下一步，不在本轮定）
 
