@@ -113,7 +113,7 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 | `kiln worktree remove <issue> [--force]` | Remove a worktree (refused while it still has work; `--force` discards it) |
 | `kiln config path` | Print the config path (writing a commented default config when missing) |
 | `kiln --version` | Print the version, executable path, build time and go platform (`-V` / `version` are the same command) |
-| `kiln help` / `kiln -h` | Help |
+| `kiln help` / `kiln -h` / `kiln <cmd> -h` | Help (`<cmd> -h` shows that command's usage and flags only) |
 
 `do` / `commit` flags: `--title --refs --target --scope --domain --tag`; relations: `--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate` (all repeatable, comma-separated; the aliases `--derived-from` / `--spawns` are accepted too).
 Also: `commit --force` (one-off waiver, see "Worktree mode"), `commit --only <paths>` (commit just the listed paths; comma-separated or repeated).

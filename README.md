@@ -111,7 +111,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln worktree remove <issue> [--force]` | 删除工作区（还有工作的默认拒绝，`--force` 强删） |
 | `kiln config path` | 打印配置路径（缺失时写入一份带注释的默认配置） |
 | `kiln --version` | 打印版本、可执行文件路径、构建时间与 go 平台（`-V` / `version` 同义） |
-| `kiln help` / `kiln -h` | 帮助 |
+| `kiln help` / `kiln -h` / `kiln <cmd> -h` | 帮助（`<cmd> -h` 只列该命令的用法与 flags） |
 
 `do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag`；关系：`--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate`（均可重复、逗号分隔；别名 `--derived-from` / `--spawns` 同样接受）。
 另：`commit --force`（一次性豁免，见「工作区模式」）、`commit --only <paths>`（只提交列出的路径，逗号分隔或重复给）。

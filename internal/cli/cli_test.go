@@ -2942,3 +2942,184 @@ func TestJSONIgnoresTheLanguage(t *testing.T) {
 		t.Fatalf("status --json differs by language:\nzh=%s\nen=%s", zh, en)
 	}
 }
+
+// A switch never eats the token after it: `--json <id>` is the order a reader
+// tries first and must reach the same handler as `<id> --json`. A value flag
+// still consumes its value.
+func TestParseLeavesPositionalsAfterSwitches(t *testing.T) {
+	pos, f := parse([]string{"--json", "demo", "--stat"}, "json", "stat")
+	if strings.Join(pos, ",") != "demo" {
+		t.Fatalf("pos = %v, want [demo]", pos)
+	}
+	if !f.has("json") || !f.has("stat") {
+		t.Fatalf("flags = %v", f)
+	}
+	pos, f = parse([]string{"--title", "x", "demo"}, "json")
+	if strings.Join(pos, ",") != "demo" || f.get("title") != "x" {
+		t.Fatalf("a value flag must still take its value: pos=%v flags=%v", pos, f)
+	}
+}
+
+func TestShowTakesThePositionalAfterASwitch(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).show([]string{"--json", "demo", "2"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc showDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.Issue != "demo" || doc.Ordinal != 2 {
+		t.Fatalf("doc = %+v, err = %v", doc, err)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).show([]string{"--stat", "demo", "2"}); code != 0 {
+		t.Fatalf("--stat before the positional: exit %d, stderr %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "docs/b.md | 3 +++") {
+		t.Fatalf("stdout = %q, want the diffstat", out.String())
+	}
+}
+
+func TestSwitchWithAnExplicitValueIsRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(*env) int
+	}{
+		{"show", func(e *env) int { return e.show([]string{"--json=x", "demo"}) }},
+		{"path", func(e *env) int { return e.path([]string{"--all=1", "--json"}) }},
+		{"status", func(e *env) int { return e.status([]string{"--json=1"}) }},
+	}
+	for _, tc := range cases {
+		var out, errb bytes.Buffer
+		if code := tc.run(newDemoEnv(&out, &errb)); code != 2 {
+			t.Fatalf("%s: exit = %d, want 2 (stderr %q)", tc.name, code, errb.String())
+		}
+		if !strings.Contains(errb.String(), "不接受值") {
+			t.Fatalf("%s: stderr = %q", tc.name, errb.String())
+		}
+	}
+}
+
+// `<cmd> -h` is the first thing a reader tries; it must answer with that
+// command's own shape and flags, not the whole surface and not an error.
+func TestPerCommandHelpIsTheCommandsOwn(t *testing.T) {
+	for _, args := range [][]string{{"list", "-h"}, {"list", "--help"}, {"help", "list"}} {
+		var out, errb bytes.Buffer
+		if code := Run(args, &out, &errb); code != 0 {
+			t.Fatalf("%v: exit = %d, stderr = %q", args, code, errb.String())
+		}
+		got := out.String()
+		for _, want := range []string{"kiln list", "--search", "--status"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v: missing %q:\n%s", args, want, got)
+			}
+		}
+		if strings.Contains(got, "kiln graph") {
+			t.Fatalf("%v: help must stay on one command:\n%s", args, got)
+		}
+	}
+
+	var out, errb bytes.Buffer
+	if code := Run([]string{"commit", "-h"}, &out, &errb); code != 0 {
+		t.Fatalf("commit -h: exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "--title") || !strings.Contains(out.String(), "--force") {
+		t.Fatalf("do/commit help must carry its flags:\n%s", out.String())
+	}
+}
+
+// Repeating a scalar flag used to keep the last value in silence; a mistyped
+// second value is now a refusal, because the command cannot honour both.
+func TestRepeatedScalarFlagIsRefused(t *testing.T) {
+	cases := [][]string{
+		{"list", "--search=a", "--search=b"},
+		{"list", "--domain=cli", "--domain=design"},
+		{"do", "x", "ask", "--title=a", "--title=b"},
+	}
+	for _, args := range cases {
+		var out, errb bytes.Buffer
+		if code := Run(args, &out, &errb); code != 2 {
+			t.Fatalf("%v: exit = %d, stderr = %q", args, code, errb.String())
+		}
+		if !strings.Contains(errb.String(), "只能给一次") {
+			t.Fatalf("%v: stderr = %q", args, errb.String())
+		}
+	}
+}
+
+// Positionals the command cannot use are named, not dropped.
+func TestExtraPositionalsAreRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"list", "extra"},
+		{"status", "extra"},
+		{"check", "extra"},
+		{"graph", "extra"},
+	} {
+		var out, errb bytes.Buffer
+		if code := Run(args, &out, &errb); code != 2 {
+			t.Fatalf("%v: exit = %d, stderr = %q", args, code, errb.String())
+		}
+		if !strings.Contains(errb.String(), "多余的参数") {
+			t.Fatalf("%v: stderr = %q", args, errb.String())
+		}
+	}
+
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).show([]string{"demo", "1", "2"}); code != 2 {
+		t.Fatalf("show with two positionals after the issue: exit = %d", code)
+	}
+
+	var wOut, wErr bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: workspaceRunner{areas: []vcs.WorkspaceInfo{{Path: "C:/w/kiln", Main: true}}}, out: &wOut, errw: &wErr}
+	if code := e.workspace([]string{"list", "extra"}); code != 2 {
+		t.Fatalf("worktree list extra: exit = %d, stderr = %q", code, wErr.String())
+	}
+}
+
+// `worktree --json list` reads like the natural order; the subcommand is a
+// positional and must not have to come first.
+func TestWorktreeFlagsMayPrecedeTheSubcommand(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: workspaceRunner{areas: []vcs.WorkspaceInfo{{Path: "C:/w/kiln", Main: true}}}, kind: vcs.Git, out: &out, errw: &errb}
+	if code := e.workspace([]string{"--json", "list"}); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	var doc worktreeListDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || len(doc.Worktrees) != 1 {
+		t.Fatalf("doc = %+v, err = %v", doc, err)
+	}
+
+	var rOut, rErr bytes.Buffer
+	e2 := &env{actions: model.DefaultActionSet(), repo: workspaceRunner{}, out: &rOut, errw: &rErr}
+	if code := e2.workspace([]string{"--force", "remove", "x"}); code != 0 {
+		t.Fatalf("--force before remove: exit = %d, stderr = %q", code, rErr.String())
+	}
+}
+
+// Asking for the same issue twice is one path, not two copies of it.
+func TestPathDedupesRepeatedIssueArguments(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).path([]string{"demo", "demo", "--json"}); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one document: %v", err)
+	}
+	if len(doc.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1", len(doc.Issues))
+	}
+}
+
+// --force before the positionals used to swallow the issue id; it is a switch.
+func TestCommitAcceptsForceBeforeThePositionals(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, false)
+	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
+	if code := e.write([]string{"--force", "demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: demo") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}

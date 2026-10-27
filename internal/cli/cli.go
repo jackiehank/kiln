@@ -60,7 +60,7 @@ var retiredCommands = map[string]string{"workspace": "worktree"}
 var usageCommands = [][2]string{
 	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
 	{"kiln commit <issue> <action> [--only <paths>] [flags]", "用规范信息直接提交（--only 只提交列出的路径）"},
-	{"kiln path [<issue>|--all]", "重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）"},
+	{"kiln path <issue> [<issue>…] | --all", "重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）"},
 	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
@@ -112,7 +112,14 @@ func usageText(rel *model.RelationSet) string {
 		b.WriteString("  " + pad(c[0], width) + "  " + i18n.T(c[1]) + "\n")
 	}
 	b.WriteString(i18n.T(usagePrologue))
+	b.WriteString(doCommitFlagText(rel))
+	b.WriteString(i18n.T(usageOtherFlags))
+	return b.String()
+}
 
+// doCommitFlagText renders the do/commit flag groups, shared by the full help
+// and by `kiln do -h` / `kiln commit -h`.
+func doCommitFlagText(rel *model.RelationSet) string {
 	meta, relations := doCommitFlagGroups(rel)
 	flagWidth := 0
 	for _, rows := range [][]flagHelp{meta, relations} {
@@ -122,6 +129,7 @@ func usageText(rel *model.RelationSet) string {
 			}
 		}
 	}
+	var b strings.Builder
 	writeGroup := func(title string, rows []flagHelp) {
 		b.WriteString(title + "\n")
 		for _, r := range rows {
@@ -136,8 +144,77 @@ func usageText(rel *model.RelationSet) string {
 	writeGroup(i18n.T("  元数据:"), meta)
 	writeGroup(i18n.T("  关系:  （均可重复、逗号分隔）"), relations)
 	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——issue 不会被关闭。\n"))
-	b.WriteString(i18n.T(usageOtherFlags))
 	return b.String()
+}
+
+// commandUsageText renders `<cmd> -h`: the command's own usage rows plus the
+// flag lines that name it, instead of the whole surface. ok is false for a name
+// the command table does not know.
+func commandUsageText(rel *model.RelationSet, cmd string) (string, bool) {
+	var rows [][2]string
+	for _, c := range usageCommands {
+		rest, found := strings.CutPrefix(c[0], "kiln "+cmd)
+		if found && (rest == "" || strings.HasPrefix(rest, " ")) {
+			rows = append(rows, c)
+		}
+	}
+	if len(rows) == 0 {
+		return "", false
+	}
+	width := 0
+	for _, c := range rows {
+		if w := displayWidth(c[0]); w > width {
+			width = w
+		}
+	}
+	var b strings.Builder
+	b.WriteString(i18n.T("用法:\n"))
+	for _, c := range rows {
+		b.WriteString("  " + pad(c[0], width) + "  " + i18n.T(c[1]) + "\n")
+	}
+	if cmd == "do" || cmd == "commit" {
+		b.WriteString(doCommitFlagText(rel))
+	}
+	b.WriteString(flagLinesFor(cmd))
+	return b.String(), true
+}
+
+// flagLinesFor keeps the usageOtherFlags lines that belong to cmd. The block is
+// one translated string; each line starts with the command (or a
+// "status / list / check" group) it documents, and --lang is global.
+func flagLinesFor(cmd string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(i18n.T(usageOtherFlags), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if lineNamesCommand(trimmed, cmd) {
+			b.WriteString(line + "\n")
+		}
+	}
+	return b.String()
+}
+
+// lineNamesCommand reports whether a usageOtherFlags line documents cmd.
+func lineNamesCommand(line, cmd string) bool {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return false
+	}
+	if fields[0] == "--lang" {
+		return true
+	}
+	// Group lines name several commands: "status / list / check 的 flags: …".
+	if i := strings.Index(line, " flags"); i > 0 {
+		for _, name := range strings.Split(line[:i], " / ") {
+			if strings.TrimSpace(name) == cmd {
+				return true
+			}
+		}
+		return false
+	}
+	return fields[0] == cmd
 }
 
 // pad right-pads s with spaces until it spans at least width display columns.
@@ -344,8 +421,22 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
+	// `<cmd> -h` is the shape a reader tries first; intercept it before dispatch
+	// so no parser sees -h as a positional (it used to be read as an issue id).
+	if len(rest) == 1 && (rest[0] == "-h" || rest[0] == "--help") {
+		if text, ok := commandUsageText(rel, cmd); ok {
+			fmt.Fprint(stdout, text)
+			return 0
+		}
+	}
 	switch cmd {
 	case "help", "-h", "--help":
+		if len(rest) == 1 {
+			if text, ok := commandUsageText(rel, rest[0]); ok {
+				fmt.Fprint(stdout, text)
+				return 0
+			}
+		}
 		fmt.Fprint(stdout, usageText(rel))
 		return 0
 	case "version", "--version", "-V":
@@ -477,10 +568,16 @@ func (f flags) list(key string) []string {
 }
 
 // parse splits args into positionals and flags. `--key=value`, `--key value` and
-// repeated `--key` all accumulate. A trailing flag with no value becomes "".
-func parse(args []string) ([]string, flags) {
+// repeated `--key` all accumulate. A flag listed in switches never consumes the
+// following token, so `--json <id>` still leaves <id> a positional; giving a
+// switch an explicit value (--json=x) is refused by rejectSwitchValues.
+func parse(args []string, switches ...string) ([]string, flags) {
 	pos := make([]string, 0, len(args))
 	f := flags{}
+	isSwitch := make(map[string]bool, len(switches))
+	for _, name := range switches {
+		isSwitch[name] = true
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "--") {
@@ -491,7 +588,7 @@ func parse(args []string) ([]string, flags) {
 		key, val := body, ""
 		if j := strings.Index(body, "="); j >= 0 {
 			key, val = body[:j], body[j+1:]
-		} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+		} else if !isSwitch[key] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
 			val = args[i+1]
 			i++
 		}
@@ -500,9 +597,59 @@ func parse(args []string) ([]string, flags) {
 	return pos, f
 }
 
+// rejectSwitchValues refuses an explicit value on a switch flag (--json=x).
+// parse leaves a switch value-less when it stands alone, so a non-empty value
+// can only come from `=`, which no command means.
+func rejectSwitchValues(errw io.Writer, f flags, names ...string) int {
+	for _, name := range names {
+		if v := f.get(name); v != "" {
+			fmt.Fprint(errw, i18n.T("flag --%s 不接受值: %s\n", name, v))
+			return 2
+		}
+	}
+	return 0
+}
+
+// rejectRepeats refuses a value flag given more than once: keeping the last one
+// silently hides a mistyped second value. List-valued flags (tags, refs,
+// relations, --only) accumulate on purpose and are not passed here.
+func rejectRepeats(errw io.Writer, f flags, names ...string) int {
+	for _, name := range names {
+		if n := len(f[name]); n > 1 {
+			fmt.Fprint(errw, i18n.T("flag --%s 只能给一次（当前给了 %d 次）\n", name, n))
+			return 2
+		}
+	}
+	return 0
+}
+
+// rejectExtra refuses positionals beyond max and prints the command's shape.
+func rejectExtra(errw io.Writer, pos []string, max int, usage string) int {
+	if len(pos) <= max {
+		return 0
+	}
+	fmt.Fprint(errw, i18n.T("多余的参数: %s\n", strings.Join(pos[max:], " ")))
+	fmt.Fprint(errw, i18n.T("用法: %s\n", usage))
+	return 2
+}
+
+// dedupeStrings drops repeats while keeping the first occurrence's order.
+func dedupeStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 // write implements both `do` (print only) and `commit` (print and commit).
 func (e *env) write(args []string, commit bool) int {
-	pos, f := parse(args)
+	pos, f := parse(args, "force")
 	if len(pos) < 2 {
 		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> [flags]\n", modeName(commit)))
 		return 2
@@ -510,6 +657,12 @@ func (e *env) write(args []string, commit bool) int {
 	if len(pos) > 2 {
 		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit)))
 		return 2
+	}
+	if code := rejectSwitchValues(e.errw, f, "force"); code != 0 {
+		return code
+	}
+	if code := rejectRepeats(e.errw, f, "title", "target", "scope", "domain"); code != 0 {
+		return code
 	}
 	issue := e.normalizedIssue(pos[0])
 	action := strings.ToLower(strings.TrimSpace(pos[1]))
@@ -746,10 +899,17 @@ func (e *env) carryRecipe(issue string, ws vcs.Workspace) string {
 
 // workspace implements `kiln worktree new <issue>` and `kiln worktree list`.
 func (e *env) workspace(args []string) int {
+	// Parse first so a flag may precede the subcommand (`worktree --json list`),
+	// the same order `config` uses; the subcommand is then just the first
+	// positional and the flags are already known.
+	pos, f := parse(args, "json", "force")
+	if code := rejectSwitchValues(e.errw, f, "json", "force"); code != 0 {
+		return code
+	}
 	sub := ""
-	rest := args
-	if len(args) > 0 {
-		sub, rest = args[0], args[1:]
+	rest := pos
+	if len(pos) > 0 {
+		sub, rest = pos[0], pos[1:]
 	}
 	ws, code := e.workspaceBackend()
 	if ws == nil {
@@ -757,15 +917,25 @@ func (e *env) workspace(args []string) int {
 	}
 	switch sub {
 	case "new":
+		if code := rejectExtra(e.errw, rest, 1, "kiln worktree new <issue>"); code != 0 {
+			return code
+		}
+		warnUnknownFlags(e.errw, f, allowedFlags())
 		return e.workspaceNew(ws, rest)
 	case "list":
 		// The only flag is --json; a stray one is still a mistake, and a mistake
 		// that changes nothing silently is the bug this surface fixed earlier.
-		_, f := parse(rest)
+		if code := rejectExtra(e.errw, rest, 0, "kiln worktree list [--json]"); code != 0 {
+			return code
+		}
 		warnUnknownFlags(e.errw, f, allowedFlags("json"))
 		return e.workspaceList(ws, f)
 	case "remove":
-		return e.workspaceRemove(ws, rest)
+		if code := rejectExtra(e.errw, rest, 1, "kiln worktree remove <issue> [--force]"); code != 0 {
+			return code
+		}
+		warnUnknownFlags(e.errw, f, allowedFlags("force"))
+		return e.workspaceRemove(ws, rest, f)
 	default:
 		fmt.Fprintln(e.errw, i18n.T("用法: kiln worktree new <issue> | kiln worktree list | kiln worktree remove <issue> [--force]"))
 		return 2
@@ -790,9 +960,7 @@ func (e *env) workspaceBackend() (vcs.Workspace, int) {
 // workspaceNew creates (or reuses) the dedicated area bound to an issue and
 // points the user at it. The area's name and branch are derived from the issue,
 // so naming alone is the binding — no extra file keeps them in sync.
-func (e *env) workspaceNew(ws vcs.Workspace, args []string) int {
-	pos, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags())
+func (e *env) workspaceNew(ws vcs.Workspace, pos []string) int {
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, i18n.T("用法: kiln worktree new <issue>"))
 		return 2
@@ -862,6 +1030,9 @@ func mainRootOf(ws vcs.Workspace) (string, error) {
 func (e *env) config(args []string) int {
 	pos, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags())
+	if code := rejectExtra(e.errw, pos, 1, "kiln config path"); code != 0 {
+		return code
+	}
 	sub := ""
 	if len(pos) > 0 {
 		sub = pos[0]
@@ -957,9 +1128,7 @@ func areaStateWord(a vcs.WorkspaceInfo, s vcs.AreaState) string {
 // workspaceRemove deletes the dedicated area bound to an issue. The name is the
 // binding, so the issue alone identifies the area; an area that still holds work
 // is refused by the backend unless --force says to lose it.
-func (e *env) workspaceRemove(ws vcs.Workspace, args []string) int {
-	pos, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("force"))
+func (e *env) workspaceRemove(ws vcs.Workspace, pos []string, f flags) int {
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, i18n.T("用法: kiln worktree remove <issue> [--force]"))
 		return 2
@@ -985,20 +1154,20 @@ func areaRole(a vcs.WorkspaceInfo) string {
 }
 
 func (e *env) path(args []string) int {
-	pos, f := parse(args)
+	pos, f := parse(args, "all", "json", "stat", "shortstat")
 	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat", "json", "all"))
-	// Every path flag is a switch. The parser treats any following non-flag token
-	// as its value, which would swallow a positional id (`path --all alpha`), so
-	// a value on a switch is refused instead of silently dropped.
-	for _, name := range []string{"all", "json", "stat", "shortstat"} {
-		if v := f.get(name); v != "" {
-			fmt.Fprint(e.errw, i18n.T("flag --%s 不接受值: %s\n", name, v))
-			return 2
-		}
+	// A switch never takes a value; saying --json=x is a mistake worth naming
+	// instead of dropping x (or swallowing the positional that follows).
+	if code := rejectSwitchValues(e.errw, f, "all", "json", "stat", "shortstat"); code != 0 {
+		return code
 	}
+	// Batch is decided by what the caller asked for, before repeats are folded
+	// away: `path a a --json` is still a batch request, it just names one issue.
+	batch := len(pos) > 1
+	pos = dedupeStrings(pos)
 	all := f.has("all")
 	if len(pos) == 0 && !all {
-		fmt.Fprintln(e.errw, i18n.T("用法: kiln path <issue> [--stat|--shortstat] [--json] | kiln path --all --json"))
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln path <issue> [<issue>…] | --all [--stat|--shortstat|--json]"))
 		return 2
 	}
 	if all && len(pos) > 0 {
@@ -1009,7 +1178,7 @@ func (e *env) path(args []string) int {
 	// nested under each action), while the batch exists to feed a consumer.
 	// Refusing beats silently rendering only the first argument, which is what
 	// this command used to do.
-	if (all || len(pos) > 1) && !f.has("json") {
+	if (all || batch) && !f.has("json") {
 		fmt.Fprintln(e.errw, i18n.T("批量取路径只支持 --json（--all 或多条 issue）"))
 		return 2
 	}
@@ -1018,7 +1187,7 @@ func (e *env) path(args []string) int {
 		return code
 	}
 	mode := statMode(f)
-	if all || len(pos) > 1 {
+	if all || batch {
 		ids := pos
 		if all {
 			ids = engine.IDs(repo)
@@ -1075,8 +1244,14 @@ func (e *env) path(args []string) int {
 // one), so the selector stays put even when commit hashes are rewritten by a
 // rebase. Rendering is delegated to git.
 func (e *env) show(args []string) int {
-	pos, f := parse(args)
+	pos, f := parse(args, "stat", "json")
 	warnUnknownFlags(e.errw, f, allowedFlags("stat", "json"))
+	if code := rejectSwitchValues(e.errw, f, "stat", "json"); code != 0 {
+		return code
+	}
+	if code := rejectExtra(e.errw, pos, 2, "kiln show <issue> [n|action] [--stat] [--json]"); code != 0 {
+		return code
+	}
 	if len(pos) < 1 {
 		fmt.Fprintln(e.errw, i18n.T("用法: kiln show <issue> [n] [--stat] [--json]"))
 		return 2
@@ -1442,8 +1617,14 @@ func indentStat(stat string) string {
 func trimNewlines(s string) string { return strings.Trim(s, "\n") }
 
 func (e *env) status(args []string) int {
-	_, f := parse(args)
+	pos, f := parse(args, "json")
 	warnUnknownFlags(e.errw, f, allowedFlags("json"))
+	if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
+		return code
+	}
+	if code := rejectExtra(e.errw, pos, 0, "kiln status [--json]"); code != 0 {
+		return code
+	}
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
@@ -1785,8 +1966,14 @@ func containsAll(haystack string, terms []string) bool {
 }
 
 func (e *env) check(args []string) int {
-	_, f := parse(args)
+	pos, f := parse(args, "json", "verbose")
 	warnUnknownFlags(e.errw, f, allowedFlags("json", "verbose"))
+	if code := rejectSwitchValues(e.errw, f, "json", "verbose"); code != 0 {
+		return code
+	}
+	if code := rejectExtra(e.errw, pos, 0, "kiln check [--verbose] [--json]"); code != 0 {
+		return code
+	}
 	verbose := len(f["verbose"]) > 0
 	repo, code := e.loadRepo()
 	if repo == nil {
@@ -1820,8 +2007,17 @@ func (e *env) check(args []string) int {
 }
 
 func (e *env) list(args []string) int {
-	_, f := parse(args)
+	pos, f := parse(args, "json")
 	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action", "status", "search"))
+	if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
+		return code
+	}
+	if code := rejectRepeats(e.errw, f, "domain", "tag", "action", "status", "search"); code != 0 {
+		return code
+	}
+	if code := rejectExtra(e.errw, pos, 0, "kiln list [--domain=] [--tag=] [--action=] [--status=open|done] [--search=] [--json]"); code != 0 {
+		return code
+	}
 	status := f.get("status")
 	if f.has("status") && status != "open" && status != "done" {
 		fmt.Fprint(e.errw, i18n.T("--status 只接受 open 或 done（当前: %s）\n", status))
@@ -1892,8 +2088,17 @@ func (e *env) list(args []string) int {
 }
 
 func (e *env) graph(args []string) int {
-	_, f := parse(args)
+	pos, f := parse(args, "json", "mermaid")
 	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid", "json", "issue", "depth"))
+	if code := rejectSwitchValues(e.errw, f, "json", "mermaid"); code != 0 {
+		return code
+	}
+	if code := rejectRepeats(e.errw, f, "format", "issue", "depth"); code != 0 {
+		return code
+	}
+	if code := rejectExtra(e.errw, pos, 0, "kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]"); code != 0 {
+		return code
+	}
 	format := f.get("format")
 	if f.has("json") && f.has("mermaid") {
 		fmt.Fprintln(e.errw, i18n.T("--json 与 --mermaid 冲突"))

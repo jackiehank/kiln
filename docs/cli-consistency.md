@@ -515,3 +515,44 @@
 ### 下一批
 
 批 B（解析器与帮助）：开关 flag 不再吞位置参数、`kiln <cmd> -h`、重复标量 flag 报错、多余位置参数报错、`worktree` 先 parse、`path` usage/去重。测试先行。
+
+## apply（批 B，2026-10-27）：解析器与帮助
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/cli/cli.go` | `parse(args, switches...)`：开关不再吞后一个 token；新增 `rejectSwitchValues`（`--json=x` → exit 2）、`rejectRepeats`（标量 flag 重复 → exit 2）、`rejectExtra`（多余位置参数 → exit 2）、`dedupeStrings`；`usageText` 的 do/commit flag 段抽成 `doCommitFlagText`，新增 `commandUsageText` / `flagLinesFor` / `lineNamesCommand` 给 `<cmd> -h` 用；各命令声明自己的开关表并接入三类校验；`workspace` 先 parse 再取子命令；`path` 去重、批量判定按“用户给了几个 id”而非去重后的数量 |
+| `internal/i18n/catalog.go` | 新增三条：`flag --%s 只能给一次…`、`多余的参数: %s`、`用法: %s`；`path` 的用法串改成多 id 形态 |
+| `internal/cli/cli_test.go` | 新增 9 个测试（parse 开关、`show --json <id>`、显式值拒绝、子命令帮助、重复标量、多余参数、`worktree --json list`、`path` 去重、`commit --force` 前置） |
+| `README.md` / `README.en.md` | 帮助一行加 `<cmd> -h` |
+
+### 行为对照
+
+| 输入 | 以前 | 现在 |
+| --- | --- | --- |
+| `kiln show --json cli-consistency` | exit 2，`用法: kiln show …`（id 被 `--json` 吞掉） | 正常输出 JSON；`show --stat <id>` 同理 |
+| `kiln commit --force <issue> <action>` | 参数被吞，`用法` 错 | 正常提交（fake backend 测试覆盖） |
+| `kiln worktree --json list` | exit 2，worktree 用法 | 正常输出 worktree JSON |
+| `kiln list -h` / `show -h` / `commit -h` | 静默全量 / 当 issue 查 / 用法错 | 三者都是该命令的用法 + flags，exit 0 |
+| `kiln list --search=a --search=b` | 静默只留 `b` | exit 2：`只能给一次（当前给了 2 次）` |
+| `kiln list extra` / `status extra` / `show a 1 2` | 静默忽略 | exit 2：`多余的参数: …` + 用法 |
+| `kiln path --json=x` | exit 2（`path` 独有的拦截） | exit 2（所有命令同一句 `flag --json 不接受值: x`） |
+| `kiln path a a --json` | 两份重复文档 | 一份（保序去重），仍是批量形态 |
+| `kiln path --all a --json` | `flag --all 不接受值: a` | `--all 与 issue 参数不能同用`（更接近真实错误） |
+
+### 验收（实测）
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过。
+- 真仓逐条冒烟上表九行：`show --json cli-consistency`（ordinal 4）、`show --stat` 前置、`list -h`、`help show`、`commit -h`、`worktree --json list`、`path` 重复 id（1 份）、`list --search` 重复（exit 2）、`list extra`（exit 2）、`graph --depth` 重复（exit 2）。
+- 文本视图：除帮助（新增每命令帮助、`path` 用法行改成多 id 形态）外未动；`status` / `list` / `path` / `show` / `check` / `graph` 的 golden 全绿。
+- 全量 `kiln -h` 仍是一份完整帮助，只有 `path` 行按 C20 改了形状。
+
+### 与 hypothesize 的两处小偏差
+
+- **`--tag` 的重复检查提前到本批**：`list` 是标量语义，重复本来就和 `--domain` 一样该拒；C 批只剩“含逗号”一条 → `--tag 只接受一个标签`。
+- **开关值拒绝从 `path` 推广到所有命令**：`--json=x` 不再只有 `path` 会精确报错，统一成同一句。
+
+### 下一批
+
+批 C（过滤与空态）：`--tag` 含逗号 → exit 2、`--action` 按词表校验、空结果/空仓给 stderr 提示。
