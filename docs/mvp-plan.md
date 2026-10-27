@@ -324,7 +324,7 @@ kiln/
 - 关系复杂度提升：`derived-from` 环检测、`blocks` 状态一致性
 - 封装为 MCP server：把结构化工具暴露给 Agent，彻底避免其拼 CLI
 - issue 列表命令的**规模化**：`status` / `list` / `graph` 现在**全量**输出，没有上限 / 分页 / 摘要——几十上百条时文本刷屏、agent 的 token 成本线性，且每次读都要全量聚合（与"不建索引"的立场有张力）。要分开定"人读"与"机器读"两条路——见 [docs/issue-list-scaling.md](issue-list-scaling.md)
-- 标量 flag 的值**以 `--` 开头时被静默吞掉**：[parse](file:///c:/Users/jacki/kiln/internal/cli/cli.go#L263-L283) 只在下一个 token **不以** `--` 开头时才把它当值，于是 `--scope "--json 布尔 flag（…）"` 取到空值、那个值本身又被当成新 flag 再解析一遍（`--key=value` 是当前唯一可行的写法）。后果分三级：标量 trailer 空值被 [writeScalar](file:///c:/Users/jacki/kiln/internal/trailer/trailer.go#L151-L156) 跳过——**连报错都没有**；`--title` 若被吞，`Format` 连头行都不写，提交的第一行会变成 `issue: …`（`git log --oneline` 与 PR 标题跟着错）；列表 flag 被吞则叠加 `refs-empty-value` 的"空值跳过"，损失从"看着难看"变成**静默**。待定：`--scope` 缺值就**显式报错**（别猜），还是把下一个 token **无条件当值**（那就得放弃用空格分隔多个 flag 的写法）
+- 标量 flag 的值**以 `--` 开头时被静默吞掉**：`--title --force` 连警告都没有（`--force` 会真正生效）、`--title --only <path>` 静默缩小提交范围；`--key=value` 是当前唯一可行的写法。逐 flag 实测三档（显式拒绝 / 警告+丢字段 / 全静默）、历史量化与 git·go 惯例对照见 [docs/flag-value-leading-dashes.md](flag-value-leading-dashes.md)
 
 ## 11. `kiln status`：按 domain 分组的目录视图
 
