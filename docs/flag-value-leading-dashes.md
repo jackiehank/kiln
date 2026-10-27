@@ -197,3 +197,78 @@ kiln 的写侧已有判例：重复标量、多余位置参数、switch 带值�
 - 不加 `--` 终止符（无位置参数以 `--` 开头；多一条规则不划算）。若将来出现以 `--` 开头的路径 / issue id，再议。
 - 不统一各命令对显式空串的语义（`--search ""` 拒绝、`--domain ""` 无过滤）——那是命令层裁决，不在解析器这一层。
 - 不设兼容期、不自动改写；不做 `--flag:` 之类的第二语法。
+
+## hypothesize（续，2026-10-27）：title 由谁写——手填、采纳既有 HEAD，还是接受整条消息
+
+### 问题拆成两层
+
+上一版把 `--title` 定为必填，是把两件事捆在了一起：
+
+- **必填**：动作必须有标题（已定）；
+- **来源**：标题的值从哪来（本轮）。
+
+三个候选：
+
+- **M1 手填**（上一版）：`--title` 参数，kiln 造消息。
+- **M2a 采纳既有 HEAD**：先 `git commit` 写出自然消息，再让 kiln 读首行作 title、补 trailer、改写 HEAD。
+- **M2b 接受整条消息**：`-F/--message` 给整条消息，kiln 仍造新提交，title = 首行。
+
+> 关键区分：`kiln commit` **自己造消息**，对它来说不存在"已存在的消息"。所以 M2a 是另一条流程（先提交、后认领），不能塞进 `commit` 里隐式发生；M2b 才是"消息由调用方给、提交由 kiln 造"。
+
+### 实测前提（本机）
+
+1. `git commit --amend -m` 会把**暂存区改动卷进提交**：临时仓里暂存 `a.txt` 的修改后 amend，`git show --stat` 出现该改动。→ M2a 必须要求索引干净，否则会静默扩大提交。
+2. 索引干净时 amend **只改消息**：临时仓里 subject 与正文保留、trailer 追加、tree 不变，hash 变（`78c70f9` → `03bc8ef`）。
+3. 本仓 302 个动作、0 个 merge，消息形状统一（subject + trailer 块）；HEAD 领先 `origin/master` 36 个提交且**尚未推送**（`git branch -r --contains HEAD` 为空）。→ adopt 的可用窗口是"刚提交、未推送"。
+
+### M2a：`kiln adopt <issue> <action>`（独立命令，不碰 `commit`）
+
+前置（任一不满足即 exit 1，什么都不写）：
+
+- HEAD 存在；消息首行非空、且不像 `key: value` 的 trailer 行；
+- HEAD 消息里没有 `issue:` / `action:`（已经是动作 → 拒绝）；
+- **索引干净**（`git diff --cached --quiet`）——否则 amend 会把暂存改动卷进去；
+- HEAD 不在任何远端分支上（`git branch -r --contains HEAD` 为空）——已发布的历史**默认拒绝**，`--force` 只放开这一条。
+
+动作：title = 首行（trim）；消息 = 原消息 + 空行 + trailer 块（原消息已有 trailer 块时追加进同一块）；`git commit --amend -F -`。tree / parent / author 不动，committer 更新，hash 变。
+
+jj 侧：`jj describe -r <change> -m <msg>`。jj 没有暂存区，但会 rebase 后代，仍需判断"是否已在远端"。
+
+明确不做：非 HEAD 的采纳（要改写后代）、从消息里猜 issue/action、读 `.git/COMMIT_EDITMSG` 草稿。
+
+### M2b：`-F/--message`（与 `--title` 二选一）
+
+- `kiln commit <issue> <action> -F <文件|->`：消息 = 给定文本 + trailer 块；title = 首行。
+- 无历史改写；`--title` 与 `-F` 同时给 → exit 2。
+- 代价：弱化"trailer 由结构化参数生成"的取向；收益是 title 直接取首行，subject 与 `title:` 天然一致。
+
+### 对照
+
+| | M1 手填 | M2a adopt | M2b `-F` |
+| --- | --- | --- | --- |
+| 谁先写消息 | kiln 参数 | git / jj | 调用方 |
+| 命令数 | 1 | 2（git commit + adopt） | 1 |
+| 历史改写 | 无 | HEAD 重写（hash 变） | 无 |
+| 失败模式 | 忘记 / 被吞 | 索引脏、已推送、merge、消息不合规 | 与 `--title` 二选一 |
+| 实现成本 | 本批已有 | 新命令 + 两后端 + 守卫 | 小（读 `-F` + 取首行） |
+| 适用 | kiln-first（本仓 302/302） | git-first | 想"只写一次"又不改历史 |
+
+### 建议（本假设）
+
+1. **M1 仍是主路径**：本仓所有动作都是 kiln 造的消息，没有 git-first 痕迹；adopt 服务的是一个尚不存在的工作流。
+2. **若目标只是"标题只写一次"**：M2b 比 M2a 小得多，且不碰历史——优先做 M2b，不做 adopt。
+3. **若确实要 git-first**：M2a 只能作为**独立命令**，四条前置必须硬性（HEAD-only、索引干净、未推送、无 trailer）；`--force` 只放开"未推送"，不放开"索引干净"。
+4. 不推荐"从改动派生标题"（文件清单做成标题会把语义标题变成变更摘要，与 `title` 的用途相反）。
+5. 顺带说明：无论 M1/M2b，`check` 都不比对 subject 与 `title:` 的一致性（手改任一都会漂移）——本批不做。
+
+### 预测（选了再验证）
+
+- adopt 后 `%s` == 原 subject、`%b` 末尾多出 `issue` / `action` / `title` 三行；`git log --oneline` 不变。
+- 索引有暂存 → 拒绝且工作区不变；已推送 → 拒绝；HEAD 已是动作 → 拒绝。
+- `-F` 后首行 == `title:`；`-F` + `--title` → exit 2。
+
+### 待你定
+
+1. 你的真实流程是 git-first（先 `git commit`）还是 kiln-first（`kiln commit` 一次到位）？这决定要不要做 M2a。
+2. 若做 M2a：`--force` 允许改写**已推送**的 HEAD 吗？
+3. 若做 M2b：消息的正文（body）保留吗，还是只取 subject？
