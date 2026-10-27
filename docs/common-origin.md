@@ -89,3 +89,40 @@
 ### 7. 不做
 
 - 不加 `same-origin` / `co-derived`；不加 `source:`；不改代码 / `check`；不做命名测试（等真实需求）。
+
+## conclude（2026-10-28）：A + E 定稿——同源用 `relates-to`；来源值得被看见就开成 issue
+
+### 0. 裁决
+
+- 两个 issue 共享**非 issue 来源**、且只需"相关"→ **`relates-to`**（一条无向边）。
+- 共同来源重要到需要被看见 / 被引用 → **把来源开成一条 issue**（`ask`），两个 issue 各 `--caused-by <来源>`。
+- **不新增关系名**（`same-origin` / `co-derived` 不做）、**不做 `source:` 外部引用**。
+- **零代码改动**：现有 `check` / `graph` / `path` 直接可用。
+
+### 1. 依据
+
+- 唯一证据是 `relation-vocabulary` 的 #8，而那一轮自己判了"场景措辞的锅"（题面写了"引出"）；本仓**零实例**。
+- `design-philosophy` 冻结 9 名：第 10 个名字需要真实需求——当前没有。
+- 命名先验有反证：`origin` 光杆名词 2/2 答不准；`same-origin` 撞 CORS 先验。B 若重启，先做命名测试。
+- E 复用已有模式：多条 `caused-by` 汇聚到同一 parent 已在本仓成立（`cli-necessity` 4 个孩子、`relation-types` 3 个、`relation-vocabulary` / `object-semantics` / `relation-rendering` 各 2 个），零新语法。
+
+### 2. 与既有裁决的关系
+
+- `relation-vocabulary`：9 名不动；本 issue 是它的遗留项，结论 = **不加**。
+- `design-philosophy`：新语义走上游变更；本 issue 裁定"当前不值得"，词表保持 9。
+- `evidence-fluidity`：一般视图呈现当前态；来源开成 issue 是当前态的一部分，不需要额外声明。
+
+### 3. 重开条件（不是预算）
+
+1. 出现多对真实 issue 共享非 issue 来源，且读者反复需要"同源 vs 碰巧相关"的区分；
+2. 且"开一条来源 issue"被证明太重（来源太多、每条只被引用一次）；
+3. 届时按 `relation-vocabulary` 的方法先做命名测试（候选 `co-derived` / `common-origin`；`same-origin` 因 CORS 先验要谨慎）。
+
+### 4. 明确不做
+
+- 不加名、不加 `source:`、不改代码 / `check`、不要求声明、不做命名测试。
+
+### 5. 验收
+
+- 无代码改动；`check` 现状不变（62 ok / 1 warn）。
+- 走查：两个 issue 共享来源 → 开来源 issue + 两条 `caused-by`，`graph` 显示汇聚；来源不重要 → 一条 `relates-to`。
