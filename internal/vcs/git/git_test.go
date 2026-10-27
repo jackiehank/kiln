@@ -303,3 +303,21 @@ func TestMaybeHasAreas(t *testing.T) {
 		t.Fatal("inside a linked worktree the hint must be conservative")
 	}
 }
+
+// ActionChecked is the caller-validated fast path: it stages and commits the
+// listed paths without a second Unchanged read.
+func TestActionCheckedCommitsWithoutRechecking(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "b.txt", "b")
+	r := ExecRunner{Dir: dir}
+	if _, err := r.ActionChecked("checked", []string{"b.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.run("show", "--stat", "--format=%s", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "b.txt") {
+		t.Fatalf("the checked action must carry b.txt:\n%s", out)
+	}
+}

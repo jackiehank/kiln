@@ -82,12 +82,25 @@ func parseStatLog(out string, want func(string) bool) map[string]string {
 // --allow-empty keeps an action with nothing behind it legal on both backends, so
 // "empty" means the same thing whichever adapter runs.
 func (r ExecRunner) Action(message string, paths []string) (string, error) {
-	if len(paths) > 0 {
+	return r.action(message, paths, true)
+}
+
+// ActionChecked records a path-scoped action whose paths the caller already
+// validated with Unchanged: the second status per path is skipped. See
+// vcs.CheckedAction.
+func (r ExecRunner) ActionChecked(message string, paths []string) (string, error) {
+	return r.action(message, paths, false)
+}
+
+func (r ExecRunner) action(message string, paths []string, check bool) (string, error) {
+	if len(paths) > 0 && check {
 		if bad, err := r.Unchanged(paths); err != nil {
 			return "", err
 		} else if len(bad) > 0 {
 			return "", i18n.E("没有改动可记录: %s", strings.Join(bad, ", "))
 		}
+	}
+	if len(paths) > 0 {
 		if _, err := r.run(append([]string{"add", "-A", "--"}, paths...)...); err != nil {
 			return "", err
 		}

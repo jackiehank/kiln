@@ -51,7 +51,17 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 // is checked first: jj would otherwise accept a fileset that matches nothing and
 // record an empty action in silence.
 func (r ExecRunner) Action(message string, paths []string) (string, error) {
-	if len(paths) > 0 {
+	return r.action(message, paths, true)
+}
+
+// ActionChecked records a path-scoped action whose paths the caller already
+// validated with Unchanged: the second check is skipped. See vcs.CheckedAction.
+func (r ExecRunner) ActionChecked(message string, paths []string) (string, error) {
+	return r.action(message, paths, false)
+}
+
+func (r ExecRunner) action(message string, paths []string, check bool) (string, error) {
+	if len(paths) > 0 && check {
 		if bad, err := r.Unchanged(paths); err != nil {
 			return "", err
 		} else if len(bad) > 0 {

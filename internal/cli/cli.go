@@ -755,7 +755,7 @@ func (e *env) write(args []string, commit bool) int {
 		// so asking again would only spawn a second status.
 		fmt.Fprintln(e.errw, i18n.T("提示: 当前工作区没有检测到改动，这次动作会记成空提交。"))
 	}
-	id, err := backend.Action(msg, paths)
+	id, err := recordAction(backend, msg, paths)
 	if err != nil {
 		fmt.Fprint(e.errw, i18n.T("提交失败: %v\n", err))
 		return 1
@@ -770,6 +770,18 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprint(e.out, i18n.T("\n已提交 %s · %s · %s\n", shortID(id), action, issue))
 	}
 	return 0
+}
+
+// recordAction records the action. write has already validated every --only
+// path with Unchanged, so a backend that offers CheckedAction is asked to skip
+// the second read: without it, `--only` pays two status processes per path.
+func recordAction(backend vcs.Repo, msg string, paths []string) (string, error) {
+	if len(paths) > 0 {
+		if checked, ok := backend.(vcs.CheckedAction); ok {
+			return checked.ActionChecked(msg, paths)
+		}
+	}
+	return backend.Action(msg, paths)
 }
 
 // inventory renders the file list an action will record: every path when the list

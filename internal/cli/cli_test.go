@@ -3538,3 +3538,37 @@ func TestPathBatchWithOnlyErrors(t *testing.T) {
 		t.Fatalf("only-errors batch =\n%s\nwant\n%s", out.String(), want)
 	}
 }
+
+// checkedRunner models a backend that offers the caller-validated fast path.
+type checkedRunner struct {
+	fakeRunner
+	checkedCalls *int
+}
+
+func (c checkedRunner) ActionChecked(msg string, paths []string) (string, error) {
+	*c.checkedCalls++
+	return c.fakeRunner.Action(msg, paths)
+}
+
+// --only paths are validated once by write; a backend with the checked fast path
+// must record them without a second status per path.
+func TestCommitOnlyUsesTheCheckedPath(t *testing.T) {
+	var out, errb bytes.Buffer
+	calls := 0
+	e := &env{
+		actions:  model.DefaultActionSet(),
+		worktree: config.WorktreeOff,
+		repo:     checkedRunner{fakeRunner: demoRunner(), checkedCalls: &calls},
+		out:      &out,
+		errw:     &errb,
+	}
+	if code := e.write([]string{"demo", "collect", "--only", "a.txt"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if calls != 1 {
+		t.Fatalf("ActionChecked calls = %d, want 1", calls)
+	}
+	if !strings.Contains(out.String(), "将提交 1 个文件") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}

@@ -99,6 +99,15 @@ type AreaHint interface {
 	MaybeHasAreas() bool
 }
 
+// CheckedAction is the optional fast path for a caller that already ran
+// Unchanged over paths: it records the action without reading the working tree
+// again, so `commit --only` does not pay a second status per path. The caller
+// carries the guarantee; Repo.Action keeps the check for every other path, so
+// the safety net (jj records a no-op fileset silently) still exists.
+type CheckedAction interface {
+	ActionChecked(message string, paths []string) (string, error)
+}
+
 // BranchPrefix namespaces the branches of kiln's dedicated areas in git.
 const BranchPrefix = "kiln/"
 

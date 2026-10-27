@@ -489,3 +489,41 @@ kiln 没有索引：每条读命令都从提交历史现算模型——一次 `g
 - `kiln check`：55 ok / 8 warn / 0 error；
 - 所有优化都验证过输出字节不变（`--stat` 六份、batch 四份、流式五份）；
 - 真仓与合成仓计时、进程数、峰值内存均已记录在上文各节。
+
+## apply（2026-10-27，续）：`--only` 只校验一次
+
+### 问题
+
+`write` 在打印清单前会用 `Unchanged(paths)` 校验每个 `--only` 路径（坏路径当场拒绝，且不该先打印“将提交”）；随后 `backend.Action` 为了守住 jj 的静默空动作，又对同一批路径跑了一遍 `Unchanged`。结果是**每个路径两个 `git status` 进程**：3 个路径 = 10 个 git 进程（含 git 自身的 maintenance）。
+
+### 改法
+
+- `internal/vcs/vcs.go`：新增可选接口
+  ```go
+  type CheckedAction interface {
+      ActionChecked(message string, paths []string) (string, error)
+  }
+  ```
+  语义：调用方已经用 `Unchanged` 校验过这些路径，后端可以直接记录，不必再读一次工作区。`Repo.Action` 保留自己的校验，所以直接调用 `Action` 的路径仍有安全网。
+- `internal/vcs/git`、`internal/vcs/jj`：把 `Action` 拆成 `action(message, paths, check bool)`；`Action` 传 true，`ActionChecked` 传 false。
+- `internal/cli/cli.go`：新增 `recordAction`——`paths` 非空且后端实现 `CheckedAction` 时走快路径，否则回退 `Action`（fake 后端与未来实现都不受影响）。
+- 校验仍然在 `write` 里、清单打印之前：坏路径依旧是 `以下路径没有改动可记录: …` + exit 1，不会先打印“将提交”。
+
+### 效果（3 个 `--only` 路径）
+
+| 指标 | 改前 | 改后 |
+| --- | --- | --- |
+| 中位耗时 | 530 ms | **372 ms（−30%）** |
+| git 进程数 | 10（3+3 次 status + add/commit/rev-parse + maintenance） | **7**（3 次 status + add/commit/rev-parse + maintenance） |
+
+每个额外的 `--only` 路径省一个 status 进程；路径越多收益越大。输出（清单、trailer、确认行）除“已提交 <短 hash>”外逐字节相同。
+
+### 没做
+
+`Unchanged` 仍是“每路径一个 status”。改成一次 `git status` 再按路径匹配看似更快，但会改变 pathspec 语义（重命名、未跟踪目录折叠、`*?[` 字面量），风险大于收益，不做。
+
+### 验收
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过；
+- 新增测试：`TestCommitOnlyUsesTheCheckedPath`（cli，确认走快路径）、`TestActionCheckedCommitsWithoutRechecking`（git，确认不再二次校验仍能提交）；
+- 真仓与临时仓对照：3 路径 530 → 372 ms，10 → 7 进程；坏路径仍拒绝。
