@@ -331,3 +331,52 @@ kiln 没有索引：每条读命令都从提交历史现算模型——一次 `g
 - `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过；
 - `kiln check`：56 ok / 7 warn / 0 error；
 - 旧/新计时与进程数如上。
+
+## collect（续，2026-10-27）：规模上限——8k / 16k / 100k
+
+### 方法
+
+- 合成仓用 `git fast-import`，**1 提交 = 1 issue = 1 action**（空提交），规模 8k / 16k / 100k；
+- 另造 mixed 仓：**16k 提交、只有 1000 个 action**（其余是无 trailer 的普通提交），用来分开“总提交数”与“issue 数”；
+- 每项 2–3 次取中位；`commit` 用新 issue 名避免起点动作拒绝；`path --all` 的峰值内存用 `Start-Process` 轮询 `PeakWorkingSet64`。
+
+### 增长表
+
+| 规模 | status | list --json | check --json | graph --json | search | show | path --all | path --all --stat |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 8k | 170 | 197 | 188 | 182 | 170 | 212 | 212 | 312 |
+| 16k | 241 | 266 | 300 | 307 | 243 | 262 | 336 | 461 |
+| 100k | **967** | **1150** | **1317** | **1139** | **840** | **851** | **1570** | **2087** |
+| mixed 16k 提交 / 1000 issue | 210 | 198 | 196 | 199 | 196 | 245 | 202 | 323 |
+
+`commit`：16k 约 450–540 ms，100k **1500 ms**。
+
+### 体量与内存（100k）
+
+| 输出 | 字节 |
+| --- | --- |
+| `path --all --json` | **35.2 MB**（350 B/action） |
+| `list --json` | 17.3 MB（170 B/issue） |
+| `status --json` | 14.2 MB（142 B/issue） |
+
+`path --all --json` 的**峰值工作集 329 MB**（含模型与整份文档）。
+
+### 观察
+
+- **全部是线性**，每项每 issue 约 **10–15 µs**；没有超线性项。
+- **随总提交数（不是 issue 数）增长**：每条命令的 log+建模（约 10–13 µs/提交）；`show` / `commit` 每次全史扫描（100k 时 851 ms / 1500 ms）；`--stat` 为**所有**提交算 diff（mixed 仓只有 1000 issue、16k 提交仍需 323 ms）。
+- **随 issue 数增长**：输出体量（path --all 350 B/action）、`check` 的规则、`graph` 的边、`search` 的 haystack。
+- **不增长**：git 进程数（status 1、commit 5、path-all-stat 2）、启动约 46 ms。
+- 最先撞到的是**内存与输出体量**：100k 动作 = 35 MB 文档 + 329 MB RSS；时间在 1–2 s 量级，仍是可用范围。
+
+### 边界
+
+- 100k 是空提交；真实提交带 diff 时 `--stat` 更慢，`git log` 的消息体积也更大。
+- 峰值内存不含 git 子进程。
+- mixed 仓的普通提交没有 trailer，因此不产生 issue/action，但仍在 log 与模型构建里。
+
+### 下一步（待 hypothesize / test）
+
+- 低风险：`path --all` 流式编码，避免整份文档与 stats 常驻内存；
+- `search` 的 haystack 不逐 issue 拼大字符串；
+- `show` / `commit` 的全史依赖需要索引或缓存，与无索引设计冲突，暂不做。
