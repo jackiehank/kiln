@@ -131,3 +131,96 @@ Ousterhout 把"按执行顺序拆"命名为 **temporal decomposition**，并给�
 5. **必须说清的一条**：kiln 的"原子"**不是事务**（无 ACID 语义）——用户口语里的"原子事务"应当纠正为**原子动作**。
 
 > 来源（经典原文为骨干，其余标注类型）：[McIlroy 1978 foreword（四条 maxims，含 "as yet unknown"）](https://vedang.me/doug-mcilroy-unix-philosophy)（一手转录）｜ [同一 foreword 的引用与书目](https://www.textbookoflinux.com/references/mcilroy1978.html)（二手）｜ [Kernighan & Pike《The Unix Programming Environment》(1984) 原句 ①](https://en.wikipedia.org/wiki/The_Unix_Programming_Environment)（二手引原文）｜ [Simon 1962《The Architecture of Complexity》PDF](https://faculty.sites.iastate.edu/tesfatsi/archive/tesfatsi/ArchitectureOfComplexity.HSimon1962.pdf)（一手，制表匠与 2 万倍）｜ [同文要点（nearly decomposable）](https://www.infraculture.org/2020-09-10-text-notes-architecture-of-complexity)（二手）｜ [Brooks《No Silver Bullet》PDF](https://worrydream.com/refs/Brooks_1986_-_No_Silver_Bullet.pdf)（一手，essential vs accidental）｜ [同文引用与页码](https://jaidevd.com/posts/no-silver-bullet)（二手）｜ [Out of the Tar Pit（state/control/volume）](https://github.com/papers-we-love/papers-we-love/blob/main/design/out-of-the-tar-pit.pdf)（一手论文）｜ [Ousterhout：temporal decomposition 与"关注知识而非顺序"](https://github.com/alysivji/notes/blob/main/software-engineering/philosophy_of_software_design.md)（读书笔记）｜ [同书要点：信息泄漏](https://bagerbach.com/books/a-philosophy-of-software-design)（读书笔记）｜ [Hickey《Simple Made Easy》transcript 引文（complect）](https://blakecrosley.com/blog/engineering-philosophy-rich-hickey)（二手引 transcript）｜ [Kleppmann《Turning the database inside-out》](https://martin.kleppmann.com/2015/03/04/turning-the-database-inside-out.html)（一手作者博客）｜ [Anderson《More Is Different》PDF](https://www.tkm.kit.edu/downloads/TKM1_2011_more_is_different_PWA.pdf)（一手）｜ [Parnas 1972 原文 PDF](https://prl.khoury.northeastern.edu/img/p-tr-1971.pdf)（一手，"no longer correspond to steps in the processing"）｜ [Fowler《MicroservicePremium》](https://martinfowler.com/bliki/MicroservicePremium.html)（一手）｜ [Fowler《MonolithFirst》](https://martinfowler.com/bliki/MonolithFirst.html)（一手）｜ [Prime Video 官方博客](https://www.primevideotech.com/video-streaming/scaling-up-the-prime-video-audio-video-monitoring-service-and-reduces-costs-by-90)（一手，本环境未能取到正文）＋ [二手转述（含两段引文）](https://adventures.nodeland.dev/archive/prime-video-migrates-off-aws-lambda-saving-90-of)、[ByteByteGo 图解](https://bytebytego.com/guides/amazon-prime-video-monitoring-service)｜ [Foote & Yoder《Big Ball of Mud》](https://www.laputan.org/mud/mud.html)（一手）｜ [Waldo et al.《A Note on Distributed Computing》](https://scholar.harvard.edu/waldo/publications/note-distributed-computing)（一手）｜ [Zettelkasten：principle of atomicity 是方向而非铁律](https://zettelkasten.de/posts/principle-of-atomicity-difference-between-principle-and-implementation)（方法论文档）＋ [Zettelkasten 导论（一张卡一个想法）](https://zettelkasten.de/introduction)｜ [ACID 由 Härder & Reuter 1983 造词](https://en.wikipedia.org/wiki/ACID)（二手，含书目）
+
+## collect（续，2026-10-28）：复杂性账本——原子之后，剩下的落在边、名字与配置上
+
+### 0. 这一轮问什么
+
+触发点：`relation-revision` 已定「**名字层可配、结构固定**」（§7），而 issue 本身又可拆解、组合。两点叠加，担心读侧反而更重。本轮**不重开**关系机制（键/槽/取强/LWW），只做三件事：
+
+1. 把「复杂性被推到哪里」列成账本，每项配本仓事实；
+2. 量一次**关系与词表的实际使用**（数据，不是设计）；
+3. 算「可配词表」的边际成本——它付了没有、还要付什么。
+
+### 1. 账面：三层名字、三类规则、一处配置
+
+| 层 | 内容 | 谁承担 |
+| --- | --- | --- |
+| 名字 | issue id（63）、action 名（6）、relation 名（9 + 2 alias） | 作者（写）/ 读者（记） |
+| 结构规则 | 键 `(无序对,槽)`、槽内强度全序取强、读侧 LWW、`unrelate` 墓碑、反向只渲不存 | 引擎（固定）/ 读者（要理解） |
+| 配置 | `.kilnconfig.jsonc`：`actions`（可配）、`vcs`、`worktree`；`relations` 段**尚未接线** | 项目（若启用） |
+
+「结构固定」只保证**引擎可推理**；它不保证**读者可预测**——这个差别是本轮账本的主轴。
+
+### 2. 本仓实测（HEAD `ac5de27`，2026-10-28）
+
+| 指标 | 数值 |
+| --- | --- |
+| issue / action / domain | 63 / 294 / 3 |
+| 关系边 | **90**（1.43 条/issue） |
+| 有边 / 孤立 | 58 / 5 |
+| 度数 | 中位 2，最大 9（`cli-necessity`、`help-relation-flags`） |
+| 用到的名字 | **3 / 9**：`relates-to` 68、`caused-by` 21、`blocks` 1 |
+| 未用到的名字 | `causes`、`part-of`、`has-part`、`blocked-by`、`supersedes`、`superseded-by` |
+| alias 的真实使用 | `derived-from` 18 条、`spawns` 1 条（294 个动作提交的 trailer 扫描） |
+| 配置使用 | actions 默认；relations 默认；仓内无自定义 |
+| 文档 | 55 篇 / 9234 行；关系两篇 1694 行（`relation-vocabulary` 881 + `relation-revision` 813）；README 328 行 |
+| check | 57 ok / 6 warn / 0 error（6 warn = 未收尾的 issue） |
+
+两个趋势值得记下来：
+
+- `relation-revision` 的 test 1 当时是 **42 issue / 48 边（1.14 条/issue）**；现在 63 / 90（**1.43**）。**边比 issue 涨得快**。
+- 9 个名字只用 3 个，但 alias 有 19 条真实使用——词表在付「记忆税」，历史名字在付「迁移税」。
+
+### 3. 关键事实：可配词表「已定、未接线」
+
+- `relation-revision` §7 定的形态是 `relations.slots` / `relations.names` / `relations.aliases`；§10 把「`config` 新增 `relations`」明确列为遗留。
+- `relations-impl` 的「未做（后续）」第 1 条：目前只把默认词表接进 `Config`，**还没解析文件里的自定义槽/名/别名**（原文：「设计已定，纯 plumbing」）。
+- 本轮实测：`.kilnconfig.jsonc` 写 `{"relations": …}` → `配置错误: … unknown field "relations"`，**exit 1**（`config.DisallowUnknownFields`，与 `config-compat` 的「0.x 不承诺配置兼容」一致）。
+- `model.NewRelationSet` 的槽/rank 校验、别名归一、帮助从词表生成都已就绪，**入口没接**。
+
+> 所以今天用户**无法**自定义关系名；读侧实际只面对 9 个固定名（3 个在用）。你担心的那笔成本目前是**潜在的**，不是已付的。已付的是**设计与模型**的复杂度（关系文档 1694 行、`RelationSet` 的槽/全序校验）；未付的是**使用面**（配置 schema、跨项目语义漂移、Skill 数据化）。
+
+### 4. 若接线，税单是什么
+
+已付（接不接线都已入账）：
+
+- `RelationSet` 的槽/rank/别名校验、槽内全序规则、反向合成；
+- 帮助与关系 flag 从词表生成；
+- 设计文档 1694 行。
+
+将付（接线才发生）：
+
+- `config` 新增 `relations` 段：严格解析（未知字段硬拒），需要 schema、校验、错误文案、迁移说明；
+- **跨项目语义漂移**：同一概念在不同仓可能叫不同名；Skill 不能写死，只能数据化生成（`path-inbound` / `help-relation-flags` 已为此预留 gloss）；
+- **跨仓比较失真**：`graph`、统计、度量不能直接对照；
+- alias 长期存活：`derived-from` / `spawns` 已是 19 条历史，再改名会叠加。
+
+可测的触发条件（不是预算，是观察点）：
+
+1. 名使用率长期 < 1/3（本仓 3/9）；
+2. alias 条目继续增长；
+3. 出现第一个带 `relations` 段的项目；
+4. 边密度继续上升（> 2 条/issue）。
+
+### 5. 账本结论（候选，留给 hypothesize 裁定）
+
+- **去掉的**：流程引擎、状态机、索引 / DB、树——这部分是真省。
+- **转移的**：组合语义（边 + 方向 + 折叠）→ 读者；名字纪律（唯一性 / 词表 / alias）→ 作者；一致性 → `check` 与写侧守卫。
+- **新增的**（本轮才看清）：**配置面**。一旦接线，名字纪律的一部分交给项目配置；引擎不变，但 **Skill / 文档 / 跨仓比较**要跟着变。这是「配置化」的固有税，不是 bug。
+- 一句话候选：kiln 用「**固定结构 + 默认小词表 + opt-in 名字层**」给这张税单设上限；上限够不够，取决于是否真的出现「一个项目一套词表」的需求——本仓目前没有。
+
+### 6. 边界
+
+- 不重开 `relation-vocabulary` 的行业调研（同类工具 6 种改关系机制已在 `relation-revision` 的 collect 里）；本轮只做本仓实测与账本。
+- 没测：真实项目自定义词表后的**读者实验**（人 / LLM）；跨仓对照（本仓只有一份配置）。
+- 不裁定「要不要接线」——那是 hypothesize 的事。
+
+### 7. 留给 hypothesize 的候选
+
+| 方案 | 形态 | 代价 |
+| --- | --- | --- |
+| **A** 保持「设计可配、暂不接线」 | 零使用成本；文档写明「预留」 | 设计与文档成本已在账上；需求出现时要补 plumbing |
+| **B** 只接线 `names` / `gloss`，槽 / rank 仍固定 | 误配面最小；引擎不腐化 | 不能加「不可比」的新关系 |
+| **C** 按 `relation-revision` 全接线（slots/names/aliases） | 完全对齐已定结论 | 税单全部发生；Skill 必须数据化 |
+| **D** 反向：删掉可配设计，冻结 9 名 | 读侧最省；文档可以瘦 | 违背「名字层自由」的取向，要改写已定结论 |
