@@ -647,6 +647,122 @@ func TestPathJSONIncludesIncidentRelations(t *testing.T) {
 	}
 }
 
+// taggedRunner models one issue whose actions carry different tags — exactly the
+// case the issue-level union cannot answer. Commits are newest-first, the order
+// `git log` returns, so the fold builds the union in chronological order.
+func taggedRunner() fakeRunner {
+	base := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{commits: []vcs.Commit{
+		{ID: "g3", Date: base.Add(2 * time.Hour), Message: "验证\n\nissue: tagged\naction: test\ntags: [flow, test]\ntitle: 验证"},
+		{ID: "g2", Date: base.Add(time.Hour), Message: "收集\n\nissue: tagged\naction: collect\ntitle: 收集"},
+		{ID: "g1", Date: base, Message: "开题\n\nissue: tagged\naction: ask\ntags: [flow, focus]\ntitle: 开题"},
+	}}
+}
+
+// Action tags are per commit: path carries each action's own list, not the issue
+// union that graph/list report. Absent tags are a missing key, never null.
+func TestPathJSONCarriesEachActionsOwnTags(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: taggedRunner(), out: &out, errw: &errb}
+	if code := e.path([]string{"tagged", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if want := []string{"flow", "focus"}; !reflect.DeepEqual(doc.Actions[0].Tags, want) {
+		t.Fatalf("ask tags = %+v, want %+v", doc.Actions[0].Tags, want)
+	}
+	if doc.Actions[1].Tags != nil {
+		t.Fatalf("an untagged action must omit tags, got %+v", doc.Actions[1].Tags)
+	}
+	if want := []string{"flow", "test"}; !reflect.DeepEqual(doc.Actions[2].Tags, want) {
+		t.Fatalf("test tags = %+v, want %+v", doc.Actions[2].Tags, want)
+	}
+
+	// "absent" must be a missing key rather than null, so decode the raw shape too.
+	var raw struct {
+		Actions []map[string]any `json:"actions"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatalf("raw decode: %v", err)
+	}
+	if _, ok := raw.Actions[1]["tags"]; ok {
+		t.Fatalf("the untagged action must not carry a tags key: %v", raw.Actions[1])
+	}
+	if got := raw.Actions[2]["tags"]; !reflect.DeepEqual(got, []any{"flow", "test"}) {
+		t.Fatalf("raw test tags = %#v", got)
+	}
+
+	// The batch shares the same builder, so per-action tags arrive there too.
+	out.Reset()
+	errb.Reset()
+	if code := e.path([]string{"--all", "--json"}); code != 0 {
+		t.Fatalf("batch exit code = %d, stderr = %q", code, errb.String())
+	}
+	var batch pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &batch); err != nil {
+		t.Fatalf("path --all --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(batch.Issues) != 1 || !reflect.DeepEqual(batch.Issues[0].Actions, doc.Actions) {
+		t.Fatalf("batch actions = %+v, want %+v", batch.Issues, doc.Actions)
+	}
+}
+
+// The issue-level unions stay exactly where they were: graph's node tags and
+// list's row tags remain the union, and `list --tag=` still matches any action.
+func TestIssueLevelTagsStayAUnion(t *testing.T) {
+	out, errb := &bytes.Buffer{}, &bytes.Buffer{}
+	e := &env{actions: model.DefaultActionSet(), repo: taggedRunner(), out: out, errw: errb}
+	rel := model.DefaultRelationSet()
+	repo := engine.Build(engine.ActionsFromCommits(taggedRunner().commits, rel), rel)
+
+	if code := e.graphJSON(repo, "", 0); code != 0 {
+		t.Fatalf("graphJSON exit code = %d, stderr = %q", code, errb.String())
+	}
+	var gdoc graphDoc
+	if err := json.Unmarshal(out.Bytes(), &gdoc); err != nil {
+		t.Fatalf("graph --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	wantUnion := []string{"flow", "focus", "test"}
+	if len(gdoc.Nodes) != 1 || !reflect.DeepEqual(gdoc.Nodes[0].Tags, wantUnion) {
+		t.Fatalf("graph node tags = %+v, want the union %+v", gdoc.Nodes, wantUnion)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := e.list([]string{"--json", "--tag=test"}); code != 0 {
+		t.Fatalf("list exit code = %d, stderr = %q", code, errb.String())
+	}
+	var ldoc listDoc
+	if err := json.Unmarshal(out.Bytes(), &ldoc); err != nil {
+		t.Fatalf("list --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if ldoc.Count != 1 || len(ldoc.Issues) != 1 || ldoc.Issues[0].ID != "tagged" {
+		t.Fatalf("list --tag=test rows = %+v", ldoc.Issues)
+	}
+	if !reflect.DeepEqual(ldoc.Issues[0].Tags, wantUnion) {
+		t.Fatalf("list row tags = %+v, want the union %+v", ldoc.Issues[0].Tags, wantUnion)
+	}
+}
+
+// The text view stays a reading layout: no tags column, so its bytes do not
+// change (issue-level tags are still visible in `status` / `list`).
+func TestPathTextDoesNotAddActionTags(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: taggedRunner(), out: &out, errw: &errb}
+	if code := e.path([]string{"tagged"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(out.String(), "tags=") {
+		t.Fatalf("the text view gained a tags column:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "  1. ask") {
+		t.Fatalf("the text view lost its action list:\n%s", out.String())
+	}
+}
+
 // batchRunner models two issues — alpha opened first, beta opened later and
 // collected — so the batch's ordering and per-issue shape are both visible.
 func batchRunner() fakeRunner {

@@ -44,7 +44,7 @@
 
 三个命令都加 `--json`，各出一份**单对象**；不加 `--json` 时文本视图逐字节不变。stat 不做二选一：`--json --stat` / `--json --shortstat` 把 stat 文本作为字段收进文档。
 
-- `path --json` → `{"issue","action":<当前动作名>,"done":bool,"actions":[{"ordinal","action","id","date","title","refs"?}],"relations":[{"from","to","name","directed"}]}`。`relations` 取 `FoldEdges` 中与该 issue 相邻的边，与 `graph --json` 共用词表：`name` 是声明名、`from` 说清谁声明；入边不换反名。
+- `path --json` → `{"issue","action":<当前动作名>,"done":bool,"actions":[{"ordinal","action","id","date","title","refs"?,"tags"?}],"relations":[{"from","to","name","directed"}]}`。`relations` 取 `FoldEdges` 中与该 issue 相邻的边，与 `graph --json` 共用词表：`name` 是声明名、`from` 说清谁声明；入边不换反名。`actions[].tags` 是**该动作自己的** `tags:` trailer（提交顺序、重复保留），不是 issue 级并集。
 - `show --json` → `{"issue","ordinal","total","action","id","date","title","body"}`；`body` 在 `--stat` 时是 diffstat、否则是提交全文；**不放 diff 原文**（大，且文本视图仍能拿），留作以后按需加 `diff`。
 - `worktree list --json` → `{"mode":"git|jj","worktrees":[{"path","main","issue"?,"gone","dirty","unmerged"}]}`；布尔永远写出，`issue` 缺省即 main。
 - 错误与文本视图同一套：未知 issue / 越界序号 exit 1/2，stdout 0 字节。
@@ -66,7 +66,7 @@
 
 七个读命令全部有 `--json`。三条新命令的契约：
 
-- `path --json`：`issue` / `action`（当前动作名）/ `done` / `actions[]`（`ordinal`、`action`、`id`、`date`（RFC3339）、`title`、`refs`、`stat`）/ `relations[]`（与 `graph --json` 同形的相邻边）。`actions` 与 text 视图同序，`ordinal` 可直接喂给 `kiln show`。
+- `path --json`：`issue` / `action`（当前动作名）/ `done` / `actions[]`（`ordinal`、`action`、`id`、`date`（RFC3339）、`title`、`refs`、`tags`、`stat`）/ `relations[]`（与 `graph --json` 同形的相邻边）。`actions` 与 text 视图同序，`ordinal` 可直接喂给 `kiln show`。`tags` 取动作自己的 trailer（空则省略），与 `graph --json` / `list --json` 的 issue 级并集不是一回事。
 - `show --json`：`issue` / `ordinal` / `total` / `action` / `id` / `date` / `title` / `body`；`body` 是提交全文（`--stat` 时是 diffstat），**不含 diff 原文**——需要 diff 的调用方仍可用文本视图。
 - `worktree list --json`：`mode` / `worktrees[]`（`path`、`main`、`issue`、`gone`、`dirty`、`unmerged`）；三个状态布尔恒写，`issue` 缺省即 main。
 - 批量形态（issue `path-batch`）：`kiln path --all --json` / `kiln path <id> <id> --json` → `{"issues":[<上面那条文档>…],"errors"?}`。单条文档形状不变，所以同一个解码器两种形态都读得动；`errors` 是语言中立 token（`unknown-issue` / `stat-failed`），单条失败不拖垮整份。

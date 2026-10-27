@@ -81,3 +81,18 @@ kiln path kiln-flow-focus-ui --json    # 下游仓里的用例
 | `internal/model/model.go` `Action`（约 110 行） | 已有 `Tags []string` |
 | `internal/cli/cli_test.go`（`TestPathJSONRendersThePath` 起） | 补一条"动作 tags 各不相同"的断言 |
 | `docs/machine-readable-output.md` | `path` 的字段表要加一行 |
+
+## 决策（2026-10-27）
+
+- **加**：`path --json` 的动作行补 `tags`，直接取自该提交的 trailer（`model.Action.Tags`：提交顺序、重复保留），不做 issue 级合并。
+- **键名与空值**：`tags` + `omitempty`——无标签时**省略**该键（与 `refs` / `title` / `stat` 及"缺键=无"约定一致），不写 `[]`，更不写 `null`。
+- **同级字段**：本轮只补 `tags`；`domain` / `scope` / `target` 仍不给——没有下游需求，加字段属于读侧契约扩张，单独议。
+- **并集不动**：`graph --json` 节点、`list --json` 行仍是 issue 级并集，`list --tag=` 仍是"任一动作带过"。
+- **文本不动**：`path` 文本仍是紧凑阅读布局（序号 / 动作 / 短 hash / 标题），不加 tags 列；issue 级 tags 在 `status` / `list` 已可见。
+
+## 落地（2026-10-27）
+
+- `internal/cli/cli.go`：`pathAction` 增 `Tags []string`（`json:"tags,omitempty"`，紧随 `refs`）；`pathDocOf` 从 `a.Tags` 直接拷贝。单条与批量共用同一条构造路径，所以 `path --all --json` 同步带上。
+- 测试（`internal/cli/cli_test.go`）：`TestPathJSONCarriesEachActionsOwnTags`（三个动作两种标签 + 一个无标签：断言各自的 tag 列表、无标签动作**没有** `tags` 键、批量动作切片与单条 `reflect.DeepEqual`）、`TestIssueLevelTagsStayAUnion`（graph 节点与 list 行的并集不变、`list --tag=test` 仍命中）、`TestPathTextDoesNotAddActionTags`（文本无 `tags=`）。
+- 文档：`docs/read-json.md` 的 schema 两处补 `tags` 并写清"动作自己的、不是并集"；`docs/machine-readable-output.md` 没有单独的 path 字段表（`read-json` 落地时 schema 记进了 `docs/read-json.md`），以那份为准，不另抄一份制造两个真相。
+- 复核：`gofmt` / `go vet` / `go test ./...` 全过；临时仓三个动作（`flow,focus` / 无 / `flow,test`）→ `path --json` 的 tags 各自独立、无标签动作无该键，`graph --json` 节点仍是并集 `flow,focus,test`；本仓 `kiln path path-action-tags --json`：ask 无 tags、apply 为 `json,path`——同一 issue 的不同动作各不相同。

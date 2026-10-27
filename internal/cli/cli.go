@@ -1187,7 +1187,9 @@ const (
 )
 
 // pathAction is one action in the path: what it did, when, under which hash,
-// and — with --stat / --shortstat — the diffstat that belongs to it.
+// and — with --stat / --shortstat — the diffstat that belongs to it. Tags are
+// the action's own `tags:` trailer (commit order, duplicates kept); they are not
+// the issue-level union, which is what `graph --json` and `list --json` carry.
 type pathAction struct {
 	Ordinal int      `json:"ordinal"`
 	Action  string   `json:"action"`
@@ -1195,6 +1197,7 @@ type pathAction struct {
 	Date    string   `json:"date"`
 	Title   string   `json:"title,omitempty"`
 	Refs    []string `json:"refs,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
 	Stat    string   `json:"stat,omitempty"`
 }
 
@@ -1299,6 +1302,7 @@ func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edge
 			Date:    a.Date.Format(time.RFC3339),
 			Title:   a.Title,
 			Refs:    a.Refs,
+			Tags:    a.Tags,
 		}
 		if mode != statNone {
 			stat, err := backend.ShowStat(a.ID, mode == statShort)
