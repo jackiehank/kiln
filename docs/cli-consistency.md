@@ -597,3 +597,37 @@
 ### 下一批
 
 批 D（中文术语统一）：把 prose 位置的 `issue` 改成「问题」，`issue` 只留标识符位置；另外把 graph 的 `没有 issue %q` 统一成 `未找到问题: %s`。
+
+## apply（批 D，2026-10-27）：中文术语统一
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/cli/cli.go` | 帮助说明 `issue 不会被关闭` → `问题不会被关闭`；`--all 与 issue 参数` → `问题参数`；拒绝新建的 `issue %q … 同一条 issue` → `问题 %q … 同一条问题`；`没有 issue %q`（graph 邻域）改用现成的 `未找到问题: %s`；批量提示 `多条 issue` → `多条问题` |
+| `internal/i18n/catalog.go` | 上述五处 zh key 同步；删除两个已无引用的条目（`没有 issue %q`、`没有 issue 为 %q 的 worktree`）；en 值不变 |
+| `internal/cli/cli_test.go` | 新增 `TestChineseProseSaysWenTiNotIssue`：拒绝新建、graph 邻域、`--all` 冲突、帮助说明四处都断言用「问题」 |
+
+规则：**「问题」是中文叙述里的实体；`issue` 只保留在标识符位置**——`issue:` trailer、`--issue`、JSON `issue` 键、`<issue>` 占位、`issue ID`、`kiln do <issue> <action>`。
+
+### 验收（实测）
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过。
+- 真仓：`kiln do cli-consistency ask` → `拒绝: 问题 "cli-consistency" 已经有起点动作 "ask"…同名即同一条问题…`；`graph --issue nope --json` → `未找到问题: nope`；`path --all <id> --json` → `--all 与问题参数不能同用`；`path a b`（无 `--json`）→ `…多条问题`；`-h` 的说明是“问题不会被关闭”。
+- `--lang=en` 对应输出不变（`refused: issue …` 等），中英各自的措辞完整。
+- zh 错误路径不再出现 `问题…issue…` 同句混用（新测试 + 人工抽查）。
+
+## 结论（2026-10-27）
+
+`cli-consistency` 收尾。36 条实测发现全部有落点：**16 条已改 / 3 条写明暂不改 / 17 条写明保持理由**，分四批落地：
+
+| 批 | 提交 | 内容 |
+| --- | --- | --- |
+| A | `09b9045` | JSON 契约：`status done/open`、`worktree policy/backend`、`check passed/findings`、`show --stat` 追加 `stat`；四条成文规则（`id` vs `issue`、容器/省略、`title`/`commit` 粒度、JSON 不随语言变） |
+| B | `986d49d` | 解析器与帮助：开关不再吞位置参数、`<cmd> -h`、重复标量/多余参数报错、`worktree` 先 parse、`path` 多 id 去重 |
+| C | `adc307b` | 过滤与空态：`--action` 校验、`--tag` 拒逗号、空结果/空仓在 stderr 说明条件；修英文子命令帮助 |
+| D | 本次 | 中文术语：prose 用「问题」，`issue` 只留标识符位置 |
+
+**明确不做的**（都有理由，不是遗漏）：`check.actions` 加 ordinal（无消费方）；`graph` / `check` / `status` 的 `--domain` 过滤（新功能，另立项）；文本状态标记统一与 `list` 文本补 title（文本稳定优先）；多标签过滤与 `filter.tag` 形状变更（等需求）；单条错误的 JSON 化（归 `machine-readable-output` 遗留）；把 `show.body` 的 diff 拆出去（要新后端方法）。**dsh-kiln 的 `action.commit` 迁移由用户自行处理**，不在本 issue 范围。
+
+最终状态：`kiln check` 53 ok / 9 warn / 0 error；七个读命令的 JSON 在同一仓库下 `--lang=zh` / `en` 逐字节相同；文本视图除帮助外未动。

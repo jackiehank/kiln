@@ -41,7 +41,7 @@ worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里�
 // usageOtherFlags are the per-command flags that are not the do/commit surface.
 const usageOtherFlags = `
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）  --json（机器可读输出）
-path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接给多条 issue）
+path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接给多条问题）
 show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
@@ -144,7 +144,7 @@ func doCommitFlagText(rel *model.RelationSet) string {
 	b.WriteString(i18n.T("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n"))
 	writeGroup(i18n.T("  元数据:"), meta)
 	writeGroup(i18n.T("  关系:  （均可重复、逗号分隔）"), relations)
-	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——issue 不会被关闭。\n"))
+	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——问题不会被关闭。\n"))
 	return b.String()
 }
 
@@ -1175,7 +1175,7 @@ func (e *env) path(args []string) int {
 		return 2
 	}
 	if all && len(pos) > 0 {
-		fmt.Fprintln(e.errw, i18n.T("--all 与 issue 参数不能同用"))
+		fmt.Fprintln(e.errw, i18n.T("--all 与问题参数不能同用"))
 		return 2
 	}
 	// Batch is JSON-only: the text view is a reading layout (one path, stats
@@ -1183,7 +1183,7 @@ func (e *env) path(args []string) int {
 	// Refusing beats silently rendering only the first argument, which is what
 	// this command used to do.
 	if (all || batch) && !f.has("json") {
-		fmt.Fprintln(e.errw, i18n.T("批量取路径只支持 --json（--all 或多条 issue）"))
+		fmt.Fprintln(e.errw, i18n.T("批量取路径只支持 --json（--all 或多条问题）"))
 		return 2
 	}
 	repo, code := e.loadRepo()
@@ -1834,7 +1834,7 @@ func (e *env) refuseDuplicateStart(issue string) int {
 			rest = append(rest, name)
 		}
 	}
-	fmt.Fprint(e.errw, i18n.T("拒绝: issue %q 已经有起点动作 %q（共 %d 个动作）——同名即同一条 issue，不需要再新建\n", issue, e.actions.Start(), len(p.Actions)))
+	fmt.Fprint(e.errw, i18n.T("拒绝: 问题 %q 已经有起点动作 %q（共 %d 个动作）——同名即同一条问题，不需要再新建\n", issue, e.actions.Start(), len(p.Actions)))
 	fmt.Fprint(e.errw, i18n.T("提示: 要继续它，用 kiln commit %s <action>（可选: %s）\n", issue, strings.Join(rest, ", ")))
 	return 1
 }
@@ -2277,7 +2277,7 @@ func (e *env) graphJSON(repo *model.Repo, focus string, depth int) int {
 	})
 	if focus != "" {
 		if _, ok := repo.Issues[focus]; !ok {
-			fmt.Fprint(e.errw, i18n.T("没有 issue %q\n", focus))
+			fmt.Fprint(e.errw, i18n.T("未找到问题: %s\n", focus))
 			return 1
 		}
 		ids, edges = neighbourhood(ids, edges, focus, depth)

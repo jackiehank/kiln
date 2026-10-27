@@ -3228,3 +3228,43 @@ func TestPerCommandHelpWorksInEnglish(t *testing.T) {
 		t.Fatalf("the English help must not fall back to Chinese:\n%s", got)
 	}
 }
+
+// Chinese prose says 问题; `issue` stays only where it is an identifier
+// (trailer key, flag name, placeholder, JSON key).
+func TestChineseProseSaysWenTiNotIssue(t *testing.T) {
+	i18n.Set(i18n.Zh)
+
+	var out, errb bytes.Buffer
+	if code := newDemoEnv(&out, &errb).write([]string{"demo", "ask"}, false); code != 1 {
+		t.Fatalf("duplicate start: exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "拒绝: 问题") || strings.Contains(errb.String(), "拒绝: issue") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).graph([]string{"--json", "--issue", "nope"}); code != 1 {
+		t.Fatalf("graph focus: exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "未找到问题: nope") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newDemoEnv(&out, &errb).path([]string{"--all", "demo", "--json"}); code != 2 {
+		t.Fatalf("path --all with an issue: exit = %d", code)
+	}
+	if !strings.Contains(errb.String(), "--all 与问题参数不能同用") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	var hOut, hErr bytes.Buffer
+	if code := Run([]string{"-h"}, &hOut, &hErr); code != 0 {
+		t.Fatalf("help: exit = %d", code)
+	}
+	if !strings.Contains(hOut.String(), "问题不会被关闭") {
+		t.Fatalf("help must state the done semantics in Chinese prose:\n%s", hOut.String())
+	}
+}
