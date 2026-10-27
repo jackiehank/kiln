@@ -98,8 +98,8 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 
 | 命令 | 作用 |
 | --- | --- |
-| `kiln do <issue> <action> [flags]` | 生成规范提交信息（**只打印，不提交**） |
-| `kiln commit <issue> <action> [--only <paths>] [flags]` | 用规范信息直接提交；默认提交整个工作区（快照），`--only` 只提交列出的路径；stdout 先报 `将提交 N 个文件: …`，末尾报 `已提交 <hash> · <action> · <issue>` |
+| `kiln do <issue> <action> --title <文本> [flags]` | 生成规范提交信息（**只打印，不提交**）；`--title` 必填（trim 后非空）——它就是 git 的 subject |
+| `kiln commit <issue> <action> --title <文本> [--only <paths>] [flags]` | 用规范信息直接提交；`--title` 必填，其余 flag 选填；默认提交整个工作区（快照），`--only` 只提交列出的路径；stdout 先报 `将提交 N 个文件: …`，末尾报 `已提交 <hash> · <action> · <issue>` |
 | `kiln path <issue>` | 重建该 issue 的研究路径；`--stat` 逐动作附文件统计、`--shortstat` 每动作一行总计；`--json` 出单对象，`--all --json`（或给多条 issue）一次进程读全仓 |
 | `kiln show <issue> [n\|action]` | 展开某个动作的完整变更（默认最后一个；`n` 是 `path` 里的序号，**也可给动作名**——取该动作**最后一次**，有多个会在 stderr 提示，没有则列出可控序号）；`--stat` 只给文件统计 |
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
@@ -114,6 +114,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln help` / `kiln -h` / `kiln <cmd> -h` | 帮助（`<cmd> -h` 只列该命令的用法与 flags） |
 
 `do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag`；关系：`--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate`（均可重复、逗号分隔；别名 `--derived-from` / `--spawns` 同样接受）。
+`--title` **必填**（trim 后非空，`do` 与 `commit` 同判）；**值以 `--` 开头时写 `--flag=值`**——空格形式会被当成缺值而拒绝（`--title --force` 报错，不会把 `--force` 吃掉）。
 另：`commit --force`（一次性豁免，见「工作区模式」）、`commit --only <paths>`（只提交列出的路径，逗号分隔或重复给）。
 `--json`：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都支持（机器可读输出，见「机器可读输出」）；`path` 可加 `--all` 一次读全仓（或直接给多条 issue），仅与 `--json` 同用。
 

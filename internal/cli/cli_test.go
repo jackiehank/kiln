@@ -66,7 +66,7 @@ func TestDoRejectsUnknownAction(t *testing.T) {
 
 func TestDoWarnsOnLooseIssueID(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := Run([]string{"do", "bad/id", "ask"}, &out, &errb)
+	code := Run([]string{"do", "bad/id", "ask", "--title", "T"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -84,7 +84,7 @@ func TestDoWarnsOnLooseIssueID(t *testing.T) {
 func TestDoNormalizesTheIssueID(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
-	if code := e.write([]string{"Session__Expiry", "collect"}, false); code != 0 {
+	if code := e.write([]string{"Session__Expiry", "collect", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(errb.String(), `"Session__Expiry" → "session-expiry"`) {
@@ -136,7 +136,7 @@ func TestStartIsAllowedToRepairAnIssueWithoutOne(t *testing.T) {
 	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{commits: []vcs.Commit{
 		{ID: "c1", Date: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC), Message: "先调研\n\nissue: orphan\naction: collect\ntitle: 先调研"},
 	}}, out: &out, errw: &errb}
-	if code := e.write([]string{"orphan", "ask"}, false); code != 0 {
+	if code := e.write([]string{"orphan", "ask", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "issue: orphan") {
@@ -149,7 +149,7 @@ func TestStartIsAllowedToRepairAnIssueWithoutOne(t *testing.T) {
 func TestDoOutsideARepositoryStillPrints(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
-	if code := e.write([]string{"nowhere", "ask"}, false); code != 0 {
+	if code := e.write([]string{"nowhere", "ask", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "issue: nowhere") {
@@ -172,7 +172,7 @@ func TestDoListFlagsUseCanonicalForm(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			args := append([]string{"do", "smoke-test", "ask"}, tc.args...)
+			args := append([]string{"do", "smoke-test", "ask", "--title", "T"}, tc.args...)
 			if code := Run(args, &out, &errb); code != 0 {
 				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 			}
@@ -185,7 +185,7 @@ func TestDoListFlagsUseCanonicalForm(t *testing.T) {
 
 func TestDoDropsEmptyListFlag(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := Run([]string{"do", "smoke-test", "ask", "--refs", ""}, &out, &errb); code != 0 {
+	if code := Run([]string{"do", "smoke-test", "ask", "--title", "T", "--refs", ""}, &out, &errb); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if strings.Contains(out.String(), "refs:") {
@@ -1160,7 +1160,7 @@ func newWorkspaceEnv(out, errw *bytes.Buffer, dedicated bool) *env {
 // which is what makes silent cross-agent contamination structurally impossible.
 func TestCommitInMainIsRefused(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, true); code != 1 {
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect", "--title", "T"}, true); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(errb.String(), "当前是 main") {
@@ -1178,7 +1178,7 @@ func TestCommitRefusalCarriesTheRecipeWhenMainIsDirty(t *testing.T) {
 	e := newWorkspaceEnv(&out, &errb, false)
 	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
 	e.kind = vcs.Git
-	if code := e.write([]string{"demo", "collect"}, true); code != 1 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	got := errb.String()
@@ -1204,7 +1204,7 @@ func TestCommitRefusalCarriesTheRecipeWhenMainIsDirty(t *testing.T) {
 // A clean main needs no recipe: "先建区" is exactly right there.
 func TestCommitRefusalPointsAtAnAreaWhenMainIsClean(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, true); code != 1 {
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect", "--title", "T"}, true); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	got := errb.String()
@@ -1224,7 +1224,7 @@ func TestCommitInMainWithForce(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, false)
 	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
-	if code := e.write([]string{"demo", "collect", "--force"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--force"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "issue: demo") {
@@ -1237,7 +1237,7 @@ func TestCommitInDedicatedArea(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, true)
 	e.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
-	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 }
@@ -1249,7 +1249,7 @@ func TestCommitInDedicatedArea(t *testing.T) {
 func TestCommitHintsWhenTheAreaIsClean(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, true) // a dedicated area, nothing dirty
-	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(errb.String(), "没有检测到改动") {
@@ -1264,7 +1264,7 @@ func TestCommitHintsWhenTheAreaIsClean(t *testing.T) {
 	var dirtyOut, dirtyErr bytes.Buffer
 	d := newWorkspaceEnv(&dirtyOut, &dirtyErr, true)
 	d.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
-	if code := d.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := d.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("dirty exit code = %d, stderr = %q", code, dirtyErr.String())
 	}
 	if !strings.Contains(dirtyOut.String(), "将提交 1 个文件") {
@@ -1285,7 +1285,7 @@ func TestCommitStaysQuietWhenTheAreaIsDirty(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, true)
 	e.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
-	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if strings.Contains(errb.String(), "没有检测到改动") {
@@ -1311,7 +1311,7 @@ func TestCommitOnlyRecordsTheListedPaths(t *testing.T) {
 		out:      &out,
 		errw:     &errb,
 	}
-	if code := e.write([]string{"demo", "collect", "--only", "docs/a.md,docs/b.md"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--only", "docs/a.md,docs/b.md"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if got := strings.Join(gotPaths, ","); got != "docs/a.md,docs/b.md" {
@@ -1350,7 +1350,7 @@ func TestCommitRefusesAPathWithoutChange(t *testing.T) {
 		out:      &out,
 		errw:     &errb,
 	}
-	if code := e.write([]string{"demo", "collect", "--only", "ghost.md"}, true); code != 1 {
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--only", "ghost.md"}, true); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(errb.String(), "以下路径没有改动") || !strings.Contains(errb.String(), "ghost.md") {
@@ -1374,7 +1374,7 @@ func TestCommitInventoryCapsLongLists(t *testing.T) {
 		out:      &out,
 		errw:     &errb,
 	}
-	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "将提交 6 个文件: a.md, b.md, c.md, d.md, e.md 等 6 个") {
@@ -1386,7 +1386,7 @@ func TestCommitInventoryCapsLongLists(t *testing.T) {
 // warn about — the risk only exists at commit time.
 func TestDoNeverHintsAboutAnEmptyCommit(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect"}, false); code != 0 {
+	if code := newWorkspaceEnv(&out, &errb, true).write([]string{"demo", "collect", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if strings.Contains(errb.String(), "没有检测到改动") {
@@ -1397,7 +1397,7 @@ func TestDoNeverHintsAboutAnEmptyCommit(t *testing.T) {
 // `do` only prints, so the layout guard does not apply to it.
 func TestDoIsUnaffectedByTheGuard(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect"}, false); code != 0 {
+	if code := newWorkspaceEnv(&out, &errb, false).write([]string{"demo", "collect", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 }
@@ -1408,7 +1408,7 @@ func TestDoIsUnaffectedByTheGuard(t *testing.T) {
 func TestDoTipsWhenIsolationIsRequired(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, false) // standing in main
-	if code := e.write([]string{"demo", "collect"}, false); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(errb.String(), "开工前先 kiln worktree new demo") {
@@ -1440,7 +1440,7 @@ func TestDoTipCarriesTheBackendRecipe(t *testing.T) {
 				kind:     tc.kind,
 				out:      &out, errw: &errb,
 			}
-			if code := e.write([]string{"demo", "test"}, false); code != 0 {
+			if code := e.write([]string{"demo", "test", "--title", "T"}, false); code != 0 {
 				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 			}
 			if !strings.Contains(errb.String(), "你已有未提交改动") || !strings.Contains(errb.String(), tc.want) {
@@ -1469,7 +1469,7 @@ func TestDoStaysQuietWhenThereIsNothingToAsk(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			if code := tc.env(&out, &errb).write([]string{"demo", "collect"}, false); code != 0 {
+			if code := tc.env(&out, &errb).write([]string{"demo", "collect", "--title", "T"}, false); code != 0 {
 				t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 			}
 			if errb.String() != "" {
@@ -1484,7 +1484,7 @@ func TestDoStaysQuietWhenThereIsNothingToAsk(t *testing.T) {
 func TestDoSaysWhenThereIsNoRepository(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := &env{actions: model.DefaultActionSet(), dir: t.TempDir(), out: &out, errw: &errb}
-	if code := e.write([]string{"demo", "ask"}, false); code != 0 {
+	if code := e.write([]string{"demo", "ask", "--title", "T"}, false); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(errb.String(), "不在仓库里") {
@@ -1721,7 +1721,7 @@ func TestCommitInMainAllowedWhenWorktreeOff(t *testing.T) {
 	e := newWorkspaceEnv(&out, &errb, false)
 	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
 	e.worktree = config.WorktreeOff
-	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "issue: demo") {
@@ -2230,22 +2230,30 @@ func TestListSearchNoMatchIsNotAnError(t *testing.T) {
 	}
 }
 
-// An empty query is a usage error, not "no filter".
+// An empty query is a usage error, not "no filter"; a query flag with no value
+// at all is refused by the parser before the query is even looked at.
 func TestListSearchRejectsAnEmptyQuery(t *testing.T) {
-	for _, args := range [][]string{
-		{"--json", "--search", "   "},
-		{"--json", "--search"},
-	} {
-		var out, errb bytes.Buffer
-		if code := newSearchEnv(&out, &errb).list(args); code != 2 {
-			t.Fatalf("%v: exit code = %d, want 2 (stderr %q)", args, code, errb.String())
-		}
-		if out.Len() != 0 {
-			t.Fatalf("%v: a rejected query wrote stdout: %q", args, out.String())
-		}
-		if !strings.Contains(errb.String(), "非空") {
-			t.Fatalf("%v: stderr = %q", args, errb.String())
-		}
+	var out, errb bytes.Buffer
+	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", "   "}); code != 2 {
+		t.Fatalf("exit code = %d, want 2 (stderr %q)", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a rejected query wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "非空") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search"}); code != 2 {
+		t.Fatalf("missing query value: exit code = %d, want 2 (stderr %q)", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a rejected query wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "需要一个值") {
+		t.Fatalf("stderr = %q", errb.String())
 	}
 }
 
@@ -2613,7 +2621,7 @@ func TestUnknownFlagWarnsOnEveryCommand(t *testing.T) {
 // flag set; it must not be reported as unknown when nobody commits.
 func TestDoAcceptsForceWithoutAWarning(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := Run([]string{"do", "x", "ask", "--force"}, &out, &errb); code != 0 {
+	if code := Run([]string{"do", "x", "ask", "--title", "T", "--force"}, &out, &errb); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if strings.Contains(errb.String(), "未知 flag") {
@@ -3006,16 +3014,184 @@ func TestJSONIgnoresTheLanguage(t *testing.T) {
 // tries first and must reach the same handler as `<id> --json`. A value flag
 // still consumes its value.
 func TestParseLeavesPositionalsAfterSwitches(t *testing.T) {
-	pos, f := parse([]string{"--json", "demo", "--stat"}, "json", "stat")
+	pos, f, missing := parse([]string{"--json", "demo", "--stat"}, "json", "stat")
 	if strings.Join(pos, ",") != "demo" {
 		t.Fatalf("pos = %v, want [demo]", pos)
 	}
 	if !f.has("json") || !f.has("stat") {
 		t.Fatalf("flags = %v", f)
 	}
-	pos, f = parse([]string{"--title", "x", "demo"}, "json")
-	if strings.Join(pos, ",") != "demo" || f.get("title") != "x" {
-		t.Fatalf("a value flag must still take its value: pos=%v flags=%v", pos, f)
+	if len(missing) != 0 {
+		t.Fatalf("switches must not report a missing value: %v", missing)
+	}
+	pos, f, missing = parse([]string{"--title", "x", "demo"}, "json")
+	if strings.Join(pos, ",") != "demo" || f.get("title") != "x" || len(missing) != 0 {
+		t.Fatalf("a value flag must still take its value: pos=%v flags=%v missing=%v", pos, f, missing)
+	}
+}
+
+// A value flag followed by another flag (or by nothing) is reported, not
+// guessed at; --key=value is the form that always carries a literal value.
+func TestParseReportsValueFlagsWithoutAValue(t *testing.T) {
+	cases := []struct {
+		args     []string
+		wantFlag string
+		wantNext string
+	}{
+		{[]string{"--title", "--json"}, "title", "--json"},
+		{[]string{"--title"}, "title", ""},
+		{[]string{"--scope", "--stat", "x"}, "scope", "--stat"},
+	}
+	for _, tc := range cases {
+		_, _, missing := parse(tc.args, "json", "stat")
+		if len(missing) != 1 || missing[0].flag != tc.wantFlag || missing[0].next != tc.wantNext {
+			t.Fatalf("%v: missing = %v, want [{%s %s}]", tc.args, missing, tc.wantFlag, tc.wantNext)
+		}
+	}
+	// A literal value that starts with -- is spelled with =; an explicit empty
+	// value is a value, not a missing one.
+	for _, args := range [][]string{{"--title=--json"}, {"--title="}, {"--title", "-x"}} {
+		_, f, missing := parse(args)
+		if len(missing) != 0 {
+			t.Fatalf("%v: unexpected missing %v", args, missing)
+		}
+		if !f.has("title") {
+			t.Fatalf("%v: title not recorded", args)
+		}
+	}
+}
+
+// A known value flag followed by another flag is refused, not guessed at; the
+// literal-value escape is --flag=value. do and commit share the check, so a
+// title cannot be swallowed before a commit lands.
+func TestKnownValueFlagsWithoutAValueAreRefused(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"title before force", []string{"demo", "collect", "--title", "--force"}, []string{"--title", "--title=--force"}},
+		{"title at end", []string{"demo", "collect", "--title"}, []string{"需要一个值", "命令末尾"}},
+		{"scope before json", []string{"demo", "collect", "--scope", "--json"}, []string{"--scope", "--scope=--json"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+			if code := e.write(tc.args, false); code != 2 {
+				t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+			}
+			if out.Len() != 0 {
+				t.Fatalf("a rejected flag wrote stdout: %q", out.String())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(errb.String(), want) {
+					t.Fatalf("stderr = %q, want %q", errb.String(), want)
+				}
+			}
+		})
+	}
+
+	// commit must refuse before anything lands.
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+	if code := e.write([]string{"demo", "apply", "--title", "--only", "a.txt"}, true); code != 2 {
+		t.Fatalf("commit: exit = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a refused commit wrote stdout: %q", out.String())
+	}
+
+	// The = form carries the literal value.
+	out.Reset()
+	errb.Reset()
+	if code := e.write([]string{"demo", "collect", "--title=--json"}, false); code != 0 {
+		t.Fatalf("literal title: exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.HasPrefix(out.String(), "--json\n") || !strings.Contains(out.String(), "title: --json") {
+		t.Fatalf("literal title output = %q", out.String())
+	}
+}
+
+func TestTitleIsRequiredAndNonBlank(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing", []string{"demo", "collect"}, "需要 --title"},
+		{"empty", []string{"demo", "collect", "--title", ""}, "不能为空"},
+		{"spaces", []string{"demo", "collect", "--title", "   "}, "不能为空"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+			if code := e.write(tc.args, false); code != 2 {
+				t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+			}
+			if !strings.Contains(errb.String(), tc.want) {
+				t.Fatalf("stderr = %q, want %q", errb.String(), tc.want)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("stdout = %q", out.String())
+			}
+		})
+	}
+}
+
+// Read commands refuse a known flag with no value too; an unknown flag keeps the
+// warning-only path so a newer flag from a newer caller does not break an older
+// binary (see silent-flag-drop).
+func TestReadCommandsRefuseKnownFlagWithoutAValue(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	for _, args := range [][]string{
+		{"list", "--domain", "--json"},
+		{"list", "--search", "--status", "open"},
+		{"graph", "--issue", "--json"},
+		{"graph", "--format", "--json"},
+	} {
+		var out, errb bytes.Buffer
+		e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+		var code int
+		switch args[0] {
+		case "list":
+			code = e.list(args[1:])
+		case "graph":
+			code = e.graph(args[1:])
+		}
+		if code != 2 {
+			t.Fatalf("%v: exit = %d, stderr = %q", args, code, errb.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%v: stdout = %q", args, out.String())
+		}
+	}
+}
+
+func TestUnknownFlagWithoutValueStillWarnsOnly(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	var out, errb bytes.Buffer
+	if code := newSearchEnv(&out, &errb).list([]string{"--newflag", "--json"}); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "未知 flag --newflag") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+	if !strings.HasPrefix(out.String(), "{") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestLangFlagNeedsAValueBeforeAnotherFlag(t *testing.T) {
+	i18n.Set(i18n.Zh)
+	var out, errb bytes.Buffer
+	if code := Run([]string{"list", "--lang", "--json"}, &out, &errb); code != 2 {
+		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "--lang 需要一个值") {
+		t.Fatalf("stderr = %q", errb.String())
 	}
 }
 
@@ -3175,7 +3351,7 @@ func TestCommitAcceptsForceBeforeThePositionals(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := newWorkspaceEnv(&out, &errb, false)
 	e.repo = workspaceRunner{fakeRunner: demoRunner(), dirty: true}
-	if code := e.write([]string{"--force", "demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"--force", "demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "issue: demo") {
@@ -3486,7 +3662,7 @@ func TestCommitDoesNotReReadDirtyState(t *testing.T) {
 	runner := workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
 	runner.onDirty = func() { dirtyCalls++ }
 	e.repo = runner
-	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if dirtyCalls != 0 {
@@ -3562,7 +3738,7 @@ func TestCommitOnlyUsesTheCheckedPath(t *testing.T) {
 		out:      &out,
 		errw:     &errb,
 	}
-	if code := e.write([]string{"demo", "collect", "--only", "a.txt"}, true); code != 0 {
+	if code := e.write([]string{"demo", "collect", "--title", "T", "--only", "a.txt"}, true); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	if calls != 1 {

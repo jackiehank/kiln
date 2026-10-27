@@ -100,8 +100,8 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 
 | Command | What it does |
 | --- | --- |
-| `kiln do <issue> <action> [flags]` | Print the canonical commit message (**print only, no commit**) |
-| `kiln commit <issue> <action> [--only <paths>] [flags]` | Commit with that message; by default the whole working tree — a snapshot of all changes; `--only` commits just the listed paths; stdout first prints `将提交 N 个文件: …`, then the canonical message, and finally `已提交 <hash> · <action> · <issue>` |
+| `kiln do <issue> <action> --title <text> [flags]` | Print the canonical commit message (**print only, no commit**); `--title` is required (non-blank after trimming) — it becomes git's subject |
+| `kiln commit <issue> <action> --title <text> [--only <paths>] [flags]` | Commit with that message; `--title` is required and every other flag is optional; by default the whole working tree — a snapshot of all changes; `--only` commits just the listed paths; stdout first prints `将提交 N 个文件: …`, then the canonical message, and finally `已提交 <hash> · <action> · <issue>` |
 | `kiln path <issue>` | Rebuild the issue's research path; `--stat` adds a per-action file summary, `--shortstat` puts one total per action; `--json` gives one document, and `--all --json` (or several issues) reads every path in one process |
 | `kiln show <issue> [n\|action]` | Show one action's full change (default: the last one; `n` is the number from `path`, **or give the action name** — that takes the **last** such action, hinting on stderr when there are several, and listing the valid numbers when no such action exists); `--stat` gives the file summary only |
 | `kiln status [--json]` | Whole-repository overview: a directory view grouped by domain |
@@ -116,6 +116,7 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 | `kiln help` / `kiln -h` / `kiln <cmd> -h` | Help (`<cmd> -h` shows that command's usage and flags only) |
 
 `do` / `commit` flags: `--title --refs --target --scope --domain --tag`; relations: `--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate` (all repeatable, comma-separated; the aliases `--derived-from` / `--spawns` are accepted too).
+`--title` is **required** (non-blank after trimming; `do` and `commit` judge it the same way); **a value that starts with `--` is written `--flag=value`** — the space form is refused as a missing value (`--title --force` errors instead of swallowing `--force`).
 Also: `commit --force` (one-off waiver, see "Worktree mode"), `commit --only <paths>` (commit just the listed paths; comma-separated or repeated).
 `--json`: supported by `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` (machine-readable output, see "Machine-readable output"); `path` also takes `--all` to read the whole repository at once (or several issues directly), which works with `--json` only.
 

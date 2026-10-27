@@ -272,3 +272,50 @@ jj 侧：`jj describe -r <change> -m <msg>`。jj 没有暂存区，但会 rebase
 1. 你的真实流程是 git-first（先 `git commit`）还是 kiln-first（`kiln commit` 一次到位）？这决定要不要做 M2a。
 2. 若做 M2a：`--force` 允许改写**已推送**的 HEAD 吗？
 3. 若做 M2b：消息的正文（body）保留吗，还是只取 subject？
+
+> **裁决（2026-10-28）**：选 M1——`--title` 手动填、必填；`do` 与 `commit` 同判（`do` 只是不提交）；M2a（adopt）与 M2b（`-F`）都不做。
+
+## apply（2026-10-28）：已知 flag 缺值即拒绝，`--title` 必填（do / commit 同判）
+
+### 改了什么
+
+1. `parse` 返回值加 `missing []missingValue`：value flag 后面既没有 token、或下一个 token 以 `--` 开头时，记下「flag + 下一个 token」，**不在解析器里报错**；`--k=` / `--k ""` 是显式值，不算缺值。
+2. 新增 `rejectMissingValues(errw, missing, allowed)`：按 argv 顺序，只拒**本命令白名单里**的名字；未知名字继续交给 `warnUnknownFlags`（forward-compat 边界，见 `silent-flag-drop`）。
+3. 调用点：`write`（do/commit）、`list`、`graph`。其余六个命令没有 value flag，缺值条目必然不在 `allowed` 里，调用恒为 no-op——`parse` 已把信息备好，将来给它们加 value flag 时补一行即可。
+4. `write`：缺值检查排在 `allowed` 计算之后、`warnUnknownFlags` 之前；title 校验排在 do 的 `--only` 拒绝之后、格式化与开后端之前。`strings.TrimSpace(title)` 为空即拒：**没给** → `do/commit 需要 --title`，**给了但空白** → `--title 不能为空`；`Format` 用 trim 后的值。
+5. `extractLang`：`--lang --json` 归入「需要一个值」，不再报「只接受 zh/en（当前 --json）」。
+6. 帮助与提示：do/commit 用法串带上 `--title <text>`；flags 头改成「位置参数 `<issue> <action>` 与 `--title` 必填；其余 flag 选填」；`--title` 词条标「必填」；说明行加「值以 `--` 开头时写 `--flag=值`」；`status` 空仓提示、`list` 空仓提示、重复起点提示都补上 `--title`。
+7. README / README.en：命令表与 flags 段同步（含 `=` 写法与必填说明）。
+
+### 行为契约（本机实测）
+
+| 输入 | 改前 | 改后 |
+| --- | --- | --- |
+| `do … --title --force` | 丢标题、`force` 生效、exit 0 | exit 2：`flag --title 需要一个值（…请写 --title=--force）`；force 不生效 |
+| `do … --title`（末尾） | 丢标题、exit 0 | exit 2：`需要一个值（命令末尾）` |
+| `do … --title ""` | 丢标题、exit 0 | exit 2：`--title 不能为空` |
+| `do …`（无 `--title`） | 无标题消息、exit 0 | exit 2：`do 需要 --title` |
+| `do … --title=--json` | title = `--json` | 不变（首行与 `title:` 都是 `--json`） |
+| `do … --title "-x"` | title = `-x` | 不变（单横线不触发） |
+| `commit … --title --only a.txt` | 无标题 + 只提交 a.txt | exit 2，**不产生提交**（临时仓 commits 1→1） |
+| `list --domain --json` | 全量、`filter {}` | exit 2 |
+| `graph --issue --json` | 整图 | exit 2 |
+| `list --newflag --json` | 警告 + 正常 JSON、exit 0 | 不变（forward-compat） |
+| `--lang --json` | `只接受 zh 或 en（当前: --json）` | `--lang 需要一个值（zh 或 en）` |
+
+### 测试
+
+- `go test ./...` 全绿；`gofmt -l` 无输出。
+- 新增 6 个测试：parse 缺值上报（含 `=` 与单横线对照）、已知 flag 缺值拒绝（do/commit）、title 必填与空白、读命令拒绝、未知 flag 仅警告、`--lang` 缺值。
+- 既有测试：`TestListSearchRejectsAnEmptyQuery` 拆成两段（末尾 `--search` 现在报缺值）；28 处成功路径调用补 `--title`。拒绝类用例不动——重复起点、非法 action、多余参数仍然先于 title 报出。
+
+### 与计划的差异
+
+hypothesize 写的是「9 处 parse 调用点各加一行」；实际只在 `write` / `list` / `graph` 三处调用（理由见上第 3 条）。这是有意收窄，不是遗漏。
+
+### 未做（明确）
+
+- 不加 `--` 终止符。
+- 不改显式空值语义：`--refs ""` 仍跳过，`--search ""` 仍报非空；`--title=` 现在被必填挡住（`--title` 的"空 = 不设置"不再可能）。
+- `check` 不加「动作缺 title」规则：历史 303 个动作里 302 有 title，唯一例外是 `f8413d8`（`help-relation-flags` 的 hypothesize）；加规则会多一条 warn，留触发条件——若出现第二条再议。
+- title 含换行仍会破坏 subject/body 结构（`Format` 原样拼接）——另一类写侧加固，不在本批。

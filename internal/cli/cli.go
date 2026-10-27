@@ -61,8 +61,8 @@ var retiredCommands = map[string]string{"workspace": "worktree"}
 
 // usageCommands is the command surface rendered by usageText.
 var usageCommands = [][2]string{
-	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
-	{"kiln commit <issue> <action> [--only <paths>] [flags]", "用规范信息直接提交（--only 只提交列出的路径）"},
+	{"kiln do <issue> <action> --title <text> [flags]", "生成规范提交信息（不写文件）"},
+	{"kiln commit <issue> <action> --title <text> [--only <paths>] [flags]", "用规范信息直接提交（--only 只提交列出的路径）"},
 	{"kiln path <issue> [<issue>…] | --all", "重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）"},
 	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
@@ -84,7 +84,7 @@ type flagHelp struct{ flag, shape, gloss string }
 // and a relation group generated from the vocabulary.
 func doCommitFlagGroups(rel *model.RelationSet) (meta, relations []flagHelp) {
 	meta = []flagHelp{
-		{"--title", i18n.T("<文本>"), i18n.T("动作标题")},
+		{"--title", i18n.T("<文本>"), i18n.T("动作标题（必填）")},
 		{"--refs", i18n.T("<条目>[,<条目>]"), i18n.T("引用")},
 		{"--target", i18n.T("<文件>"), i18n.T("涉及的文件（单个）")},
 		{"--scope", i18n.T("<文本>"), i18n.T("范围")},
@@ -143,10 +143,10 @@ func doCommitFlagText(rel *model.RelationSet) string {
 			b.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
-	b.WriteString(i18n.T("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n"))
+	b.WriteString(i18n.T("\ndo/commit 的 flags:  （位置参数 <issue> <action> 与 --title 必填；其余 flag 选填）\n"))
 	writeGroup(i18n.T("  元数据:"), meta)
 	writeGroup(i18n.T("  关系:  （均可重复、逗号分隔）"), relations)
-	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——问题不会被关闭。\n"))
+	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  值以 -- 开头时写 --flag=值（空格形式会报缺值）。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——问题不会被关闭。\n"))
 	return b.String()
 }
 
@@ -499,7 +499,10 @@ func extractLang(args []string) (rest []string, lang i18n.Lang, bad string, ok b
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--lang" {
-			if i+1 >= len(args) {
+			// A following token that starts with "--" is not a language either;
+			// report it as a missing value instead of "got --json", which reads
+			// like a typo of the language rather than of the flag ordering.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
 				return nil, "", "", false
 			}
 			l, good := i18n.Parse(args[i+1])
@@ -573,13 +576,24 @@ func (f flags) list(key string) []string {
 	return out
 }
 
+// missingValue records a value flag that found no value: either the command
+// ended or the next token starts with "--". The parser cannot tell a missing
+// value from "the next flag follows", so it reports the fact and lets the
+// command decide — known flags are refused, unknown ones stay warnings so an
+// older binary still tolerates a newer flag (see rejectMissingValues).
+type missingValue struct{ flag, next string }
+
 // parse splits args into positionals and flags. `--key=value`, `--key value` and
 // repeated `--key` all accumulate. A flag listed in switches never consumes the
 // following token, so `--json <id>` still leaves <id> a positional; giving a
-// switch an explicit value (--json=x) is refused by rejectSwitchValues.
-func parse(args []string, switches ...string) ([]string, flags) {
+// switch an explicit value (--json=x) is refused by rejectSwitchValues. A value
+// flag with no value (end of args, or the next token starts with --) is reported
+// in missing instead of being guessed at; a literal value that starts with --
+// is written as --key=value, which this parser always takes verbatim.
+func parse(args []string, switches ...string) ([]string, flags, []missingValue) {
 	pos := make([]string, 0, len(args))
 	f := flags{}
+	var missing []missingValue
 	isSwitch := make(map[string]bool, len(switches))
 	for _, name := range switches {
 		isSwitch[name] = true
@@ -594,13 +608,42 @@ func parse(args []string, switches ...string) ([]string, flags) {
 		key, val := body, ""
 		if j := strings.Index(body, "="); j >= 0 {
 			key, val = body[:j], body[j+1:]
-		} else if !isSwitch[key] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
-			val = args[i+1]
-			i++
+		} else if !isSwitch[key] {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				val = args[i+1]
+				i++
+			} else {
+				next := ""
+				if i+1 < len(args) {
+					next = args[i+1]
+				}
+				missing = append(missing, missingValue{flag: key, next: next})
+			}
 		}
 		f[key] = append(f[key], val)
 	}
-	return pos, f
+	return pos, f, missing
+}
+
+// rejectMissingValues refuses the first value flag that was given without a
+// value, but only when the command knows that flag. An unknown name is left to
+// warnUnknownFlags: refusing it would break the forward-compatibility rule that
+// lets an older binary warn about, rather than reject, a flag a newer caller
+// sends. The fix for a literal value that starts with "--" is spelled out in
+// the message: --flag=value, which parse takes verbatim.
+func rejectMissingValues(errw io.Writer, missing []missingValue, allowed map[string]bool) int {
+	for _, m := range missing {
+		if !allowed[m.flag] {
+			continue
+		}
+		if m.next == "" {
+			fmt.Fprint(errw, i18n.T("flag --%s 需要一个值（命令末尾）\n", m.flag))
+			return 2
+		}
+		fmt.Fprint(errw, i18n.T("flag --%s 需要一个值（下一个 token 是 %s，以 -- 开头；若它就是字面值，请写 --%s=%s）\n", m.flag, m.next, m.flag, m.next))
+		return 2
+	}
+	return 0
 }
 
 // rejectSwitchValues refuses an explicit value on a switch flag (--json=x).
@@ -655,13 +698,13 @@ func dedupeStrings(in []string) []string {
 
 // write implements both `do` (print only) and `commit` (print and commit).
 func (e *env) write(args []string, commit bool) int {
-	pos, f := parse(args, "force")
+	pos, f, missing := parse(args, "force")
 	if len(pos) < 2 {
-		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> [flags]\n", modeName(commit)))
+		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> --title <文本> [flags]\n", modeName(commit)))
 		return 2
 	}
 	if len(pos) > 2 {
-		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit)))
+		fmt.Fprint(e.errw, i18n.T("用法: kiln %s <issue> <action> --title <文本> [flags]：object 已退役，第三个参数已不再支持\n", modeName(commit)))
 		return 2
 	}
 	if code := rejectSwitchValues(e.errw, f, "force"); code != 0 {
@@ -688,16 +731,32 @@ func (e *env) write(args []string, commit bool) int {
 	rels := e.relationsFromFlags(f)
 	allowed := e.doCommitFlags()
 	allowed["only"] = true
+	if code := rejectMissingValues(e.errw, missing, allowed); code != 0 {
+		return code
+	}
 	warnUnknownFlags(e.errw, f, allowed)
 	if !commit && f.has("only") {
 		fmt.Fprintln(e.errw, i18n.T("do 不接受 --only：它只打印 trailer，不提交；只提交哪些文件是 commit 的事。"))
+		return 2
+	}
+	// Every action carries a title: it is git's subject line, and without it the
+	// whole trailer block becomes the subject and the body is empty (see the
+	// condition's collect). do and commit share this check — do only prints the
+	// same message commit would write.
+	title := strings.TrimSpace(f.get("title"))
+	if title == "" {
+		if f.has("title") {
+			fmt.Fprint(e.errw, i18n.T("--title 不能为空（每个动作都要有标题）\n"))
+		} else {
+			fmt.Fprint(e.errw, i18n.T("%s 需要 --title（每个动作都要有标题）\n", modeName(commit)))
+		}
 		return 2
 	}
 	paths := f.list("only")
 	msg := trailer.Format(trailer.Fields{
 		Issue:     issue,
 		Action:    action,
-		Title:     f.get("title"),
+		Title:     title,
 		Refs:      f.list("refs"),
 		Target:    f.get("target"),
 		Scope:     f.get("scope"),
@@ -917,7 +976,7 @@ func (e *env) workspace(args []string) int {
 	// Parse first so a flag may precede the subcommand (`worktree --json list`),
 	// the same order `config` uses; the subcommand is then just the first
 	// positional and the flags are already known.
-	pos, f := parse(args, "json", "force")
+	pos, f, _ := parse(args, "json", "force")
 	if code := rejectSwitchValues(e.errw, f, "json", "force"); code != 0 {
 		return code
 	}
@@ -1043,7 +1102,7 @@ func mainRootOf(ws vcs.Workspace) (string, error) {
 // config implements `kiln config path`: it prints where the repository config
 // lives, seeding it when missing so there is always something to edit.
 func (e *env) config(args []string) int {
-	pos, f := parse(args)
+	pos, f, _ := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags())
 	if code := rejectExtra(e.errw, pos, 1, "kiln config path"); code != 0 {
 		return code
@@ -1169,7 +1228,7 @@ func areaRole(a vcs.WorkspaceInfo) string {
 }
 
 func (e *env) path(args []string) int {
-	pos, f := parse(args, "all", "json", "stat", "shortstat")
+	pos, f, _ := parse(args, "all", "json", "stat", "shortstat")
 	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat", "json", "all"))
 	// A switch never takes a value; saying --json=x is a mistake worth naming
 	// instead of dropping x (or swallowing the positional that follows).
@@ -1259,7 +1318,7 @@ func (e *env) path(args []string) int {
 // one), so the selector stays put even when commit hashes are rewritten by a
 // rebase. Rendering is delegated to git.
 func (e *env) show(args []string) int {
-	pos, f := parse(args, "stat", "json")
+	pos, f, _ := parse(args, "stat", "json")
 	warnUnknownFlags(e.errw, f, allowedFlags("stat", "json"))
 	if code := rejectSwitchValues(e.errw, f, "stat", "json"); code != 0 {
 		return code
@@ -1782,7 +1841,7 @@ func indentStat(stat string) string {
 func trimNewlines(s string) string { return strings.Trim(s, "\n") }
 
 func (e *env) status(args []string) int {
-	pos, f := parse(args, "json")
+	pos, f, _ := parse(args, "json")
 	warnUnknownFlags(e.errw, f, allowedFlags("json"))
 	if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
 		return code
@@ -1802,7 +1861,7 @@ func (e *env) status(args []string) int {
 	if s.Total == 0 {
 		fmt.Fprint(e.out, i18n.T("问题总数: 0（完成 0 / 进行中 0）｜%s\n", worktreeSegment(e.worktree, areasOpen(areas))))
 		fmt.Fprint(e.out, i18n.T("kiln 动作数: %d\n", s.Actions))
-		fmt.Fprintln(e.out, i18n.T("提示: 用 `kiln do <issue> <action>` 生成规范提交信息"))
+		fmt.Fprintln(e.out, i18n.T("提示: 用 `kiln do <issue> <action> --title <文本>` 生成规范提交信息"))
 		e.renderWorktreeLegend(areas)
 		return 0
 	}
@@ -2004,7 +2063,7 @@ func (e *env) refuseDuplicateStart(issue string) int {
 		}
 	}
 	fmt.Fprint(e.errw, i18n.T("拒绝: 问题 %q 已经有起点动作 %q（共 %d 个动作）——同名即同一条问题，不需要再新建\n", issue, e.actions.Start(), len(p.Actions)))
-	fmt.Fprint(e.errw, i18n.T("提示: 要继续它，用 kiln commit %s <action>（可选: %s）\n", issue, strings.Join(rest, ", ")))
+	fmt.Fprint(e.errw, i18n.T("提示: 要继续它，用 kiln commit %s <action> --title <文本>（可选: %s）\n", issue, strings.Join(rest, ", ")))
 	return 1
 }
 
@@ -2139,7 +2198,7 @@ func containsAll(haystack string, terms []string) bool {
 }
 
 func (e *env) check(args []string) int {
-	pos, f := parse(args, "json", "verbose")
+	pos, f, _ := parse(args, "json", "verbose")
 	warnUnknownFlags(e.errw, f, allowedFlags("json", "verbose"))
 	if code := rejectSwitchValues(e.errw, f, "json", "verbose"); code != 0 {
 		return code
@@ -2180,8 +2239,12 @@ func (e *env) check(args []string) int {
 }
 
 func (e *env) list(args []string) int {
-	pos, f := parse(args, "json")
-	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action", "status", "search"))
+	pos, f, missing := parse(args, "json")
+	allowed := allowedFlags("json", "domain", "tag", "action", "status", "search")
+	if code := rejectMissingValues(e.errw, missing, allowed); code != 0 {
+		return code
+	}
+	warnUnknownFlags(e.errw, f, allowed)
 	if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
 		return code
 	}
@@ -2240,7 +2303,7 @@ func (e *env) list(args []string) int {
 		case len(terms) > 0:
 			fmt.Fprint(e.errw, i18n.T("没有匹配 %q 的问题\n", query))
 		case len(repo.Issues) == 0:
-			fmt.Fprintln(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask 开一条）"))
+			fmt.Fprintln(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）"))
 		default:
 			fmt.Fprint(e.errw, i18n.T("没有匹配 %s 的问题\n", filterSummary(opts, status)))
 		}
@@ -2301,8 +2364,12 @@ func filterSummary(o engine.FilterOptions, status string) string {
 }
 
 func (e *env) graph(args []string) int {
-	pos, f := parse(args, "json", "mermaid")
-	warnUnknownFlags(e.errw, f, allowedFlags("format", "mermaid", "json", "issue", "depth"))
+	pos, f, missing := parse(args, "json", "mermaid")
+	allowed := allowedFlags("format", "mermaid", "json", "issue", "depth")
+	if code := rejectMissingValues(e.errw, missing, allowed); code != 0 {
+		return code
+	}
+	warnUnknownFlags(e.errw, f, allowed)
 	if code := rejectSwitchValues(e.errw, f, "json", "mermaid"); code != 0 {
 		return code
 	}
