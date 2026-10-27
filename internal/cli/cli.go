@@ -45,6 +45,7 @@ path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接
 show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
+list 的 --status:  open（未收尾）| done（末条动作是终点动作）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
@@ -62,7 +63,7 @@ var usageCommands = [][2]string{
 	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
-	{"kiln list [--domain=] [--tag=] [--action=]", "按条件过滤问题"},
+	{"kiln list [--domain=] [--tag=] [--action=] [--status=open|done]", "按条件过滤问题"},
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
@@ -133,7 +134,7 @@ func usageText(rel *model.RelationSet) string {
 	b.WriteString(i18n.T("\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n"))
 	writeGroup(i18n.T("  元数据:"), meta)
 	writeGroup(i18n.T("  关系:  （均可重复、逗号分隔）"), relations)
-	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n"))
+	b.WriteString(i18n.T("  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——issue 不会被关闭。\n"))
 	b.WriteString(i18n.T(usageOtherFlags))
 	return b.String()
 }
@@ -1707,6 +1708,19 @@ func (e *env) isDone(p *model.Issue) bool {
 	return ok && e.actions.IsTerminal(last.Kind)
 }
 
+// filterStatus keeps the issues whose current step is (`done`) or is not
+// (`open`) a terminal action. It reads the same predicate as the row's `done`,
+// so a filter and the rows it returns can never disagree.
+func (e *env) filterStatus(repo *model.Repo, ids []string, done bool) []string {
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if e.isDone(repo.Issues[id]) == done {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
 func (e *env) check(args []string) int {
 	_, f := parse(args)
 	warnUnknownFlags(e.errw, f, allowedFlags("json", "verbose"))
@@ -1744,7 +1758,12 @@ func (e *env) check(args []string) int {
 
 func (e *env) list(args []string) int {
 	_, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action"))
+	warnUnknownFlags(e.errw, f, allowedFlags("json", "domain", "tag", "action", "status"))
+	status := f.get("status")
+	if f.has("status") && status != "open" && status != "done" {
+		fmt.Fprint(e.errw, i18n.T("--status 只接受 open 或 done（当前: %s）\n", status))
+		return 2
+	}
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
@@ -1755,9 +1774,12 @@ func (e *env) list(args []string) int {
 		Action: f.get("action"),
 	}
 	ids := engine.Filter(repo, opts)
+	if status != "" {
+		ids = e.filterStatus(repo, ids, status == "done")
+	}
 	if f.has("json") {
 		doc := listDoc{
-			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action},
+			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action, Status: status},
 			Count:  len(ids),
 			Issues: make([]listIssue, 0, len(ids)),
 		}
@@ -2156,6 +2178,7 @@ type filterQuery struct {
 	Domain string `json:"domain,omitempty"`
 	Tag    string `json:"tag,omitempty"`
 	Action string `json:"action,omitempty"`
+	Status string `json:"status,omitempty"`
 }
 
 type listIssue struct {

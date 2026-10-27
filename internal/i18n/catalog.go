@@ -25,7 +25,7 @@ var enCatalog = map[string]string{
 	"\ndo/commit 的 flags:  （位置参数 <issue> <action> 必填；以下 flag 均选填）\n": "\ndo/commit flags:  (positional <issue> <action> required; every flag below is optional)\n",
 	"  元数据:": "  metadata:",
 	"  关系:  （均可重复、逗号分隔）": "  relations:  (repeatable, comma-separated)",
-	"  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n": "  notes: <> is a value placeholder; [,<…>] means repeatable, comma-separated; relation names also accept the aliases derived-from / spawns.\n",
+	"  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。\n  终点动作（默认 conclude / apply）之后仍可继续接动作——issue 不会被关闭。\n": "  notes: <> is a value placeholder; [,<…>] means repeatable, comma-separated; relation names also accept the aliases derived-from / spawns.\n  a terminal action (conclude / apply by default) does not close the issue: more actions may follow.\n",
 
 	"警告: 未知 flag --%s（可用 flag 见 kiln -h）\n": "warning: unknown flag --%s (see kiln -h for the flags it takes)\n",
 	"未知后端: %s":                               "unknown backend: %s",
@@ -91,6 +91,7 @@ var enCatalog = map[string]string{
 	"用法: kiln path <issue> [--stat|--shortstat] [--json] | kiln path --all --json": "usage: kiln path <issue> [--stat|--shortstat] [--json] | kiln path --all --json",
 	"--all 与 issue 参数不能同用":                                                         "cannot combine --all with issue arguments",
 	"flag --%s 不接受值: %s\n":                                                         "flag --%s takes no value: %s\n",
+	"--status 只接受 open 或 done（当前: %s）\n":                                           "--status only accepts open or done (got: %s)\n",
 	"批量取路径只支持 --json（--all 或多条 issue）":                                             "batch paths are JSON-only (--all or several issues)",
 	"重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）":                      "rebuild the issue's research path (--all reads the whole repository at once; add --stat / --shortstat / --json)",
 	"未找到问题: %s\n":                                                                  "no such issue: %s\n",
@@ -208,6 +209,7 @@ path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接
 show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
+list 的 --status:  open（未收尾）| done（末条动作是终点动作）
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
@@ -217,6 +219,7 @@ extra path flag:  --all（read the whole repository in one process; --json only,
 show flags:  --stat（the file summary for that action only）  --json（machine-readable output）
 worktree list flags:  --json（machine-readable output）
 status / list / check flags:  --json（machine-readable output: stdout carries one JSON document only）
+extra list flag:  --status:  open（still in progress）| done（the last action is terminal）
 extra commit flag:  --force（**required** to commit on main while worktree=on, as a one-off waiver）  --only <paths>（commit just the listed paths）
 extra worktree remove flag:  --force（remove even with an unmerged branch / a worktree that still has changes）
 --lang <zh|en>:  global language switch (by default detected from KILN_LANG / LC_ALL / LC_MESSAGES / LANG, Chinese when unset)

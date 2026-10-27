@@ -190,3 +190,16 @@
 - 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `list --json --domain=cli` 冒烟（30 行、每行带 title）。
 
 **这不是完成**：本条按 `apply` 记（`kiln status` 会显示已完成），但 `--status` 取值名与 `--match` 仍待议；下一次讨论会以新动作把它拉回"进行中"。
+
+## apply（2026-10-27，第二落点：`list --status=open|done`）
+
+命名讨论的结论：**展示层不改**（`status` 照旧用 `✓` / 已完成 / 进行中），筛选层用 `--status=open|done`；`done` 就是行里那个 `done`（末条动作属于 `actions.terminal`），`open` 是补集。唯一要教给用户的一句是"终点动作之后仍可继续"，按用户的位置决定，写在 **`-h` 的 do/commit 说明里**（读命令的 `list` 帮助只写取值含义，不展开生命周期）——`list` 是读，`do`/`commit` 才是写入侧。
+
+- `internal/cli/cli.go`：`list` 接受 `--status`，非法值（含 `--status` 不带值）**exit 2**、stdout 0 字节；合法则先走 `engine.Filter`（domain/tag/action），再用 `e.filterStatus` 按 `isDone` 过滤——**与行里的 `done` 同一谓词**，筛选与展示不可能分叉。
+- `filterQuery` 增 `Status string`（`json:"status,omitempty"`），`--status` 原样回显在 `filter` 里。
+- 帮助：`usageCommands` 的 list 行加 `[--status=open|done]`；`usageOtherFlags` 增一行 `list 的 --status: open（未收尾）| done（末条动作是终点动作）`；`do/commit` 的「说明」后补一句 **"终点动作（默认 conclude / apply）之后仍可继续接动作——issue 不会被关闭。"**（中英同步）。
+- 文档：`docs/machine-readable-output.md` §3 的 filter 字段、示例与要点补 `--status`（含"done ≠ 永久关闭"）；README 双语命令表的 list 行补该 flag。
+- 测试：`TestListStatusFiltersOpenAndDone`（done 只留 parent；open 只留 child/stray；`open ∩ domain=cli` 只剩 child；文本视图同口径）、`TestListRejectsAnUnknownStatus`（`--status=closed` → exit 2、stdout 空、stderr 指 `open` / `done`）。
+- 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `list --status=open --json` 冒烟（60 条里 7 条未收尾，与 `status` 的"进行中 7"一致）。
+
+**仍未做**：`--match`（hypothesize 的 H2/H3）与"命中动作标题时的 `match` 字段"；`list` 文本仍不带 title。

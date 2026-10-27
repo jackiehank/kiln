@@ -106,7 +106,7 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 | `kiln show <issue> [n\|action]` | Show one action's full change (default: the last one; `n` is the number from `path`, **or give the action name** — that takes the **last** such action, hinting on stderr when there are several, and listing the valid numbers when no such action exists); `--stat` gives the file summary only |
 | `kiln status [--json]` | Whole-repository overview: a directory view grouped by domain |
 | `kiln check [--verbose] [--json]` | Semantic completeness check |
-| `kiln list [--domain=] [--tag=] [--action=] [--json]` | Filter issues by field |
+| `kiln list [--domain=] [--tag=] [--action=] [--status=open\|done] [--json]` | Filter issues by field; `--status=open` keeps only the ones not wrapped up (last action is not terminal) |
 | `kiln graph [--format=ascii\|mermaid\|json] [--mermaid] [--json] [--issue <id>] [--depth N]` | Relation graph (`--mermaid` gives flowchart text; `--json` gives one document for agents, `--issue`/`--depth` narrow it to an undirected neighborhood; default `ascii`) |
 | `kiln worktree new <issue>` | Create a dedicated worktree (see "Worktree mode") |
 | `kiln worktree list` | List every worktree and its state |

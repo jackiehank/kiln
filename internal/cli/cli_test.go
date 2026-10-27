@@ -1996,6 +1996,79 @@ func TestListJSONFallsBackToSubjectWithoutTitle(t *testing.T) {
 	}
 }
 
+// `--status=done|open` is the same predicate as the row's done: done means the
+// last action is terminal, nothing more. The filter echoes itself and composes
+// with the other conditions.
+func TestListStatusFiltersOpenAndDone(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--status", "done"}); code != 0 {
+		t.Fatalf("done: exit code = %d, stderr = %q", code, errb.String())
+	}
+	var done listDoc
+	if err := json.Unmarshal(out.Bytes(), &done); err != nil {
+		t.Fatalf("list --status=done --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if done.Filter.Status != "done" || done.Count != 1 || len(done.Issues) != 1 || done.Issues[0].ID != "parent" {
+		t.Fatalf("done rows = filter %+v, count %d, issues %+v", done.Filter, done.Count, done.Issues)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--status", "open"}); code != 0 {
+		t.Fatalf("open: exit code = %d, stderr = %q", code, errb.String())
+	}
+	var open listDoc
+	if err := json.Unmarshal(out.Bytes(), &open); err != nil {
+		t.Fatalf("list --status=open --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if open.Filter.Status != "open" || open.Count != 2 {
+		t.Fatalf("open rows = filter %+v, count %d", open.Filter, open.Count)
+	}
+	for _, row := range open.Issues {
+		if row.Done {
+			t.Fatalf("open must not report a done row: %+v", row)
+		}
+	}
+
+	// Conditions are AND: open ∩ cli leaves only `child`.
+	out.Reset()
+	errb.Reset()
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--status", "open", "--domain", "cli"}); code != 0 {
+		t.Fatalf("open+domain: exit code = %d, stderr = %q", code, errb.String())
+	}
+	var both listDoc
+	if err := json.Unmarshal(out.Bytes(), &both); err != nil {
+		t.Fatalf("list --status --domain --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if both.Count != 1 || len(both.Issues) != 1 || both.Issues[0].ID != "child" {
+		t.Fatalf("open ∩ cli rows = %+v", both.Issues)
+	}
+
+	// The text view honours the same filter without changing its layout.
+	out.Reset()
+	errb.Reset()
+	if code := newJSONEnv(&out, &errb).list([]string{"--status", "done"}); code != 0 {
+		t.Fatalf("done text: exit code = %d, stderr = %q", code, errb.String())
+	}
+	if got := out.String(); !strings.Contains(got, "parent") || strings.Contains(got, "child") {
+		t.Fatalf("done text rows = %q", got)
+	}
+}
+
+// A bad --status is a usage error, not a silent full listing.
+func TestListRejectsAnUnknownStatus(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newJSONEnv(&out, &errb).list([]string{"--json", "--status", "closed"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2 (stderr %q)", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a rejected filter wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "open 或 done") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
 // Tags belong to `list`, which is the one view that reports them.
 func TestListJSONReportsTagsAndOmitsUndomainedRows(t *testing.T) {
 	var out, errb bytes.Buffer
