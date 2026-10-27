@@ -266,3 +266,40 @@ func TestAreaStateMatchesWhyRemoveRefuses(t *testing.T) {
 		t.Fatalf("main state = %+v, %v; want the zero value", got, err)
 	}
 }
+
+// Changes keeps the inventory root-relative from any directory without a
+// rev-parse: porcelain -z already reports root-relative paths.
+func TestChangesFromASubdirectoryStaysRootRelative(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "sub/b.txt", "b")
+	gitRun(t, dir, "add", "sub/b.txt")
+	commit(t, dir, "base")
+	write(t, dir, "a.txt", "changed")
+	write(t, dir, "sub/b.txt", "changed")
+	changes, err := ExecRunner{Dir: filepath.Join(dir, "sub")}.Changes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(changes, ","); got != "a.txt,sub/b.txt" {
+		t.Fatalf("changes from sub = %q, want root-relative a.txt,sub/b.txt", got)
+	}
+}
+
+// MaybeHasAreas is the free pre-check status uses to skip `git worktree list`:
+// no metadata directory means no linked worktrees, and a real one flips it.
+func TestMaybeHasAreas(t *testing.T) {
+	dir := newRepo(t)
+	if (ExecRunner{Dir: dir}).MaybeHasAreas() {
+		t.Fatal("a fresh repository has no linked worktrees")
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, dir, "worktree", "add", "-q", "-b", "b1", wt)
+	if !(ExecRunner{Dir: dir}).MaybeHasAreas() {
+		t.Fatal("a linked worktree must make the hint say maybe")
+	}
+	// Standing in the linked worktree: .git is a file, a layout the cheap check
+	// does not read, so it must answer "maybe" rather than guess.
+	if !(ExecRunner{Dir: wt}).MaybeHasAreas() {
+		t.Fatal("inside a linked worktree the hint must be conservative")
+	}
+}

@@ -1107,12 +1107,30 @@ type workspaceRunner struct {
 	fakeRunner
 	dedicated bool
 	dirty     bool
+	onDirty   func()
 	areas     []vcs.WorkspaceInfo
 	state     vcs.AreaState // what every dedicated area still holds
 }
 
 func (w workspaceRunner) IsDedicated() (bool, error) { return w.dedicated, nil }
-func (w workspaceRunner) Dirty() (bool, error)       { return w.dirty, nil }
+func (w workspaceRunner) Dirty() (bool, error) {
+	if w.onDirty != nil {
+		w.onDirty()
+	}
+	return w.dirty, nil
+}
+func (w workspaceRunner) Changes() ([]string, error) {
+	if len(w.fakeRunner.changes) > 0 {
+		return w.fakeRunner.changes, nil
+	}
+	if w.dirty {
+		// A dirty area carries at least one path; the inventory and the empty
+		// -action hint read the same working tree, so the fake must agree with
+		// itself instead of claiming "dirty but nothing changed".
+		return []string{"changed.txt"}, nil
+	}
+	return nil, nil
+}
 func (w workspaceRunner) NewWorkspace(issue string) (string, error) {
 	return "/ws/repo--" + issue, nil
 }
@@ -1241,15 +1259,24 @@ func TestCommitHintsWhenTheAreaIsClean(t *testing.T) {
 		t.Fatalf("the hint must not replace stdout:\n%s", out.String())
 	}
 
-	// The hint is a message, not a different commit: stdout must not move.
+	// A dirty area legitimately lists what it carries; what must not move is the
+	// message and the confirmation. The hint is a message, not a different commit.
 	var dirtyOut, dirtyErr bytes.Buffer
 	d := newWorkspaceEnv(&dirtyOut, &dirtyErr, true)
 	d.repo = workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
 	if code := d.write([]string{"demo", "collect"}, true); code != 0 {
 		t.Fatalf("dirty exit code = %d, stderr = %q", code, dirtyErr.String())
 	}
-	if dirtyOut.String() != out.String() {
-		t.Fatalf("the hint must not change what is committed:\nclean:\n%s\ndirty:\n%s", out.String(), dirtyOut.String())
+	if !strings.Contains(dirtyOut.String(), "将提交 1 个文件") {
+		t.Fatalf("a dirty area must list its inventory:\n%s", dirtyOut.String())
+	}
+	if strings.Contains(dirtyErr.String(), "没有检测到改动") {
+		t.Fatalf("a dirty area must not get the empty-action hint:\n%s", dirtyErr.String())
+	}
+	for _, want := range []string{"issue: demo", "action: collect", "已提交"} {
+		if !strings.Contains(dirtyOut.String(), want) || !strings.Contains(out.String(), want) {
+			t.Fatalf("clean and dirty area must commit the same message (%q):\nclean:\n%s\ndirty:\n%s", want, out.String(), dirtyOut.String())
+		}
 	}
 }
 
@@ -3402,4 +3429,67 @@ func (m missStatLog) LogStats(short bool, want func(string) bool) (map[string]st
 func (m missStatLog) ShowStat(id string, short bool) (string, error) {
 	*m.showCalls++
 	return m.fakeRunner.ShowStat(id, short)
+}
+
+// areaHintRunner models a backend that can prove it has no linked areas: the
+// hint must skip ListWorkspaces, and "maybe" must still ask.
+type areaHintRunner struct {
+	workspaceRunner
+	hint      bool
+	listCalls *int
+}
+
+func (a areaHintRunner) MaybeHasAreas() bool { return a.hint }
+
+func (a areaHintRunner) ListWorkspaces() ([]vcs.WorkspaceInfo, error) {
+	*a.listCalls++
+	return a.workspaceRunner.ListWorkspaces()
+}
+
+func TestStatusSkipsTheAreaListWhenTheHintSaysNone(t *testing.T) {
+	calls := 0
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: model.DefaultActionSet(),
+		repo:    areaHintRunner{workspaceRunner: workspaceRunner{fakeRunner: demoRunner()}, hint: false, listCalls: &calls},
+		out:     &out,
+		errw:    &errb,
+	}
+	if code := e.status(nil); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if calls != 0 {
+		t.Fatalf("a proved-empty hint must skip ListWorkspaces, got %d calls", calls)
+	}
+	if !strings.Contains(out.String(), "已开 0 个") {
+		t.Fatalf("status must still state zero areas:\n%s", out.String())
+	}
+
+	calls = 0
+	out.Reset()
+	errb.Reset()
+	e.repo = areaHintRunner{workspaceRunner: workspaceRunner{fakeRunner: demoRunner()}, hint: true, listCalls: &calls}
+	if code := e.status(nil); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if calls != 1 {
+		t.Fatalf("a maybe hint must still list, got %d calls", calls)
+	}
+}
+
+// A dirty area carries its paths in Changes, so the empty-action hint never asks
+// Dirty again — one less git process on the commit path.
+func TestCommitDoesNotReReadDirtyState(t *testing.T) {
+	dirtyCalls := 0
+	var out, errb bytes.Buffer
+	e := newWorkspaceEnv(&out, &errb, true)
+	runner := workspaceRunner{fakeRunner: demoRunner(), dedicated: true, dirty: true}
+	runner.onDirty = func() { dirtyCalls++ }
+	e.repo = runner
+	if code := e.write([]string{"demo", "collect"}, true); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if dirtyCalls != 0 {
+		t.Fatalf("commit must derive cleanliness from Changes, got %d Dirty calls", dirtyCalls)
+	}
 }

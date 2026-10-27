@@ -112,19 +112,62 @@ func (r ExecRunner) Action(message string, paths []string) (string, error) {
 }
 
 // Changes lists the paths the next action would record. The listing is taken at
-// the checkout root so the paths are root-relative regardless of where the
-// caller is standing — the same shape `kiln path` and the commit confirmation
-// print.
+// the caller's directory, but porcelain -z always prints root-relative paths
+// (git ignores status.relativePaths under -z), so the inventory keeps the same
+// shape `kiln path` and the commit confirmation print — without a rev-parse
+// process to find the root first.
 func (r ExecRunner) Changes() ([]string, error) {
-	root, err := r.root()
-	if err != nil {
-		return nil, err
-	}
-	out, err := r.runIn(root, "status", "--porcelain", "-z")
+	out, err := r.run("status", "--porcelain", "-z")
 	if err != nil {
 		return nil, err
 	}
 	return parseStatusZ(out), nil
+}
+
+// MaybeHasAreas reports whether linked worktrees can exist at all, without
+// spawning git. git keeps their metadata under <common-dir>/worktrees; no
+// directory there means `git worktree list` would print only the main checkout,
+// so status can skip that call. A checkout whose `.git` is a file is a linked
+// worktree itself — different layout, unknown state — and answers true, as does
+// any unreadable case: the caller then pays for the real listing.
+func (r ExecRunner) MaybeHasAreas() bool {
+	root, ok := findCheckoutRoot(r.Dir)
+	if !ok {
+		return true
+	}
+	info, err := os.Stat(filepath.Join(root, ".git"))
+	if err != nil || !info.IsDir() {
+		return true
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".git", "worktrees"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	return len(entries) > 0
+}
+
+// findCheckoutRoot walks up from start to the first directory holding a .git or
+// .jj marker, mirroring where kiln's config lookup stops.
+func findCheckoutRoot(start string) (string, bool) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	for {
+		for _, marker := range []string{".git", ".jj"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				return dir, true
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }
 
 // Unchanged reports which of paths hold no change relative to HEAD — the check

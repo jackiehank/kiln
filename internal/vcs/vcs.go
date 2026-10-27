@@ -91,6 +91,14 @@ type StatLog interface {
 	LogStats(short bool, want func(id string) bool) (map[string]string, error)
 }
 
+// AreaHint is an optional cheap pre-check for ListWorkspaces: false means the
+// backend provably has no linked areas, so a caller may treat the listing as
+// empty without spawning anything. true means "maybe" — the caller still asks
+// the backend, so the hint can never hide an area, only save a call.
+type AreaHint interface {
+	MaybeHasAreas() bool
+}
+
 // BranchPrefix namespaces the branches of kiln's dedicated areas in git.
 const BranchPrefix = "kiln/"
 

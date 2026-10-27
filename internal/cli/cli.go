@@ -748,13 +748,10 @@ func (e *env) write(args []string, commit bool) int {
 		fmt.Fprint(e.out, i18n.T("将提交 %d 个文件: %s\n", len(files), inventory(files)))
 	} else if len(paths) == 0 && filesKnown {
 		// An empty action is legitimate, so this is a hint, not a refusal: say it
-		// before the commit exists rather than after. The dirty reading is what the
-		// isolation hints already use; a backend without it stays silent.
-		if ws, ok := backend.(vcs.Workspace); ok {
-			if dirty, derr := ws.Dirty(); derr == nil && !dirty {
-				fmt.Fprintln(e.errw, i18n.T("提示: 当前工作区没有检测到改动，这次动作会记成空提交。"))
-			}
-		}
+		// before the commit exists rather than after. Changes already read the
+		// working tree; an empty inventory is the same reading Dirty would return,
+		// so asking again would only spawn a second status.
+		fmt.Fprintln(e.errw, i18n.T("提示: 当前工作区没有检测到改动，这次动作会记成空提交。"))
 	}
 	id, err := backend.Action(msg, paths)
 	if err != nil {
@@ -1798,6 +1795,8 @@ func areasOpen(areas []vcs.WorkspaceInfo) int {
 // knownAreas lists the repository's working areas. It is best effort on purpose:
 // status is a read view, and an area list that cannot be read must not fail it —
 // the view then simply says zero, which is also what an empty repository has.
+// A backend that can prove it has no linked areas (AreaHint) skips the listing
+// process entirely; the hint may only ever say "none", so it cannot hide one.
 func (e *env) knownAreas() []vcs.WorkspaceInfo {
 	backend, err := e.backend()
 	if err != nil {
@@ -1805,6 +1804,9 @@ func (e *env) knownAreas() []vcs.WorkspaceInfo {
 	}
 	ws, ok := backend.(vcs.Workspace)
 	if !ok {
+		return nil
+	}
+	if hint, ok := backend.(vcs.AreaHint); ok && !hint.MaybeHasAreas() {
 		return nil
 	}
 	areas, err := ws.ListWorkspaces()
@@ -1836,8 +1838,11 @@ func worktreeWord(mode string) string {
 // renderWorktreeLegend explains the marker — and names the area the caller is
 // standing in — but only when the repository has one open. A legend for a mark
 // that never appears would just be noise.
+// renderWorktreeLegend explains the ■ mark. It is printed only when a dedicated
+// area is open: the main checkout is always listed, and a legend for zero areas
+// is noise (the same contract TestStatusStatesWorktreeOffWithNoAreas states).
 func (e *env) renderWorktreeLegend(areas []vcs.WorkspaceInfo) {
-	if len(areas) == 0 {
+	if areasOpen(areas) == 0 {
 		return
 	}
 	line := AreaMark + i18n.T(" = 已开 worktree——各自状态见 kiln worktree list")

@@ -283,3 +283,51 @@ kiln 没有索引：每条读命令都从提交历史现算模型——一次 `g
 - 真仓与合成仓计时如上；进程数用 `GIT_TRACE2_EVENT` 实测 2。
 - `kiln check`：55 ok / 8 warn / 0 error。
 - JSON 契约未变（`stat` 仍是后端原始 diffstat），dsh-kiln 不受影响。
+
+## apply（2026-10-27，续）：`status` 与 `commit` 的固定开销
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/vcs/vcs.go` | 新增可选接口 `AreaHint { MaybeHasAreas() bool }`：false = 后端**能证明**没有 linked area，调用方可以不 spawn `ListWorkspaces`；true = 不确定，照旧调用 |
+| `internal/vcs/git/git.go` | `MaybeHasAreas` 检查 `<checkout>/.git/worktrees`（向上找 `.git`/`.jj`）：不存在 → false；`.git` 是文件或不可读 → true（保守）。`Changes` 去掉 `rev-parse --show-toplevel`：porcelain `-z` 本身输出 root-relative 路径，从子目录调用也不变 |
+| `internal/cli/cli.go` | `knownAreas` 在 hint 为 false 时直接返回空；`write` 的空动作提示改用 `Changes` 的结果判断干净，不再额外 `git status`；`renderWorktreeLegend` 改为 0 个 dedicated area 时不打印 |
+| `internal/cli/cli_test.go` | 新增 3 条：hint=false 不调 `ListWorkspaces`、hint=true 仍调、commit 不再调 `Dirty`；`workspaceRunner.Changes` 与 `dirty` 保持一致（dirty 就列出一个路径） |
+| `internal/vcs/git/git_test.go` | 新增 2 条：子目录 `Changes` 仍 root-relative、`MaybeHasAreas` 对普通仓/有 worktree/站在 worktree 里三种情况 |
+
+### 顺带修的一个小 bug
+
+`status` 原来只要 `git worktree list` 返回了 main 就会打印图例 `■ = 已开 worktree——…`——等于每个 git 仓末尾都多一行“已开 worktree”，即使一个 area 都没有；而 `TestStatusStatesWorktreeOffWithNoAreas` 的意图正是“没 area 没图例”。现在按 `areasOpen`（非 main）判断，零 area 不再打印。**只影响文本，`status --json` 逐字节不变。**
+
+### 性能（同一会话，旧/新二进制背靠背）
+
+| 调用 | 旧 | 新 | 变化 |
+| --- | --- | --- | --- |
+| `status` | 154 ms | **106 ms** | −31% |
+| `status --json` | 152 ms | **105 ms** | −31% |
+| `commit`（空动作） | 501 ms | **337 ms** | −33% |
+| `commit`（有改动） | 387 ms | 341 ms | −12% |
+| git 进程数（status） | 2 | **1** | −1 |
+| git 进程数（commit） | 7（+git 自身 maintenance） | **5**（+maintenance） | −2 |
+
+`status` 少的是 `git worktree list --porcelain`；`commit` 少的是 `rev-parse --show-toplevel` 与空动作分支里的第二次 `status --porcelain`。
+
+### 输出核对
+
+- `status --json` / `list --json` / `check --json` / `graph --json` 与旧二进制**逐字节相同**；
+- `status` 文本唯一差异是上面那行图例（0 area 时不再打印）；
+- `commit` 的 trailer、清单（`将提交 N 个文件`）、空动作提示与退出码不变；两个全新仓里同样输入提交，stdout 除“已提交 <短 hash>”外完全相同。
+
+### 边界
+
+- `MaybeHasAreas` 只对 git 实现；jj 没有该接口，`status` 仍调用 `jj workspace list`，行为不变。
+- 在 linked worktree 里（`.git` 是文件）返回 true，保守调用，不猜。
+- `commit` 在 `worktree=on` 时仍会为 `refuseInMain` 调 `IsDedicated`（一次 `rev-parse`），未动。
+- 真实仓现在没有 linked area；有 area 时 hint 为 true，走原路径，图例与计数照旧。
+
+### 验收
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过；
+- `kiln check`：56 ok / 7 warn / 0 error；
+- 旧/新计时与进程数如上。
