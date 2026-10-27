@@ -955,8 +955,12 @@ func TestShowJSONRendersTheSelectedAction(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("show --json --stat is not one JSON document: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(doc.Body, "docs/b.md | 3 +++") {
-		t.Fatalf("--stat body should be the diffstat: %q", doc.Body)
+	// --stat adds the diffstat beside the body; it does not turn body into it.
+	if !strings.Contains(doc.Body, "+new line") {
+		t.Fatalf("body must keep the commit text under --stat: %q", doc.Body)
+	}
+	if !strings.Contains(doc.Stat, "docs/b.md | 3 +++") {
+		t.Fatalf("--stat should put the diffstat in stat: %q", doc.Stat)
 	}
 }
 
@@ -1000,7 +1004,7 @@ func TestWorktreeListJSONRendersAreaStates(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("worktree list --json is not one JSON document: %v\n%s", err, out.String())
 	}
-	if doc.Mode != "jj" || len(doc.Worktrees) != 2 {
+	if doc.Backend != "jj" || len(doc.Worktrees) != 2 {
 		t.Fatalf("doc = %+v", doc)
 	}
 	main := doc.Worktrees[0]
@@ -1783,13 +1787,13 @@ func TestStatusJSONIsFlatAndOrdered(t *testing.T) {
 	want := `{
   "summary": {
     "total": 3,
-    "complete": 1,
-    "in-progress": 2,
+    "done": 1,
+    "open": 2,
     "actions": 5,
     "domains": 2
   },
   "worktree": {
-    "mode": "on",
+    "policy": "on",
     "open": 1
   },
   "issues": [
@@ -2334,8 +2338,8 @@ func TestCheckJSONNamesRulesAndMirrorsTheExitCode(t *testing.T) {
 		t.Fatalf("warnings alone must not fail the check (exit %d, stderr %q)", code, errb.String())
 	}
 	want := `{
-  "ok": true,
-  "summary": {
+  "passed": true,
+  "findings": {
     "ok": 1,
     "warn": 2,
     "error": 0
@@ -2404,7 +2408,7 @@ func TestCheckJSONReportsErrorAndFails(t *testing.T) {
 		t.Fatalf("exit code = %d, want 1 for an error", code)
 	}
 	got := out.String()
-	for _, want := range []string{`"ok": false`, `"rule": "relation-target"`, `"ref": "missing"`, `"level": "error"`} {
+	for _, want := range []string{`"passed": false`, `"rule": "relation-target"`, `"ref": "missing"`, `"level": "error"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("check --json missing %q:\n%s", want, got)
 		}
@@ -2444,7 +2448,7 @@ func TestCheckJSONOnAnEmptyRepository(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
 	}
 	got := out.String()
-	if !strings.Contains(got, `"ok": true`) || !strings.Contains(got, `"results": []`) {
+	if !strings.Contains(got, `"passed": true`) || !strings.Contains(got, `"results": []`) {
 		t.Fatalf("an empty repository is trivially fine:\n%s", got)
 	}
 	if strings.Contains(got, "没有 kiln 动作") {

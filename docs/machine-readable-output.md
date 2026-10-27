@@ -361,3 +361,14 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - 错误路径仍走 stderr prose；
 - `check` 结果里是否带提交 id；
 - 上述「关系名缺失」。
+
+## 后续（2026-10-27）：`cli-consistency` 批 A 的键名修订
+
+本文件的 `status` / `check` 示例（hypothesize / apply / 复核各节）保留了 2026-10-23 的键名（`complete` / `in-progress` / `mode` / `ok` / `summary`），作过程记录。`cli-consistency` 的采集发现这些键与其它文档同名异义，批 A 已改名：
+
+- `status.summary.complete` → `done`，`in-progress` → `open`；
+- `status.worktree.mode` → `policy`，`worktree list.mode` → `backend`；
+- `check.ok` → `passed`，`check.summary` → `findings`；
+- `show --stat` 不再把 `body` 换成 diffstat，而是追加 `stat`。
+
+契约与四条成文规则（`id` vs `issue`、容器恒写、`title`/`commit` 粒度、JSON 不随语言变）见 `docs/read-json.md` 文末「批 A 的键名修订」。本文件的「遗留」清单不变。

@@ -67,8 +67,8 @@
 七个读命令全部有 `--json`。三条新命令的契约：
 
 - `path --json`：`issue` / `action`（当前动作名）/ `done` / `actions[]`（`ordinal`、`action`、`commit`、`date`（RFC3339）、`title`、`refs`、`tags`、`stat`）/ `relations[]`（与 `graph --json` 同形的相邻边）。`actions` 与 text 视图同序，`ordinal` 可直接喂给 `kiln show`。`tags` 取动作自己的 trailer（空则省略），与 `graph --json` / `list --json` 的 issue 级并集不是一回事。
-- `show --json`：`issue` / `ordinal` / `total` / `action` / `commit` / `date` / `title` / `body`；`body` 是提交全文（`--stat` 时是 diffstat），**不含 diff 原文**——需要 diff 的调用方仍可用文本视图。
-- `worktree list --json`：`mode` / `worktrees[]`（`path`、`main`、`issue`、`gone`、`dirty`、`unmerged`）；三个状态布尔恒写，`issue` 缺省即 main。
+- `show --json`：`issue` / `ordinal` / `total` / `action` / `commit` / `date` / `title` / `body` / `stat`；`body` 是后端的提交全文（**含 diff**，与文本视图同一段文字），`stat` 只在 `--stat` 时出现——**`--stat` 不再替换 `body`**。
+- `worktree list --json`：`backend` / `worktrees[]`（`path`、`main`、`issue`、`gone`、`dirty`、`unmerged`）；三个状态布尔恒写，`issue` 缺省即 main。`backend` 是 `git|jj`，与 `status.worktree.policy`（`off|on`）不是一回事。
 - 批量形态（issue `path-batch`）：`kiln path --all --json` / `kiln path <id> <id> --json` → `{"issues":[<上面那条文档>…],"errors"?}`。单条文档形状不变，所以同一个解码器两种形态都读得动；`errors` 是语言中立 token（`unknown-issue` / `stat-failed`），单条失败不拖垮整份。
 
 边界：`relations` 里的靶可能从未开过（ghost），文档不另设 `missing` 列表——`to` 是否在 `issues` 里由调用方自己比对；`show` 本轮不放原始 diff；`--toon` 仍未评估。
@@ -78,6 +78,33 @@
 issue `json-commit-hash` 把 hash 键统一了：**`id` 只指 issue，`commit` 只指提交 hash（完整 40 位）**。因此本文件里 `path.actions[].id` / `show.id` 的旧称呼**已改为 `commit`**（上文「设计」与「apply」两节保留了当时的 `id` 写法作过程记录）。
 
 - `path --json` 动作：`{ordinal, action, commit, date, title?, refs?, tags?, stat?}`；
-- `show --json`：`{issue, ordinal, total, action, commit, date, title?, body?}`；
+- `show --json`：`{issue, ordinal, total, action, commit, date, title?, body?, stat?}`；
 - `list --json` 行另有 `commit`（末条动作）与 `hit: {ordinal, action, commit, subject}`（搜索命中早期动作时）；
 - `status` / `graph` / `check` 不带 hash（没有消费者；要提交去 `path`）。
+
+## 后续（2026-10-27）：`cli-consistency` 批 A 的键名修订
+
+`cli-consistency` 的采集把七份 JSON 放在一起比对，批 A 修掉"同键异义"，并补四条成文规则。
+
+### 键改名
+
+| 文档 | 旧 | 新 | 为什么 |
+| --- | --- | --- | --- |
+| `status.summary` | `complete` / `in-progress` | `done` / `open` | 与 `--status=done\|open`、行级 `done` 同一套词；数值不变 |
+| `status.worktree` | `mode` | `policy` | `off\|on` 是隔离策略；`worktree list` 的 `git\|jj` 是后端，不再共用 `mode` |
+| `worktree list` | `mode` | `backend` | 同上 |
+| `check` | `ok` / `summary` | `passed` / `findings` | `passed` 是结论（与退出码同义）；`findings.ok/warn/error` 数**诊断条数**，不再与布尔同名 |
+| `show --stat` | `body` 被换成 diffstat | `body` 恒为提交全文 + `stat` | 同一个键不再随 flag 变义；diffstat 与 `path` 同用 `stat` |
+
+`read-json` 此前写 `show.body` “不含 diff 原文”，与实现不符：`body` 就是后端的提交全文、**包含 diff**（与文本视图同一段文字）。以本节为准；要不要再拆一个 `diff` 字段是独立决定。
+
+### 四条成文规则
+
+1. **`id` vs `issue`**：`id` 用于“这一行的主体就是 issue”（`list` / `status` / `graph` 的行）；`issue` 用于“文档主体”（`path` / `show` 的根）或“这一行的主体不是 issue”（`check` 的 finding、`worktree` 的区、`pathBatch` 的失败请求）。不是两套叫法，是同一条规则的两个分支。
+2. **容器与省略**：数组键恒写（空仓写 `[]`，不写 `null`）；可选标量/对象缺省即省略（`title` / `tags` / `hit` / `stat` / `missing` / `errors`）；`filter` 恒写，回显请求（无过滤为 `{}`）。
+3. **`title` / `commit` 的粒度随层级**：issue 行指**末条动作**；`path.actions[]` 指**该动作**。
+4. **JSON 不随 `--lang` 变**：同一仓库、同一命令，`zh` 与 `en` 的 JSON 逐字节相同（错误 prose 才随语言变）。
+
+### 与旧示例的关系
+
+上文「采集 / 设计 / apply」保留了当时的键名（`mode` / `complete` / `ok` / `summary` / `body=diffstat`）作过程记录；契约以本节与「结论」为准。`machine-readable-output` 里的 `status` / `check` 示例同样是历史记录，其文末指向本节。

@@ -902,7 +902,7 @@ func (e *env) workspaceList(ws vcs.Workspace, f flags) int {
 		states[i] = state
 	}
 	if f.has("json") {
-		doc := worktreeListDoc{Mode: string(e.kind), Worktrees: make([]worktreeEntry, 0, len(areas))}
+		doc := worktreeListDoc{Backend: string(e.kind), Worktrees: make([]worktreeEntry, 0, len(areas))}
 		for i, a := range areas {
 			doc.Worktrees = append(doc.Worktrees, worktreeEntry{
 				Path:     a.Path,
@@ -1204,8 +1204,9 @@ type pathAction struct {
 }
 
 // showDoc is `kiln show --json`: one action's metadata plus its body. body is
-// the commit's text, or the diffstat when --stat asked for it; the raw diff is
-// deliberately absent — it is large, and the text view still prints it.
+// always the backend's own rendering of the commit (which includes the diff —
+// the same text the text view prints), so the key never changes meaning; --stat
+// only adds the diffstat beside it instead of replacing the body.
 type showDoc struct {
 	Issue   string `json:"issue"`
 	Ordinal int    `json:"ordinal"`
@@ -1215,12 +1216,15 @@ type showDoc struct {
 	Date    string `json:"date"`
 	Title   string `json:"title,omitempty"`
 	Body    string `json:"body,omitempty"`
+	Stat    string `json:"stat,omitempty"`
 }
 
 // worktreeListDoc is `kiln worktree list --json`: every area with the three
 // judgments `remove` refuses on, so a caller decides without parsing words.
+// backend names the VCS the list came from; it is not the isolation policy
+// (`status.worktree.policy`), so the key says which of the two it is.
 type worktreeListDoc struct {
-	Mode      string          `json:"mode,omitempty"`
+	Backend   string          `json:"backend,omitempty"`
 	Worktrees []worktreeEntry `json:"worktrees"`
 }
 
@@ -1368,15 +1372,18 @@ func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) i
 		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
-	var body string
-	if stat {
-		body, err = backend.ShowStat(a.ID, false)
-	} else {
-		body, err = backend.Show(a.ID)
-	}
+	body, err := backend.Show(a.ID)
 	if err != nil {
 		fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 		return 1
+	}
+	statText := ""
+	if stat {
+		statText, err = backend.ShowStat(a.ID, false)
+		if err != nil {
+			fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
+			return 1
+		}
 	}
 	return e.writeJSON(showDoc{
 		Issue:   p.ID,
@@ -1387,6 +1394,7 @@ func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) i
 		Date:    a.Date.Format(time.RFC3339),
 		Title:   a.Title,
 		Body:    trimNewlines(body),
+		Stat:    trimNewlines(statText),
 	})
 }
 
@@ -2238,15 +2246,15 @@ type statusDoc struct {
 }
 
 type statusSummary struct {
-	Total      int `json:"total"`
-	Complete   int `json:"complete"`
-	InProgress int `json:"in-progress"`
-	Actions    int `json:"actions"`
-	Domains    int `json:"domains"`
+	Total   int `json:"total"`
+	Done    int `json:"done"`
+	Open    int `json:"open"`
+	Actions int `json:"actions"`
+	Domains int `json:"domains"`
 }
 
 type worktreeState struct {
-	Mode    string `json:"mode"`
+	Policy  string `json:"policy"`
 	Open    int    `json:"open"`
 	Current string `json:"current,omitempty"`
 }
@@ -2294,13 +2302,15 @@ type listHit struct {
 	Subject string `json:"subject"`
 }
 
-// checkDoc is the `kiln check --json` document. OK mirrors the exit code — false
-// exactly when an error was found — so a caller that ignores exit codes still
-// gets the answer CI cares about.
+// checkDoc is the `kiln check --json` document. passed mirrors the exit code —
+// false exactly when an error was found — so a caller that ignores exit codes
+// still gets the answer CI cares about. findings counts diagnostics (one issue
+// can yield several), which is why it is not called "summary": the level names
+// ok/warn/error inside it count findings, not issues.
 type checkDoc struct {
-	OK      bool          `json:"ok"`
-	Summary checkSummary  `json:"summary"`
-	Results []checkResult `json:"results"`
+	Passed   bool          `json:"passed"`
+	Findings checkSummary  `json:"findings"`
+	Results  []checkResult `json:"results"`
 }
 
 // checkSummary counts findings, not issues: one issue can fail twice.
@@ -2331,11 +2341,11 @@ func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.Workspace
 	groups := engine.GroupByDomain(repo)
 	doc := statusDoc{
 		Summary: statusSummary{
-			Total:      s.Total,
-			Complete:   s.Complete,
-			InProgress: s.InProgress,
-			Actions:    s.Actions,
-			Domains:    engine.CountDomains(groups),
+			Total:   s.Total,
+			Done:    s.Complete,
+			Open:    s.InProgress,
+			Actions: s.Actions,
+			Domains: engine.CountDomains(groups),
 		},
 		Worktree: e.worktreeState(areas),
 		Issues:   make([]statusIssue, 0, s.Total),
@@ -2362,7 +2372,7 @@ func (e *env) statusJSON(repo *model.Repo, s engine.Stats, areas []vcs.Workspace
 // worktreeState states the repository-level isolation mode and how many areas are
 // open, plus the area the caller stands in when there is one.
 func (e *env) worktreeState(areas []vcs.WorkspaceInfo) worktreeState {
-	ws := worktreeState{Mode: worktreeWord(e.worktree), Open: areasOpen(areas)}
+	ws := worktreeState{Policy: worktreeWord(e.worktree), Open: areasOpen(areas)}
 	if here, ok := vcs.AreaAt(areas, "."); ok && !here.Main {
 		ws.Current = here.Issue
 	}
@@ -2377,16 +2387,16 @@ func (e *env) worktreeState(areas []vcs.WorkspaceInfo) worktreeState {
 // non-zero code must not cost the caller the report they ran the command for.
 func (e *env) checkJSON(repo *model.Repo) int {
 	diags := engine.Check(repo, e.actions)
-	doc := checkDoc{OK: true, Results: make([]checkResult, 0, len(diags))}
+	doc := checkDoc{Passed: true, Results: make([]checkResult, 0, len(diags))}
 	for _, d := range diags {
 		switch d.Level {
 		case engine.LevelWarn:
-			doc.Summary.Warn++
+			doc.Findings.Warn++
 		case engine.LevelErr:
-			doc.Summary.Err++
-			doc.OK = false
+			doc.Findings.Err++
+			doc.Passed = false
 		default:
-			doc.Summary.OK++
+			doc.Findings.OK++
 		}
 		doc.Results = append(doc.Results, checkResult{
 			Issue:    d.Issue,
@@ -2401,7 +2411,7 @@ func (e *env) checkJSON(repo *model.Repo) int {
 	if code := e.writeJSON(doc); code != 0 {
 		return code
 	}
-	if !doc.OK {
+	if !doc.Passed {
 		return 1
 	}
 	return 0

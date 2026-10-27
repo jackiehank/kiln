@@ -486,3 +486,32 @@
 - 不改 `check` 的规则集；
 - 不新增输出格式（TOON 等）；
 - 不动 `status` 的领域分组语义。
+
+## apply（批 A，2026-10-27）：JSON 契约
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/cli/cli.go` | `statusSummary`：`complete`/`in-progress` → `Done`/`Open`（`json:"done"/"open"`）；`worktreeState.Mode` → `Policy`；`worktreeListDoc.Mode` → `Backend`；`checkDoc.OK`/`Summary` → `Passed`/`Findings`；`showDoc` 增 `Stat`，`showJSON` 先 `Show` 再按需 `ShowStat`，`body` 不再被替换 |
+| `internal/cli/cli_test.go` | 更新 status / check / worktree-list / show 的 JSON 断言；`show --stat` 现在断言 `body` 仍是提交文本、`stat` 是 diffstat |
+| `docs/read-json.md` | 结论改成新键；新增「批 A 的键名修订」：5 个改名、`body` 纠错、四条成文规则（`id` vs `issue`、容器/省略、`title`/`commit` 粒度、JSON 不随语言变） |
+| `docs/machine-readable-output.md` | 文末指向新契约；旧示例保留作过程记录 |
+| `README.md` / `README.en.md` | `check` 示例改 `passed`/`findings`，并写明 `findings` 数诊断条数 |
+
+### 验收（实测）
+
+- `gofmt -l .` 无输出；`go vet ./...`、`go test ./...` 全过。
+- 真仓：`status --json` → `{"total":62,"done":53,"open":9,"actions":276,"domains":3}`、`"worktree":{"policy":"off","open":0}`；`worktree list --json` → `"backend":"git"`；`check --json` → `"passed":true`、`"findings":{"ok":53,"warn":9,"error":0}`；`show cli-consistency 1 --stat --json` → `body` 为提交全文、`stat` 为 `docs/cli-consistency.md | 48 …`。
+- `--lang=zh` / `en` 四份 JSON 逐字节相同（status / check / worktree list / show --stat）。
+- 文本视图未动：`status` 仍「问题总数…（完成 53 / 进行中 9）」；`show --stat` 文本仍是提交头 + diffstat；golden 测试全绿。
+
+### 没做什么
+
+- **只写规则、不改形状**：C02（`id` vs `issue`）、C06（容器恒写）、C30（JSON 不随语言变）都只进文档——现形状本来就成立，改名只会给唯一消费方添麻烦。
+- **`show.body` 的 diff 没拆**：实测 `body` 一直是 `git show` 全文（含 diff），与旧文档“不含 diff”矛盾；本批按实现改正文档、让 `body` 语义稳定，拆 `diff` 字段留作独立决定。
+- **dsh-kiln 不在这条 issue 的范围**：用户决定自行迁移消费方，本批不跟。
+
+### 下一批
+
+批 B（解析器与帮助）：开关 flag 不再吞位置参数、`kiln <cmd> -h`、重复标量 flag 报错、多余位置参数报错、`worktree` 先 parse、`path` usage/去重。测试先行。

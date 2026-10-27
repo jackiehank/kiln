@@ -274,8 +274,8 @@ kiln path --all --json
 
 ```json
 {
-  "ok": true,
-  "summary": { "ok": 21, "warn": 9, "error": 0 },
+  "passed": true,
+  "findings": { "ok": 21, "warn": 9, "error": 0 },
   "results": [
     { "issue": "action-config", "level": "ok", "rule": "complete", "actions": ["ask", "apply"] }
   ]
@@ -286,7 +286,7 @@ kiln path --all --json
 
 - **顶层永远是一个对象**，不放裸数组；`issues` / `results` 恒为数组——空仓是 `[]`，不是 `null`。
 - **`status` 是平铺的一层行**：`id` / `domain` / `action` / `done` / `title`，外加 `has-worktree`。**没有分组、没有嵌套**——文本视图用一行**块头**标出 domain，JSON 里每个 issue 一行、自带 `domain`，所以两边**issue 行的相对顺序一致**（块头行不参与）。
-- **`check` 用 rule 码说话**：`start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete`——不吐中文判据；`ok` **与退出码同义**（有 `✗` 才 `false` / 退出 1）。
+- **`check` 用 rule 码说话**：`start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete`——不吐中文判据；`passed` **与退出码同义**（有 `✗` 才 `false` / 退出 1），`findings` 里的 `ok` / `warn` / `error` 数的是**诊断条数**，不是一个 issue 一个。
 - **缺省即省略**（省略 = 没有），**布尔恒显**（`false` 是判定结果，不是"没有"）。
 - **stdout 只放一个 JSON 文档**：提示、legend、报错一律在 stderr，退出码与文本视图一致。
 - **`path --all --json` 一次进程读全仓**：`{"issues":[<单条 path 文档>…]}`，每项与 `kiln path <id> --json` 逐字节同形。显式给多条 issue 时保持给定顺序，`--all` 按 id 字典序；单条取不到不拖垮整份——该条进 `errors`（`unknown-issue` / `stat-failed`），其余照出，退出码 1。批量只服务 `--json`（文本视图一次只展开一条）。

@@ -276,8 +276,8 @@ kiln path --all --json
 
 ```json
 {
-  "ok": true,
-  "summary": { "ok": 21, "warn": 9, "error": 0 },
+  "passed": true,
+  "findings": { "ok": 21, "warn": 9, "error": 0 },
   "results": [
     { "issue": "action-config", "level": "ok", "rule": "complete", "actions": ["ask", "apply"] }
   ]
@@ -288,7 +288,7 @@ Rules (full schema in [docs/machine-readable-output.md](docs/machine-readable-ou
 
 - **The top level is always one object**, never a bare array; `issues` / `results` are always arrays — an empty repository gives `[]`, not `null`.
 - **`status` is one flat layer of rows**: `id` / `domain` / `action` / `done` / `title`, plus `has-worktree`. **No grouping, no nesting** — the text view marks a domain with one **block header** line, while JSON carries `domain` on every row, so **the relative order of issue rows matches** between the two (block-header lines don't count).
-- **`check` speaks in rule codes**: `start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete` — no Chinese verdict strings; `ok` **means the same as the exit code** (`false` / exit 1 only when there is an `✗`).
+- **`check` speaks in rule codes**: `start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete` — no Chinese verdict strings; `passed` **means the same as the exit code** (`false` / exit 1 only when there is an `✗`), and `findings` counts **diagnostics**, not issues.
 - **Absent means omitted**, **booleans are always written** (`false` is a verdict, not "missing").
 - **stdout carries one JSON document only**: hints, legends and errors all go to stderr, and the exit code matches the text view.
 - **`path --all --json` reads every path in one process**: `{"issues":[<one path document>…]}`, each entry byte-identical to `kiln path <id> --json`. Named ids keep their given order, `--all` sorts by id; one bad id does not sink the document — it lands in `errors` (`unknown-issue` / `stat-failed`), the rest still print, and the exit code is 1. The batch is `--json`-only (the text view expands one issue at a time).
