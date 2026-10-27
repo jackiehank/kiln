@@ -102,7 +102,7 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 | --- | --- |
 | `kiln do <issue> <action> [flags]` | Print the canonical commit message (**print only, no commit**) |
 | `kiln commit <issue> <action> [--only <paths>] [flags]` | Commit with that message; by default the whole working tree — a snapshot of all changes; `--only` commits just the listed paths; stdout first prints `将提交 N 个文件: …`, then the canonical message, and finally `已提交 <hash> · <action> · <issue>` |
-| `kiln path <issue>` | Rebuild the issue's research path; `--stat` adds a per-action file summary, `--shortstat` puts one total per action |
+| `kiln path <issue>` | Rebuild the issue's research path; `--stat` adds a per-action file summary, `--shortstat` puts one total per action; `--json` gives one document, and `--all --json` (or several issues) reads every path in one process |
 | `kiln show <issue> [n\|action]` | Show one action's full change (default: the last one; `n` is the number from `path`, **or give the action name** — that takes the **last** such action, hinting on stderr when there are several, and listing the valid numbers when no such action exists); `--stat` gives the file summary only |
 | `kiln status [--json]` | Whole-repository overview: a directory view grouped by domain |
 | `kiln check [--verbose] [--json]` | Semantic completeness check |
@@ -117,7 +117,7 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 
 `do` / `commit` flags: `--title --refs --target --scope --domain --tag`; relations: `--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate` (all repeatable, comma-separated; the aliases `--derived-from` / `--spawns` are accepted too).
 Also: `commit --force` (one-off waiver, see "Worktree mode"), `commit --only <paths>` (commit just the listed paths; comma-separated or repeated).
-`--json`: supported by `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` (machine-readable output, see "Machine-readable output").
+`--json`: supported by `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` (machine-readable output, see "Machine-readable output"); `path` also takes `--all` to read the whole repository at once (or several issues directly), which works with `--json` only.
 
 ## Action vocabulary
 
@@ -270,6 +270,7 @@ The convention: **only `✗` (errors) make `check` exit non-zero**; `⚠` merely
 kiln status --json
 kiln list --json --domain=design
 kiln check --json
+kiln path --all --json
 ```
 
 ```json
@@ -289,6 +290,7 @@ Rules (full schema in [docs/machine-readable-output.md](docs/machine-readable-ou
 - **`check` speaks in rule codes**: `start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete` — no Chinese verdict strings; `ok` **means the same as the exit code** (`false` / exit 1 only when there is an `✗`).
 - **Absent means omitted**, **booleans are always written** (`false` is a verdict, not "missing").
 - **stdout carries one JSON document only**: hints, legends and errors all go to stderr, and the exit code matches the text view.
+- **`path --all --json` reads every path in one process**: `{"issues":[<one path document>…]}`, each entry byte-identical to `kiln path <id> --json`. Named ids keep their given order, `--all` sorts by id; one bad id does not sink the document — it lands in `errors` (`unknown-issue` / `stat-failed`), the rest still print, and the exit code is 1. The batch is `--json`-only (the text view expands one issue at a time).
 
 ## Working with agents
 
@@ -296,7 +298,7 @@ kiln's model suits agents naturally:
 
 - **One convention is enough**: use `kiln commit` (or `git commit -m "$(kiln do …)"`) for research actions. That one sentence is all an agent needs.
 - **Open the issue before writing code**: put only the issue doc in the `ask` action, commit it, then write the implementation. In that order nothing extra is needed; when you really must go the other way, `kiln commit … --only docs/<issue>.md` commits just the doc (identical on both backends) instead of moving the code aside. See [docs/commit-order.md](docs/commit-order.md), [docs/commit-scope.md](docs/commit-scope.md).
-- **Structured output**: `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` with `--json` are **truly** machine-readable, stdout carrying one JSON document; `graph` also has `--mermaid` (flowchart text), and `graph --json --issue <id> --depth N` emits only that issue's undirected neighborhood. See "Machine-readable output".
+- **Structured output**: `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` with `--json` are **truly** machine-readable, stdout carrying one JSON document; `path --all --json` returns every research path in one process (saving N startups), `graph` also has `--mermaid` (flowchart text), and `graph --json --issue <id> --depth N` emits only that issue's undirected neighborhood. See "Machine-readable output".
 - **Honesty**: `check` points straight at structural problems — a missing terminal action, a missing relation target, an unknown trailer key (under `--json` it gives rule codes, not Chinese text).
 - **Isolation**: parallel agents each take a worktree via `kiln worktree new`, removing cross-contamination **structurally**.
 

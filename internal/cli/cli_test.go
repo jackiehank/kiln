@@ -647,6 +647,170 @@ func TestPathJSONIncludesIncidentRelations(t *testing.T) {
 	}
 }
 
+// batchRunner models two issues — alpha opened first, beta opened later and
+// collected — so the batch's ordering and per-issue shape are both visible.
+func batchRunner() fakeRunner {
+	base := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{
+		commits: []vcs.Commit{
+			{ID: "c1", Date: base, Message: "乙起点\n\nissue: beta\naction: ask\ntitle: 乙起点"},
+			{ID: "c2", Date: base.Add(time.Hour), Message: "甲起点\n\nissue: alpha\naction: ask\ntitle: 甲起点"},
+			{ID: "c3", Date: base.Add(2 * time.Hour), Message: "乙收集\n\nissue: beta\naction: collect\ntitle: 乙收集"},
+		},
+		short: map[string]string{
+			"c1": " 1 file changed, 1 insertion(+)\n",
+			"c2": " 1 file changed, 2 insertions(+)\n",
+			"c3": " 2 files changed, 3 insertions(+)\n",
+		},
+	}
+}
+
+func newBatchEnv(out, errw *bytes.Buffer) *env {
+	return &env{actions: model.DefaultActionSet(), repo: batchRunner(), out: out, errw: errw}
+}
+
+// --all is one process for every issue, sorted like engine.IDs — and each entry
+// is the very document a single `path <id> --json` prints, not a variant shape.
+func TestPathAllJSONIsEveryPathInOneDocument(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newBatchEnv(&out, &errb).path([]string{"--all", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --all --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", doc.Errors)
+	}
+	if len(doc.Issues) != 2 || doc.Issues[0].Issue != "alpha" || doc.Issues[1].Issue != "beta" {
+		t.Fatalf("--all must follow engine.IDs (alpha, beta), got %+v", doc.Issues)
+	}
+	beta := doc.Issues[1]
+	if beta.Action != "collect" || beta.Done || len(beta.Actions) != 2 || len(beta.Relations) != 0 {
+		t.Fatalf("beta path = %+v", beta)
+	}
+
+	// The batch entry equals the single-issue document exactly.
+	out.Reset()
+	errb.Reset()
+	if code := newBatchEnv(&out, &errb).path([]string{"beta", "--json"}); code != 0 {
+		t.Fatalf("single exit code = %d, stderr = %q", code, errb.String())
+	}
+	var single pathDoc
+	if err := json.Unmarshal(out.Bytes(), &single); err != nil {
+		t.Fatalf("path beta --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if !reflect.DeepEqual(single, beta) {
+		t.Fatalf("batch entry %+v != single document %+v", beta, single)
+	}
+}
+
+// Named ids keep the caller's order: a batch is what you asked for, in the order
+// you asked for it — not silently re-sorted like --all.
+func TestPathJSONKeepsTheGivenOrder(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newBatchEnv(&out, &errb).path([]string{"beta", "alpha", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path beta alpha --json is not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Issues) != 2 || doc.Issues[0].Issue != "beta" || doc.Issues[1].Issue != "alpha" {
+		t.Fatalf("named ids must keep their order, got %+v", doc.Issues)
+	}
+}
+
+// One unknown id does not sink the batch: the rest still print, the bad id is
+// named in errors with a stable token, and the exit code says a request failed.
+func TestPathBatchKeepsGoingAfterAnUnknownIssue(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newBatchEnv(&out, &errb).path([]string{"alpha", "nope", "--json"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1 (stderr %q)", code, errb.String())
+	}
+	var doc pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("partial batch must still be one JSON document: %v\n%s", err, out.String())
+	}
+	want := []pathBatchError{{Issue: "nope", Error: "unknown-issue"}}
+	if !reflect.DeepEqual(doc.Errors, want) {
+		t.Fatalf("errors = %+v, want %+v", doc.Errors, want)
+	}
+	if len(doc.Issues) != 1 || doc.Issues[0].Issue != "alpha" {
+		t.Fatalf("the known issue must still print: %+v", doc.Issues)
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("JSON mode reports errors in the document, not on stderr: %q", errb.String())
+	}
+}
+
+// Several ids without --json used to print only the first one, silently. It is
+// now refused, because the text view has no batch form.
+func TestPathRefusesBatchWithoutJSON(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newBatchEnv(&out, &errb).path([]string{"alpha", "beta"}); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("refused batch wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "只支持 --json") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// --all is JSON-only and replaces the ids; using it beside one is a usage error
+// whichever way round it is written. A switch that swallowed the next token as
+// its value would drop the id silently, which is exactly what this refuses.
+func TestPathAllFlagIsJSONOnlyAndTakesNoIssue(t *testing.T) {
+	for _, args := range [][]string{
+		{"--all"},
+		{"--all", "alpha", "--json"},
+		{"alpha", "--all", "--json"},
+		{"--all", "--json", "alpha"},
+	} {
+		var out, errb bytes.Buffer
+		if code := newBatchEnv(&out, &errb).path(args); code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2 (stderr %q)", args, code, errb.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("%v: refused --all wrote stdout: %q", args, out.String())
+		}
+	}
+}
+
+// A batch carries stats too, in each action's stat field — the same contract as
+// the single path.
+func TestPathAllJSONCarriesStats(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newBatchEnv(&out, &errb).path([]string{"--all", "--json", "--shortstat"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc pathBatchDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("path --all --json --shortstat is not one JSON document: %v\n%s", err, out.String())
+	}
+	if got := doc.Issues[1].Actions[0].Stat; got != "1 file changed, 1 insertion(+)" {
+		t.Fatalf("beta first action stat = %q", got)
+	}
+	if got := doc.Issues[1].Actions[1].Stat; got != "2 files changed, 3 insertions(+)" {
+		t.Fatalf("beta second action stat = %q", got)
+	}
+}
+
+// --all on a repository with no issues is an empty array, never null.
+func TestPathAllJSONOnAnEmptyRepoWritesAnEmptyArray(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: fakeRunner{}, out: &out, errw: &errb}
+	if code := e.path([]string{"--all", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), `"issues": []`) {
+		t.Fatalf("empty --all must write an empty array:\n%s", out.String())
+	}
+}
+
 // `show --json` carries the selected action's metadata and body; --stat swaps
 // the body for the diffstat.
 func TestShowJSONRendersTheSelectedAction(t *testing.T) {

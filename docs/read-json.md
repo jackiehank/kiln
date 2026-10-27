@@ -69,5 +69,6 @@
 - `path --json`：`issue` / `action`（当前动作名）/ `done` / `actions[]`（`ordinal`、`action`、`id`、`date`（RFC3339）、`title`、`refs`、`stat`）/ `relations[]`（与 `graph --json` 同形的相邻边）。`actions` 与 text 视图同序，`ordinal` 可直接喂给 `kiln show`。
 - `show --json`：`issue` / `ordinal` / `total` / `action` / `id` / `date` / `title` / `body`；`body` 是提交全文（`--stat` 时是 diffstat），**不含 diff 原文**——需要 diff 的调用方仍可用文本视图。
 - `worktree list --json`：`mode` / `worktrees[]`（`path`、`main`、`issue`、`gone`、`dirty`、`unmerged`）；三个状态布尔恒写，`issue` 缺省即 main。
+- 批量形态（issue `path-batch`）：`kiln path --all --json` / `kiln path <id> <id> --json` → `{"issues":[<上面那条文档>…],"errors"?}`。单条文档形状不变，所以同一个解码器两种形态都读得动；`errors` 是语言中立 token（`unknown-issue` / `stat-failed`），单条失败不拖垮整份。
 
 边界：`relations` 里的靶可能从未开过（ghost），文档不另设 `missing` 列表——`to` 是否在 `issues` 里由调用方自己比对；`show` 本轮不放原始 diff；`--toon` 仍未评估。

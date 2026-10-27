@@ -41,6 +41,7 @@ worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里�
 // usageOtherFlags are the per-command flags that are not the do/commit surface.
 const usageOtherFlags = `
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）  --json（机器可读输出）
+path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接给多条 issue）
 show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
 worktree list 的 flags:  --json（机器可读输出）
 status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
@@ -57,7 +58,7 @@ var retiredCommands = map[string]string{"workspace": "worktree"}
 var usageCommands = [][2]string{
 	{"kiln do <issue> <action> [flags]", "生成规范提交信息（不写文件）"},
 	{"kiln commit <issue> <action> [--only <paths>] [flags]", "用规范信息直接提交（--only 只提交列出的路径）"},
-	{"kiln path <issue>", "重建问题的研究路径（可加 --stat / --shortstat / --json）"},
+	{"kiln path [<issue>|--all]", "重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）"},
 	{"kiln show <issue> [n|action]", "展开某个动作的完整变更（可加 --stat / --json）"},
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
@@ -983,21 +984,50 @@ func areaRole(a vcs.WorkspaceInfo) string {
 
 func (e *env) path(args []string) int {
 	pos, f := parse(args)
-	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat", "json"))
-	if len(pos) < 1 {
-		fmt.Fprintln(e.errw, i18n.T("用法: kiln path <issue> [--stat|--shortstat] [--json]"))
+	warnUnknownFlags(e.errw, f, allowedFlags("stat", "shortstat", "json", "all"))
+	// Every path flag is a switch. The parser treats any following non-flag token
+	// as its value, which would swallow a positional id (`path --all alpha`), so
+	// a value on a switch is refused instead of silently dropped.
+	for _, name := range []string{"all", "json", "stat", "shortstat"} {
+		if v := f.get(name); v != "" {
+			fmt.Fprint(e.errw, i18n.T("flag --%s 不接受值: %s\n", name, v))
+			return 2
+		}
+	}
+	all := f.has("all")
+	if len(pos) == 0 && !all {
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln path <issue> [--stat|--shortstat] [--json] | kiln path --all --json"))
+		return 2
+	}
+	if all && len(pos) > 0 {
+		fmt.Fprintln(e.errw, i18n.T("--all 与 issue 参数不能同用"))
+		return 2
+	}
+	// Batch is JSON-only: the text view is a reading layout (one path, stats
+	// nested under each action), while the batch exists to feed a consumer.
+	// Refusing beats silently rendering only the first argument, which is what
+	// this command used to do.
+	if (all || len(pos) > 1) && !f.has("json") {
+		fmt.Fprintln(e.errw, i18n.T("批量取路径只支持 --json（--all 或多条 issue）"))
 		return 2
 	}
 	repo, code := e.loadRepo()
 	if repo == nil {
 		return code
 	}
+	mode := statMode(f)
+	if all || len(pos) > 1 {
+		ids := pos
+		if all {
+			ids = engine.IDs(repo)
+		}
+		return e.pathBatch(repo, ids, mode)
+	}
 	p, ok := repo.Issues[pos[0]]
 	if !ok {
 		fmt.Fprint(e.errw, i18n.T("未找到问题: %s\n", pos[0]))
 		return 1
 	}
-	mode := statMode(f)
 	if f.has("json") {
 		return e.pathJSON(repo, p, mode)
 	}
@@ -1120,9 +1150,10 @@ func (e *env) show(args []string) int {
 	return 0
 }
 
-// pathDoc is `kiln path --json`: the whole research path as one object. Actions
-// keep their 1-based ordinal and full commit hash, so a caller can address
-// `kiln show` without parsing the text view.
+// pathDoc is `kiln path --json` for one issue: the whole research path as one
+// object. Actions keep their 1-based ordinal and full commit hash, so a caller
+// can address `kiln show` without parsing the text view. A batch wraps these in
+// pathBatchDoc unchanged, so one path reads the same either way.
 type pathDoc struct {
 	Issue     string       `json:"issue"`
 	Action    string       `json:"action"`
@@ -1130,6 +1161,30 @@ type pathDoc struct {
 	Actions   []pathAction `json:"actions"`
 	Relations []graphEdge  `json:"relations"`
 }
+
+// pathBatchDoc is `kiln path --all --json` / `kiln path <id> <id> --json`: one
+// process, every requested path. issues is always an array (empty, never null);
+// a request that could not be answered is named in errors instead of aborting
+// the whole document.
+type pathBatchDoc struct {
+	Issues []pathDoc        `json:"issues"`
+	Errors []pathBatchError `json:"errors,omitempty"`
+}
+
+// pathBatchError is one id that did not make it into issues. The code is a
+// language-neutral token, not a translated sentence: JSON is data, so the same
+// repository must produce the same bytes whatever --lang says.
+type pathBatchError struct {
+	Issue string `json:"issue"`
+	Error string `json:"error"`
+}
+
+// pathBatchError codes. unknown-issue means the id was never opened; stat-failed
+// means the backend could not produce that action's diffstat.
+const (
+	errUnknownIssue = "unknown-issue"
+	errStatFailed   = "stat-failed"
+)
 
 // pathAction is one action in the path: what it did, when, under which hash,
 // and — with --stat / --shortstat — the diffstat that belongs to it.
@@ -1180,21 +1235,61 @@ type worktreeEntry struct {
 // understands `graph --json` needs nothing new. With --stat / --shortstat the
 // diffstat travels in each action's stat field instead of replacing the view.
 func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
+	backend, code := e.statBackend(mode)
+	if code != 0 {
+		return code
+	}
+	doc, err := e.pathDocOf(p, mode, backend, engine.FoldEdges(repo, e.rel()))
+	if err != nil {
+		fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
+		return 1
+	}
+	return e.writeJSON(doc)
+}
+
+// pathBatch renders several paths as one document. --all follows engine.IDs
+// (sorted by id); explicitly named ids keep the order they were given. A single
+// bad id does not sink the document — it lands in errors, the rest still print,
+// and the exit code stays non-zero so a script can notice.
+func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
+	backend, code := e.statBackend(mode)
+	if code != 0 {
+		return code
+	}
+	edges := engine.FoldEdges(repo, e.rel())
+	doc := pathBatchDoc{Issues: make([]pathDoc, 0, len(ids))}
+	for _, id := range ids {
+		p, ok := repo.Issues[id]
+		if !ok {
+			doc.Errors = append(doc.Errors, pathBatchError{Issue: id, Error: errUnknownIssue})
+			continue
+		}
+		d, err := e.pathDocOf(p, mode, backend, edges)
+		if err != nil {
+			doc.Errors = append(doc.Errors, pathBatchError{Issue: id, Error: errStatFailed})
+			continue
+		}
+		doc.Issues = append(doc.Issues, d)
+	}
+	if code := e.writeJSON(doc); code != 0 {
+		return code
+	}
+	if len(doc.Errors) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// pathDocOf fills one path document without writing it. The folded edges are
+// passed in so a batch folds them once instead of once per issue; backend may be
+// nil when no stats were asked for.
+func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edges []engine.Edge) (pathDoc, error) {
 	doc := pathDoc{
 		Issue:     p.ID,
 		Action:    p.State(),
 		Done:      e.isDone(p),
 		Actions:   make([]pathAction, 0, len(p.Actions)),
-		Relations: incidentEdges(repo, e.rel(), p.ID),
-	}
-	var backend vcs.Repo
-	if mode != statNone {
-		b, err := e.backend()
-		if err != nil {
-			fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
-			return 1
-		}
-		backend = b
+		Relations: incidentEdges(edges, e.rel(), p.ID),
 	}
 	for i, a := range p.Actions {
 		item := pathAction{
@@ -1208,21 +1303,34 @@ func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
 		if mode != statNone {
 			stat, err := backend.ShowStat(a.ID, mode == statShort)
 			if err != nil {
-				fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
-				return 1
+				return pathDoc{}, err
 			}
 			item.Stat = strings.TrimSpace(stat)
 		}
 		doc.Actions = append(doc.Actions, item)
 	}
-	return e.writeJSON(doc)
+	return doc, nil
+}
+
+// statBackend opens the backend a stat-carrying view needs. A view without stats
+// works straight from the aggregated history and opens nothing.
+func (e *env) statBackend(mode statDisplay) (vcs.Repo, int) {
+	if mode == statNone {
+		return nil, 0
+	}
+	b, err := e.backend()
+	if err != nil {
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
+		return nil, 1
+	}
+	return b, 0
 }
 
 // incidentEdges returns the folded edges touching one issue, declared arrow and
 // ordering included — the same shape `graph --json` writes.
-func incidentEdges(repo *model.Repo, rel *model.RelationSet, id string) []graphEdge {
+func incidentEdges(edges []engine.Edge, rel *model.RelationSet, id string) []graphEdge {
 	out := make([]graphEdge, 0, 2)
-	for _, ed := range engine.FoldEdges(repo, rel) {
+	for _, ed := range edges {
 		if ed.From != id && ed.To != id {
 			continue
 		}

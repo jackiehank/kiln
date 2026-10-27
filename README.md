@@ -100,7 +100,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | --- | --- |
 | `kiln do <issue> <action> [flags]` | 生成规范提交信息（**只打印，不提交**） |
 | `kiln commit <issue> <action> [--only <paths>] [flags]` | 用规范信息直接提交；默认提交整个工作区（快照），`--only` 只提交列出的路径；stdout 先报 `将提交 N 个文件: …`，末尾报 `已提交 <hash> · <action> · <issue>` |
-| `kiln path <issue>` | 重建该 issue 的研究路径；`--stat` 逐动作附文件统计、`--shortstat` 每动作一行总计 |
+| `kiln path <issue>` | 重建该 issue 的研究路径；`--stat` 逐动作附文件统计、`--shortstat` 每动作一行总计；`--json` 出单对象，`--all --json`（或给多条 issue）一次进程读全仓 |
 | `kiln show <issue> [n\|action]` | 展开某个动作的完整变更（默认最后一个；`n` 是 `path` 里的序号，**也可给动作名**——取该动作**最后一次**，有多个会在 stderr 提示，没有则列出可控序号）；`--stat` 只给文件统计 |
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
@@ -115,7 +115,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 
 `do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag`；关系：`--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate`（均可重复、逗号分隔；别名 `--derived-from` / `--spawns` 同样接受）。
 另：`commit --force`（一次性豁免，见「工作区模式」）、`commit --only <paths>`（只提交列出的路径，逗号分隔或重复给）。
-`--json`：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都支持（机器可读输出，见「机器可读输出」）。
+`--json`：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都支持（机器可读输出，见「机器可读输出」）；`path` 可加 `--all` 一次读全仓（或直接给多条 issue），仅与 `--json` 同用。
 
 ## 动作词表
 
@@ -268,6 +268,7 @@ $ kiln check
 kiln status --json
 kiln list --json --domain=design
 kiln check --json
+kiln path --all --json
 ```
 
 ```json
@@ -287,6 +288,7 @@ kiln check --json
 - **`check` 用 rule 码说话**：`start-action` / `terminal-action` / `relation-target` / `unknown-trailer` / `complete`——不吐中文判据；`ok` **与退出码同义**（有 `✗` 才 `false` / 退出 1）。
 - **缺省即省略**（省略 = 没有），**布尔恒显**（`false` 是判定结果，不是"没有"）。
 - **stdout 只放一个 JSON 文档**：提示、legend、报错一律在 stderr，退出码与文本视图一致。
+- **`path --all --json` 一次进程读全仓**：`{"issues":[<单条 path 文档>…]}`，每项与 `kiln path <id> --json` 逐字节同形。显式给多条 issue 时保持给定顺序，`--all` 按 id 字典序；单条取不到不拖垮整份——该条进 `errors`（`unknown-issue` / `stat-failed`），其余照出，退出码 1。批量只服务 `--json`（文本视图一次只展开一条）。
 
 ## 与 agent 协作
 
@@ -294,7 +296,7 @@ kiln 的模型天生适合 agent：
 
 - **约定只一条**：做研究动作时用 `kiln commit`（或 `git commit -m "$(kiln do …)"`）。告诉 agent 这一句就够了。
 - **先开单再落代码**：`ask` 动作里只放 issue doc，提交后再写实现。按顺序做不需要任何额外能力；确实要反过来做时，用 `kiln commit … --only docs/<issue>.md` 只提交 doc（两后端一致），不必把代码挪开。见 [docs/commit-order.md](docs/commit-order.md)、[docs/commit-scope.md](docs/commit-scope.md)。
-- **结构化输出**：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 加 `--json` 后都是**真正的**机器可读格式，stdout 只放一个 JSON 文档；`graph` 另有 `--mermaid`（流程图文本），`graph --json --issue <id> --depth N` 只出该 issue 的无向邻域。见「机器可读输出」。
+- **结构化输出**：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 加 `--json` 后都是**真正的**机器可读格式，stdout 只放一个 JSON 文档；`path --all --json` 一次进程给全部研究路径（省掉 N 次启动），`graph` 另有 `--mermaid`（流程图文本），`graph --json --issue <id> --depth N` 只出该 issue 的无向邻域。见「机器可读输出」。
 - **诚实**：`check` 会把"缺终点动作""关系目标不存在""不认识的 trailer 键"这类结构问题直接指出来（`--json` 下给的是 rule 码，不是中文）。
 - **隔离**：并行 agent 用 `kiln worktree new` 各占一个区，从**结构上**消除互相污染。
 
