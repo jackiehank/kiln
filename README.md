@@ -42,7 +42,7 @@ kiln 把两样东西都拆成**原子**，再让复杂性从**组合**里长出�
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.1.0` 之类的版本写法固定版本。
+二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.2.0` 之类的版本写法固定版本。
 
 **2. 自己构建（单文件、零外部依赖）**
 
@@ -54,9 +54,9 @@ go build -o kiln ./cmd/kiln
 
 **3. 下载预编译二进制**
 
-从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。每个 `v*` tag 由 GitHub Actions 构建五个产物：Windows amd64、macOS arm64/amd64、Linux amd64/arm64，并附 `checksums.txt`；Termux 等 arm64 Linux 环境取 `kiln_linux_arm64`。tag 需是 `v0.x` / `v1.x`——模块路径没有 `/v2`，更高的主版本会被 Go 的版本戳忽略。预编译产物随首个 release 发布；在此之前请用上面两种方式。
+从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。每个 `v*` tag 由 GitHub Actions 构建五个产物：Windows amd64、macOS arm64/amd64、Linux amd64/arm64，并附 `checksums.txt`；Termux 等 arm64 Linux 环境取 `kiln_linux_arm64`。tag 需是 `v0.x` / `v1.x`——模块路径没有 `/v2`，更高的主版本会被 Go 的版本戳忽略。
 
-单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.1.0`）。
+单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.2.0`）。
 
 ## 五分钟上手
 
@@ -117,6 +117,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 
 `do` / `commit` 的 flags：`--title --refs --target --scope --domain --tag`；关系：`--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate`（均可重复、逗号分隔；别名 `--derived-from` / `--spawns` 同样接受）。
 `--title` **必填**（trim 后非空，`do` 与 `commit` 同判）；**值以 `--` 开头时写 `--flag=值`**——空格形式会被当成缺值而拒绝（`--title --force` 报错，不会把 `--force` 吃掉）。
+`--target` 声明的每个路径都必须在**本次提交的文件**里（`--only` 时以 `--only` 为准），否则 `do` / `commit` 直接拒绝（exit 1）——写侧护栏，不是事后审计。
 另：`commit --force`（一次性豁免，见「工作区模式」）、`commit --only <paths>`（只提交列出的路径，逗号分隔或重复给）。
 `--json`：`status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` 都支持（机器可读输出，见「机器可读输出」）；`path` 可加 `--all` 一次读全仓（或直接给多条 issue），仅与 `--json` 同用。
 
@@ -147,7 +148,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `issue:` | issue ID（单段 kebab-case slug，如 `session-expiry`）；**写侧会归一化**（大小写 / `_` / 连续 `-`），对**已有起点动作**的 issue 再 `ask` 会被拒绝（见 [docs/mvp-plan.md](docs/mvp-plan.md) §2.4） |
 | `action:` | 动作类型（上表词表里的一员） |
 
-**可选（描述）**：`title:` 人类可读标题 ｜ `refs:` 引用的对象 ｜ `target:` 涉及的文件 ｜ `scope:` 描述性范围 ｜ `domain:` 领域分类 ｜ `tags:` 标签
+**可选（描述）**：`title:` 人类可读标题 ｜ `refs:` 引用的对象 ｜ `target:` 涉及的文件（**必须在本次改动里**；可逗号写多个） ｜ `scope:` 描述性范围 ｜ `domain:` 领域分类 ｜ `tags:` 标签
 
 **可选（关系）**
 
@@ -182,7 +183,7 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 
 ```jsonc
 {
-  // action 词表：每个项目可以不同——这是 kiln 的自定义点
+  // action 词表：每个项目可以不同——这是 kiln 唯一可配的词表（relation 词表固定 9 名）
   "actions": {
     "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
     "start": "ask",
@@ -206,7 +207,7 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 ```sh
 kiln worktree new cli-necessity      # 建区（<仓库根>/.kiln/ws/cli-necessity）
 cd .kiln/ws/cli-necessity            # 进去干活
-kiln commit cli-necessity test ...   # 在这里提交
+kiln commit cli-necessity test --title "…" ...   # 在这里提交
 ```
 
 - **`worktree` 键默认 `off`**：开箱即用，在 main 上直接 `kiln commit` 就是允许的。要隔离就在配置里显式写 `"worktree": "on"`：此时在 main 上直接 `kiln commit` 会被**结构性拒绝**，并提示你先建区；想“就这一次在 main 提交”→ 加 `--force`（**一次性豁免**，不改配置、不留状态）。
@@ -306,7 +307,7 @@ kiln 的模型天生适合 agent：
 
 ## 它不做什么
 
-- 不建文件（`q1.md` 这类记录由人或 agent 自己建）；不看 diff、不区分变更类型；
+- 不建文件（`q1.md` 这类记录由人或 agent 自己建）；**不区分变更类型**——变更展示委托 git（`--stat` / `show`），写侧只为 `--target` 看一眼本次的文件清单；
 - 不建中央注册表 / 索引 / 数据库——状态全在提交信息里；
 - 不做模式切换（没有"纯变更模式 / 记录模式"之分，一切靠 trailer 约定）；
 - 不编排你的工作流（不跑构建、不装依赖、不钉 cwd）；
@@ -321,6 +322,7 @@ kiln 的模型天生适合 agent：
 
 ## 延伸阅读
 
+- [docs/design.md](docs/design.md) —— **理念**：两个原子、七条张力裁定、5 条判据；**当前快照，不是契约**。
 - [docs/mvp-plan.md](docs/mvp-plan.md) —— **规格**：核心约定、trailer 规范、命令面、`check` 规则、设计原则。改 kiln 之前先读它。
 - [docs/](docs/) —— 每个设计决定一份记录（`worktree-mode.md` / `worktree-include.md` / `config-home.md` …）：为什么长成这样、当时试过什么、放弃了什么。
 - 模块地图：`cmd/kiln`（入口）｜`internal/model`（领域类型）｜`internal/config`（配置）｜`internal/trailer`（提交信息解析）｜`internal/vcs`（后端接口 + `git` / `jj` 两个适配器 + 播种）｜`internal/engine`（聚合：path / check / status / list / graph）｜`internal/cli`（子命令与渲染）。分层约束：`cli → engine → (vcs, model)`，引擎不直接 exec。

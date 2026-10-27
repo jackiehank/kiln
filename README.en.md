@@ -40,7 +40,7 @@ Pick one of three ways.
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-The binary lands in `$GOBIN` (default `$(go env GOPATH)/bin`, on Windows `%USERPROFILE%\go\bin`); make sure it is on `PATH`. Pin a version with `@v0.1.0` if you like.
+The binary lands in `$GOBIN` (default `$(go env GOPATH)/bin`, on Windows `%USERPROFILE%\go\bin`); make sure it is on `PATH`. Pin a version with `@v0.2.0` if you like.
 
 **2. Build it yourself (single binary, no external dependencies)**
 
@@ -52,9 +52,9 @@ go build -o kiln ./cmd/kiln
 
 **3. Download a prebuilt binary**
 
-Take the artifact for your platform from [Releases](https://github.com/jackiehank/kiln/releases) and put it on `PATH` (Windows: `kiln.exe`). Every `v*` tag is built by GitHub Actions into five artifacts — Windows amd64, macOS arm64/amd64, Linux amd64/arm64 — plus `checksums.txt`; Termux and other arm64 Linux environments take `kiln_linux_arm64`. The tag must be `v0.x` / `v1.x`: the module path has no `/v2`, so Go's version stamping ignores a higher major. Prebuilt artifacts ship with the first release; until then use one of the two methods above.
+Take the artifact for your platform from [Releases](https://github.com/jackiehank/kiln/releases) and put it on `PATH` (Windows: `kiln.exe`). Every `v*` tag is built by GitHub Actions into five artifacts — Windows amd64, macOS arm64/amd64, Linux amd64/arm64 — plus `checksums.txt`; Termux and other arm64 Linux environments take `kiln_linux_arm64`. The tag must be `v0.x` / `v1.x`: the module path has no `/v2`, so Go's version stamping ignores a higher major.
 
-A single-binary CLI, with no `require` in `go.mod`. `kiln --version` tells you which build you run (release artifacts print the tag, e.g. `v0.1.0`).
+A single-binary CLI, with no `require` in `go.mod`. `kiln --version` tells you which build you run (release artifacts print the tag, e.g. `v0.2.0`).
 
 ## Five-minute tour
 
@@ -117,6 +117,7 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 
 `do` / `commit` flags: `--title --refs --target --scope --domain --tag`; relations: `--blocks --blocked-by --part-of --has-part --relates-to --caused-by --causes --supersedes --superseded-by --unrelate` (all repeatable, comma-separated; the aliases `--derived-from` / `--spawns` are accepted too).
 `--title` is **required** (non-blank after trimming; `do` and `commit` judge it the same way); **a value that starts with `--` is written `--flag=value`** — the space form is refused as a missing value (`--title --force` errors instead of swallowing `--force`).
+Every `--target` path must be among the files this commit records (`--only` narrows the set); otherwise `do` / `commit` refuse with exit 1 — a write-side guard, not a later audit.
 Also: `commit --force` (one-off waiver, see "Worktree mode"), `commit --only <paths>` (commit just the listed paths; comma-separated or repeated).
 `--json`: supported by `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` (machine-readable output, see "Machine-readable output"); `path` also takes `--all` to read the whole repository at once (or several issues directly), which works with `--json` only.
 
@@ -147,7 +148,7 @@ The vocabulary **may differ per repository** — it lives in the config (next se
 | `issue:` | Issue ID (a single-segment kebab-case slug such as `session-expiry`); **the write side normalizes it** (case / `_` / repeated `-`), and a second `ask` on an issue that already has a start action is refused (see [docs/mvp-plan.md](docs/mvp-plan.md) §2.4) |
 | `action:` | Action type (a member of the vocabulary above) |
 
-**Optional (description)**: `title:` human-readable title | `refs:` referenced objects | `target:` files involved | `scope:` descriptive scope | `domain:` classification | `tags:` tags
+**Optional (description)**: `title:` human-readable title | `refs:` referenced objects | `target:` files involved (**must be part of this change**; comma-separate several) | `scope:` descriptive scope | `domain:` classification | `tags:` tags
 
 **Optional (relations)**
 
@@ -182,7 +183,7 @@ The config file is `.kilnconfig.jsonc` at the **repository root** (JSONC: JSON +
 
 ```jsonc
 {
-  // action vocabulary: every project may differ — this is kiln's customization point
+  // action vocabulary: every project may differ — the only vocabulary kiln lets you configure (relations are fixed at 9)
   "actions": {
     "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
     "start": "ask",
@@ -206,7 +207,7 @@ Agents working in parallel pollute each other: in one working copy, two agents' 
 ```sh
 kiln worktree new cli-necessity      # create the worktree (<repo root>/.kiln/ws/cli-necessity)
 cd .kiln/ws/cli-necessity            # work in it
-kiln commit cli-necessity test ...   # commit here
+kiln commit cli-necessity test --title "…" ...   # commit here
 ```
 
 - **The `worktree` key defaults to `off`**: out of the box, `kiln commit` on main is allowed. For isolation write `"worktree": "on"` in the config: then a direct `kiln commit` on main is **structurally refused** with a hint to create a worktree first; to commit on main "just this once", add `--force` (a **one-off waiver** that changes no config and leaves no state).
@@ -306,7 +307,7 @@ kiln's model suits agents naturally:
 
 ## What it does not do
 
-- It creates no files (records like `q1.md` are written by a human or agent); it reads no diffs and does not classify changes;
+- It creates no files (records like `q1.md` are written by a human or agent); it **does not classify changes** — change display is delegated to git (`--stat` / `show`), and the write side only glances at the file list for `--target`;
 - It has no central registry / index / database — all state is in commit messages;
 - It has no mode switch (no "changes-only mode vs record mode"; everything is trailer convention);
 - It does not orchestrate your workflow (no builds, no dependency installs, no pinned cwd);
@@ -321,6 +322,7 @@ kiln's model suits agents naturally:
 
 ## Further reading
 
+- [docs/design.md](docs/design.md) — **the philosophy**: two atoms, the seven tension rulings, five criteria; **a snapshot, not a contract**.
 - [docs/mvp-plan.md](docs/mvp-plan.md) — **the specification**: core conventions, trailer rules, command surface, `check` rules, design principles. Read it before changing kiln.
 - [docs/](docs/) — one record per design decision (`worktree-mode.md` / `worktree-include.md` / `config-home.md` …): why it looks like this, what was tried, what was dropped.
 - Module map: `cmd/kiln` (entry) | `internal/model` (domain types) | `internal/config` (config) | `internal/trailer` (message parsing) | `internal/vcs` (backend interface + `git` / `jj` adapters + seeding) | `internal/engine` (aggregation: path / check / status / list / graph) | `internal/cli` (subcommands and rendering). Layering: `cli → engine → (vcs, model)`; the engine never execs directly.
