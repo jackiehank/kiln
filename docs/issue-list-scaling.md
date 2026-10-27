@@ -308,3 +308,57 @@ fzf / skim 把"交互式搜索"做成独立工具（TUI、模糊评分、预览�
 - Homebrew：[brew(1) Manpage](https://docs.brew.sh/Manpage)（substring；`/re/` 才按正则）
 - npm：[npm-search](https://docs.npmjs.com/cli/v10/commands/npm-search)（`--searchlimit` 默认 20）
 - GNU grep：[grep(1)](https://www.gnu.org/software/grep/manual/grep.html)
+
+## hypothesize（2026-10-27，二版）：`list --search`，字面量 AND；不做独立 `search`
+
+> 一版的 `--match` 是暂名。collect 发现 **gh 已经把这组词用掉了**：查询串是 `--search`，`--match` 是"限定搜哪个字段"。kiln 跟这套词——查询叫 `--search`，`--match` 留给将来的字段收窄。
+
+### 1. 主张
+
+| # | 主张 | 证伪条件 |
+| --- | --- | --- |
+| **H6** | 形态：加在 `list` 上的 `--search <query>`，**不新增独立 `search` 命令** | 出现需要独立输出/排序的硬需求（best-match 排序、分页、跨仓搜索） |
+| **H7** | 默认：空格切词、**词间 AND**、**字面量子串**、**大小写不敏感**；`--regex` 本轮不做 | 真实查询大量依赖正则或模糊（"记得形状记不得字"），字面量召回明显不够 |
+| **H8** | 检索面 = **id + 当前标题 + 每个动作的 subject**；命中动作时行带命中来源（候选字段名 `hit`） | 字段收窄成为常态（只想搜标题），或"命中动作却无法指向单条"的比例 >30% |
+| **H9** | 非交互：**id 序、无相关度、无默认 limit、空结果 exit 0** | 结果集常态 >50 条（需要 limit + 截断提示）；或脚本明确依赖 grep 的"无命中 exit 1" |
+| **H10** | 交互（逐键、模糊、高亮、相关度）**留给 dsh-kiln**；kiln 不做 TUI | 出现"CLI 里也必须即按即搜"的真实场景 |
+
+### 2. 依据（来自 collect）
+
+- **形态**：gh 同时有 `gh search issues` 与 `gh issue list --search`，说明两种都正当；kiln 只有一种行（`listDoc`），`--search` 是"复用列表输出"的那半，先选它不需要新 schema。
+- **命名**：gh 的查询串叫 `--search`、字段收窄叫 `--match`（`{title|body|comments}`）。kiln 现在只需要"查询串"，所以 `--search`；`--match` 留着，等真有"只搜标题"的需求再用，两个词不抢。
+- **默认语义**：issue/记录类工具的共识是**关键词 + 多词 AND + 不区分大小写**（gh / GitHub / git-bug）；默认正则只是 grep 家族的传统。kiln 的用户"记得一个词"，不是"记得一个正则"。
+- **字段收窄**：gh 的 `--match`、git-bug 的 `--title` 都说明"默认宽、收窄可选"是对的；我们默认就落在最窄的语料上（id + 标题 + 动作 subject），连收窄都不急。
+- **退出码**：kubectl / docker 这类"列表过滤器"空结果 exit 0；grep 三态属于"搜索动词"。`list` 是前者，别混。
+- **limit**：gh 默认 30 是服务端分页的产物，且只写"最近 30"、不提示还有多少；kiln 的语料是本地全量，**不设默认 limit** 反而更诚实。
+- **交互**：fzf / skim 证明交互层是独立工具；dsh-kiln 的搜索框已经是这一层。
+
+### 3. 若成立，契约（落地按这个做）
+
+- **命令**：`kiln list [--search <query>] [--domain=] [--tag=] [--action=] [--status=] [--json]`；`--search` 只收一个串，**空串或纯空白 → exit 2**（不静默当没给）。
+- **匹配**：`strings.ToLower` 后逐词 `Contains`；词按空白切分；**所有词都要在 `id + 当前标题 + 所有动作 subject` 的并集里出现**（可分散在不同字段），不要求同一字段。
+- **命中来源**：若某个动作的 subject **包含全部词**，行带 `hit`（该 subject；多条符合取最早的一条）；若词分散在多个动作、没有单条全含，则 `hit` 省略（行仍保留）——宁可少解释，也不错指。
+- **输出**：JSON 复用 `listDoc`——`filter.search` 回显查询串、`issues[].hit` 仅在命中动作时出现；文本行给 **id + title**（命中动作时行尾 `← <subject>`），`--search` 之外的 `list` 文本维持现状。
+- **排序 / 截断 / 退出码**：id 序（`engine.Filter` 的输出顺序），无相关度；不设默认 limit；0 = 正常（含无命中），2 = 用法错误。
+- **不做**：`--regex`、模糊匹配、查询语言（`label:` 之类）、分页、TUI、颜色。
+
+### 4. 与一版假设的关系
+
+- 一版 H2 的**形态结论不变**（`list` 的过滤条件，不是新命令），**只把暂名 `--match` 改成 `--search`**；
+- 一版 H3（检索面 = id + 标题 + 动作标题）不变，此处把"动作标题"精确为 **subject**（`path` 文本里看到的那一行）；
+- 一版 H4（`list` 行补 `title`）已落地；`hit` 是它的补充：title 回答"是什么事"，hit 回答"为什么这条在结果里"；
+- 一版 H5（交互留插件）不变；"不搜正文"仍成立（collect 已核实语料只有标题）。
+
+### 5. 检验办法
+
+1. **命名**：拿 gh 用户的直觉对照——`--search` 放查询、`--match` 留字段，两者不抢词；如果试用时有人把 `--search` 当字段选择，说明这套词没对齐，再改。
+2. **召回对拍**：12 条查询（id / 当前标题 / 动作 subject / 只在历史正文里的词各 3 条）→ 与 dsh-kiln 的 `searchIssues` 比 id 集；唯一允许的差异来自 subject vs title（`f8413d8` 这种只有 subject 的动作）。
+3. **体量与成本**：`worktree` 10 条、`json` 12 条、`关系` 11 条、`搜索` 1 条、`i18n` 1 条 → 1–12 行、约 0.2–2 KB；一次 `list --search` 与 `list` 同量级（±20 ms）。
+4. **可解释性**：统计 `hit` 省略比例；>30% 就要么只搜标题、要么允许多行命中来源，别让结果"看起来没理由"。
+5. **空结果**：先按 exit 0 落；若真实脚本依赖"无命中 exit 1"，再讨论是不是该升级成独立 `search`（那时 grep 三态才适用）。
+
+### 6. 反方（保留）
+
+- **独立 `search` 的输出空间更大**：可以做相关度、分页、`--json` 字段选择；`list --search` 被 `listDoc` 绑死。若 agent 需要"最好的前 5 条"，现在的假设会挡路——但那也该先有需求。
+- **`--search` 与 `--status` 的组合语义**：`list --search=foo --status=open` 是 AND，够用；但有人会期望"搜索时忽略状态"——文档要写清是 AND，不搞隐式放宽。
+- **字面量的上限**：拼写记错、词序记错就搜不到；fzf 的模糊与 smart-case 是更好的手感，但那属于交互层。若 CLI 侧频繁抱怨"搜不到"，H7 会被推翻。
