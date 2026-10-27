@@ -93,6 +93,7 @@ var enCatalog = map[string]string{
 	"flag --%s 不接受值: %s\n":                                                         "flag --%s takes no value: %s\n",
 	"--status 只接受 open 或 done（当前: %s）\n":                                           "--status only accepts open or done (got: %s)\n",
 	"--search 需要一个非空查询串":                                                           "--search needs a non-empty query",
+	"没有匹配 %q 的 issue\n":                                                            "no issues match %q\n",
 	"批量取路径只支持 --json（--all 或多条 issue）":                                             "batch paths are JSON-only (--all or several issues)",
 	"重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）":                      "rebuild the issue's research path (--all reads the whole repository at once; add --stat / --shortstat / --json)",
 	"未找到问题: %s\n":                                                                  "no such issue: %s\n",

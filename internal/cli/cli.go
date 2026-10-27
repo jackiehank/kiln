@@ -1841,6 +1841,12 @@ func (e *env) list(args []string) int {
 	if len(terms) > 0 {
 		ids = e.filterSearch(repo, ids, terms)
 	}
+	// A search with no hits is a valid answer (exit 0), but silence reads like a
+	// broken command. The hint goes to stderr in both views, so a JSON consumer
+	// still gets exactly one document on stdout.
+	if len(terms) > 0 && len(ids) == 0 {
+		fmt.Fprint(e.errw, i18n.T("没有匹配 %q 的 issue\n", query))
+	}
 	if f.has("json") {
 		doc := listDoc{
 			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action, Status: status, Search: query},

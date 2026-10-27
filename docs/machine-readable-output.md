@@ -148,7 +148,7 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 要点：
 
 - **`--status=open|done`**：`done` = 最后一个动作属于 `actions.terminal`（默认 `conclude` / `apply`），与行里的 `done` **同一谓词**；`open` 是它的补集。非法值 exit 2，不静默回全量。**`done` 不是"永久关闭"**——终点动作之后仍可继续，再提交一个非终点动作就会回到 `open`（见 README「动作词表」与 `-h` 的 do/commit 说明）。
-- **`--search <query>`**：空白分词、**词间 AND**、**字面量**、**大小写不敏感**；每个词都要出现在 `id + 当前标题 + 所有动作 subject` 里（可分散在不同字段）。**不搜正文**（提交正文只有 trailer，没有散文）。空串 / 纯空白 query exit 2；**无命中是正常结果**：`count: 0`、`issues: []`、exit 0。
+- **`--search <query>`**：空白分词、**词间 AND**、**字面量**、**大小写不敏感**；每个词都要出现在 `id + 当前标题 + 所有动作 subject` 里（可分散在不同字段）。**不搜正文**（提交正文只有 trailer，没有散文）。空串 / 纯空白 query exit 2；**无命中是正常结果**：`count: 0`、`issues: []`、exit 0，并在 **stderr** 给一行 `没有匹配 "<query>" 的 issue`（stdout 仍只有一个文档）。
 - **`list` 不报 `worktree`**：`■` 与 worktree 段**只在 `status` 出现**，这是 `worktree-hint` 已定的"读命令不加 worktree 噪声"；为它给 `list` 多起一次后端查询不值得。
 - **行 schema 与 `status` 的重叠部分是契约**（`id` / `domain` / `action` / `done` / `title`）：同一套字段名，消费方一份解码器覆盖两个命令。
 

@@ -406,3 +406,11 @@ fzf / skim 把"交互式搜索"做成独立工具（TUI、模糊评分、预览�
 - 唯一的实现取舍：**`hit` 只在 id + 标题解释不了时出现**（见上）。
 - 未做：`--regex`、模糊、查询语言、`--match` 字段收窄、`--limit`、独立 `search`。
 - 下一步是 `apply`（把这套契约定性）还是先观察使用手感，待定。
+
+## test（2026-10-27，续）：0 命中提示与 `--json` 复核
+
+- **0 命中**：文本与 `--json` **都**在 **stderr** 打一行 `没有匹配 "<query>" 的 issue`，exit 0；JSON 的 stdout 仍只有一个文档（`count: 0` / `issues: []`）。之前是纯静默，终端里像"命令没执行"。
+- **`--json` 字段复核**：`filter.search` 回显查询串、`issues[].hit` 只在 id + 标题解释不了命中时出现——这两项在 `cb5730a` 已随实现落地；本轮只补测试把契约钉住，没有新增字段。
+- 测试：`TestListSearchNoMatchIsNotAnError` 扩成"两种模式都断言 stderr 提示"；其余 6 条不变。
+- 文档：`docs/machine-readable-output.md` 的 `--search` 要点补 0 命中约定；README 双语机器可读示例加 `kiln list --json --search=worktree`。
+- 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `list --search=zzz` → stderr 提示、stdout 空、exit 0；`list --search=zzz --json` → stdout 一份文档 + 同一行 stderr 提示。

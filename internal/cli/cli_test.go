@@ -2136,7 +2136,8 @@ func TestListSearchLeavesHitEmptyWhenTermsSplitAcrossActions(t *testing.T) {
 	}
 }
 
-// No match is a valid answer: exit 0, an empty array, and an empty text view.
+// No match is a valid answer: exit 0, an empty array, and a hint on stderr so a
+// silent terminal does not read like a broken command.
 func TestListSearchNoMatchIsNotAnError(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := newSearchEnv(&out, &errb).list([]string{"--json", "--search", "zzz"}); code != 0 {
@@ -2144,6 +2145,9 @@ func TestListSearchNoMatchIsNotAnError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"count": 0`) || !strings.Contains(out.String(), `"issues": []`) {
 		t.Fatalf("no-match JSON = %s", out.String())
+	}
+	if !strings.Contains(errb.String(), `没有匹配 "zzz" 的 issue`) {
+		t.Fatalf("json no-match must hint on stderr, got %q", errb.String())
 	}
 
 	out.Reset()
@@ -2153,6 +2157,9 @@ func TestListSearchNoMatchIsNotAnError(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("no-match text wrote stdout: %q", out.String())
+	}
+	if !strings.Contains(errb.String(), `没有匹配 "zzz" 的 issue`) {
+		t.Fatalf("text no-match must hint, got %q", errb.String())
 	}
 }
 

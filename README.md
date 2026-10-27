@@ -267,6 +267,7 @@ $ kiln check
 ```sh
 kiln status --json
 kiln list --json --domain=design
+kiln list --json --search=worktree
 kiln check --json
 kiln path --all --json
 ```

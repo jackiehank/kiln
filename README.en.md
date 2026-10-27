@@ -269,6 +269,7 @@ The convention: **only `✗` (errors) make `check` exit non-zero**; `⚠` merely
 ```sh
 kiln status --json
 kiln list --json --domain=design
+kiln list --json --search=worktree
 kiln check --json
 kiln path --all --json
 ```
