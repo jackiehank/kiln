@@ -414,3 +414,62 @@ fzf / skim 把"交互式搜索"做成独立工具（TUI、模糊评分、预览�
 - 测试：`TestListSearchNoMatchIsNotAnError` 扩成"两种模式都断言 stderr 提示"；其余 6 条不变。
 - 文档：`docs/machine-readable-output.md` 的 `--search` 要点补 0 命中约定；README 双语机器可读示例加 `kiln list --json --search=worktree`。
 - 复核：`gofmt` / `go vet` / `go test ./...` 全过；真仓 `list --search=zzz` → stderr 提示、stdout 空、exit 0；`list --search=zzz --json` → stdout 一份文档 + 同一行 stderr 提示。
+
+## 结论（2026-10-27）：issue 多了做“能筛、能搜、能解释命中”，不做截断
+
+### 主张（定稿）
+
+几十上百条 issue 时，kiln **不截断、不分页、不做独立 `search`**；可发现性由两件事承担：
+
+1. **字段过滤**：`list --domain=` / `--tag=` / `--action=` / `--status=open|done`，条件之间 AND。
+2. **`list --search`**：空白分词、**词间 AND**、**字面量**、**大小写不敏感**；检索面 = issue id + 当前标题 + **所有动作的 subject**（可分散在不同字段）。
+   - 文本：`id + 状态 + 标题`，命中动作解释不了行内信息时行尾 `← <subject>`；
+   - JSON：`filter.search` 回显查询串，`issues[].hit` 只在 id + 标题解释不了命中时出现（`ordinal` + `action` + `commit` + `subject`）；
+   - 0 命中：exit 0，stderr 一行提示，stdout 仍只有一份文档（`--json` 时）。
+
+### 为什么不是别的
+
+- **不截断/分页**：issue 是 git 历史的派生视图，全量读取是 100ms 级（collect 实测 `path --all` 121 KB / 102 ms，现在 130 KB）；截断只会制造“看不见”的错误，且分页要求调用方维护游标。
+- **不做独立 `search`**：输出空间已被 `listDoc` 覆盖；相关度与分页没有真实需求（一版假设被二版取代的直接原因）。
+- **不搜正文**：本仓 261 个动作提交里 0 条散文 body，正文只有 trailer——没有可搜的正文。
+- **不在 CLI 做模糊/正则**：交互层已有 fzf；CLI 要的是可脚本化的字面量语义（grep 家族的先例）。
+- **不做 `--match` 字段收窄**：等“想只搜标题”的真实需求，再加一个键，不动现有语义。
+
+### 落地轨迹
+
+| 动作 | 提交 | 内容 |
+| --- | --- | --- |
+| ask | `4b6da87` | 列出 issue 的命令要不要全量输出 |
+| collect | `a6b0def` | 现仓基线：status 70 行 / 17 KB、path --all 121 KB / 102 ms、dsh-kiln 客户端筛选 |
+| hypothesize | `2351cd9` | 只做过滤式搜索，不截断、不搜正文 |
+| apply | `8b2d3d6` | `list --json` 行补 `title` |
+| apply | `40405da` | `list --status=open\|done` |
+| collect | `dcfc462` | 9 条 CLI 搜索共识（grep / rg / fzf / gh / git-bug / kubectl …） |
+| hypothesize | `9eae800` | 二版：`list --search`，不做独立 search；`--match` 留给将来 |
+| test | `cb5730a` | `--search` 落地并验证（6 条测试 + 真仓冒烟） |
+| test | `57d7151` | 0 命中提示 + `--json` 契约复核 |
+| **conclude** | 本次 | 定性并收尾 |
+
+### 复核（当前仓：62 issue / 280 动作 / 3 domain）
+
+- `list --search=worktree` → 11 条，其中 3 条带 `hit`；`--search=json`、`--search=缓存` 等按同一规则；
+- `list --search=zzz` → exit 0、stdout 72 B、stderr `没有匹配 "zzz" 的问题`；
+- `list --search=` / 纯空白 → exit 2；
+- `list --search=worktree --status=open` → 0 条（命中的都已收尾）——AND 语义；
+- 文本行形如 `help-relation-flags  apply  <标题>  ← <命中的动作>`；标题已能解释命中时不加箭头；
+- `go test ./...` 全过；`kiln check` 54 ok / 8 warn / 0 error。
+
+### 与后续改动的对齐
+
+- 0 命中措辞在 `cli-consistency` 批 C 由 `…的 issue` 改为 `…的问题`（本文件 test 节保留当时原文作过程记录）；
+- 同批 B 起，**重复 `--search` 是 exit 2**（以前后者胜、静默丢弃前一个查询）；`list --tag` 收为单标签、`--action` 按词表校验——都是 `cli-consistency` 的收口，不改变本 issue 的搜索契约。
+
+### 仍未做（有意，非遗漏）
+
+`--match` 字段收窄、`--limit`、`--regex`、模糊匹配、查询语言、独立 `search`、相关度排序、正文检索。
+
+**触发条件**：出现“搜不到 / 结果太多”的真实抱怨，或消费方需要稳定的“前 N 条”。届时先加 `--match` 与 `--limit` 两个键，不推翻现有语义。
+
+### 一句话
+
+issue 多了不需要“少给”，需要“**能筛、能搜、能解释命中**”。kiln 用 `list` 的三个过滤键加一个字面量搜索键做到了，没有新增命令，也没有让默认输出变形。
