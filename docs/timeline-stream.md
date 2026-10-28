@@ -484,3 +484,73 @@ timeline 的组织原则是“**按时间看模型的原子**”，这是现有�
 4. NDJSON 与“一份文档”规则、`--limit`/jj/broken pipe、字段（`title` 取 subject；`domain` 的 per-commit 语义）如何定？
 5. 现在做，还是等 webui/tui 真正开工再做（YAGNI 的时机裁决）？
 6. 若不做命令：是接受“各客户端直读 git + 各自的 trailer 解析”，还是接受“消费方自己展平 `path --all --json`”？这两条都要明确写，不能留空。
+
+## conclude（2026-10-28）：需要 action 级全局视图；入口独立、名称待定
+
+### 0. 裁决
+
+| 项 | 决定 |
+| --- | --- |
+| 要不要做 | **要**：kiln 需要一个 action 粒度的全局视图（模型原子索引） |
+| 分类 | `cli-necessity` 的**综合视图**；只有“只透传 commit/date/message”的实现才是 `git log` 包装 |
+| 入口形态 | **独立读取入口**（首选）；不复用 `path` |
+| 命令名 | **未定**；`timeline` 只是当前讨论用名，`log` / `actions` / 其他都可再议 |
+| 交付层 | 流式 / NDJSON / `--limit` 属于交付，不是必要性来源；按 test 的 commit-graph 分档验收 |
+| 契约细节 | 字段、NDJSON 与“一份文档”规则、jj、broken pipe、空仓——`apply` 前定 |
+| 实现时机 | 本 issue **不决定**“现在做还是等 webui/tui”；这是下一步的 YAGNI 裁决 |
+
+### 1. 为什么是“视图”，不是“多一个排序”
+
+| 问题 | 现有命令 | 状态 |
+| --- | --- | --- |
+| 有哪些 issue？ | `list` | 有 |
+| 一个 issue 的完整路径？ | `path <issue>` | 有 |
+| 一个动作的详情？ | `show <issue> n` | 有 |
+| 全部 issue 按 domain / 关系？ | `status` / `graph` | 有 |
+| **全部 action 按全局时间？** | **没有** | **缺** |
+
+action 是 kiln 模型的最小单位；issue 索引（`list`）、issue 详情（`path`）、动作详情（`show`）都有，唯独没有**动作索引**。这个缺口不是“`path --all` 再排一次”，而是少了一个与 `list` 对称的组织原则：**按时间看模型的原子**。
+
+`path --all` 按 issue 分组、按 id 排；`git log` 按 commit 排、不认识 action；两者都不能直接回答“全局最近发生了哪些动作”。
+
+### 2. 为什么不是 `git log` 包装
+
+- 它只输出 `issue + action` 的提交，过滤 chore / merge / 普通提交；
+- 它输出 `issue / action / domain / tags` 等模型字段，而不是透传 `%B`；
+- 它按 author-date 给出全局顺序，并对齐 `path.actions[].date`。
+
+只有“把 commit 换个格式打印”的实现才是包装。**view 是必要的；delivery 是包装。**
+
+### 3. 最小范围（给下一步 issue）
+
+- 一行一个 action；字段至少 `issue / action / commit / date / title / domain / tags`；
+- 只留同时带 `issue:` + `action:` 的提交；
+- 全局 author-date 顺序，文档写明拓扑约束（merge 多的仓不保证严格全局时间序）；
+- 不做 issue 分组、不做 `path` 的 ordinal/relations/stat；
+- 流式 / `--limit` / NDJSON 是交付选项，不是本视图的最小定义。
+
+### 4. 明确未定
+
+1. **命令名**：`timeline`（当前工作名）/ `log` / `actions` / 其他。`log` 会撞 `git log` 与已否的 `log --rewrites`；若用，必须先定义成“模型日志”。命名另开 issue 或在本 issue 之后追加讨论。
+2. **入口细节**：独立命令是首选；`path --timeline` 不推荐，`path --all --jsonl`（B）排除。最终 flag（是否 `--jsonl` 必填、是否 `--all`）随命名一起定。
+3. **是否现在实现**：视图需要 ≠ 立刻开工；等插件首屏或 webui/tui 的触发条件。
+4. **契约**：`title` 取 subject 还是 trailer title；`domain` 是 per-commit 还是 issue 级；NDJSON 如何写进“一份文档”规则；jj 支持或明确不支持；broken pipe / 空仓退出码；commit-graph 分档如何写进验收。
+
+### 5. 与前面结论的关系
+
+- `5c84242` 的“严格必要性不过”只适用于 **git log 包装版**；`90b876d` 已修正为“action 索引通过综合视图关”。
+- `58f13b3` 的 test 证明**交付可行**（100k 首行 64/359ms、`--limit 50` 70/366ms），不证明视图已经存在；它把“能不能做”变成“视图缺、交付也不难”。
+- `d8447a2` 的多客户端论证是**加强项**：N 个前端共享一份契约更划算；但即使只有 dsh-kiln，action 索引缺口仍在。
+- `path --all --json` 已有全部动作数据，但“数据可得”不等于“视图已提供”；`status` / `graph` / `path` 也都可以被消费方自行推导，它们仍是必要视图。
+
+### 6. 下一步
+
+- 另开一个实现向 issue（暂称“action 视图”）：先定命令名与入口，再定字段/NDJSON/jj/退出码，最后 `apply`。
+- 若决定暂不实现：把“这个视图缺失”记录在案，不改现有命令；重开条件 = 插件首屏或 webui/tui 真正开工。
+- 若发现真实需求只是“最近 issue”：改用 `list --recent`（按末条动作日期），本 issue 收窄为“不需要 action 流”。
+
+### 7. 本结论的验收
+
+- 文档明确“需要 action 级全局视图”，且与 `list` / `path` / `show` 的分工不冲突；
+- 明确“名称未定、入口独立、交付与契约另定”，不给后续实现留隐性约束；
+- 现有命令零改动，`go test ./...` 不受影响。
