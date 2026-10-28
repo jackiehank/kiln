@@ -562,3 +562,103 @@ $ kiln action log --jsonl
 4. 若走 A：`json(self)` 直接解析（简单、字段多、吃 jj 版本）还是自定义模板 + 分隔符（要选一个正文里不会出现的标记，现有 `@@KILN@@` 就是这种思路）。
 5. `--limit` 要不要下推 `jj log -n`？实测省不了 116ms 固定成本，但能省 jj 侧渲染与输出。
 6. 若仍不支持，文案从“暂不支持 jj”改成“jj 暂不支持（可先用 `kiln path --all` 看全量）”，并把原因写成“交付曲线不同”，别写成“做不到”。
+
+## hypothesize（2026-10-28，第四轮）：jj 走原生读取，接受非增量，顺序用 jj 的拓扑序
+
+> 结论先行：实现 jj 的 `LogEach`（原生 `jj log -T 'json(self) ++ "\n"'`），**放弃“首行早于全量”在 jj 上的承诺**，保留“内存与输出流式”；顺序沿用 jj 的拓扑序并写进文档；不做 git 回退（幽灵提交、漏 head）；`--limit` 向 jj 下推 `-n`，为此给 `LogEach` 加一个 limit 提示参数。
+
+### 0. 为什么这次不是“继续不支持”
+
+ask 里“jj 显式非 0”的前提是“jj 不能流式”。第三轮 collect 证明的是**不能增量**，不是**不能交付**：
+
+- 原生 `jj log` 给出的是 jj 真正可见的提交集（改写过的隐藏、所有 head 覆盖、空仓免费）；
+- jj 是 kiln 的一等后端（`jj.ExecRunner` 实现了 Repo 与 Workspace 的全部方法），留一个命令空白，插件侧会读成“这是 git-only 产品”；
+- 拒绝的实际代价是让 agent 退到 `path --all --json`（本仓 35MB 量级），比让 jj 自己扫一遍更糟。
+
+所以：**把承诺改对，而不是把功能砍掉**。
+
+### 1. 为什么不是 B/C（读 git）
+
+| 反对理由 | 证据 |
+| --- | --- |
+| `--all` 有幽灵 | 改写后旧提交仍被 `refs/jj/keep/*` 保活，`git log --all` 能看到；还有一批空 message 的内部提交 |
+| HEAD 链会漏 | HEAD 只有一条链，jj 的 `all()` 覆盖所有可见 head |
+| colocate 可关 | `git.colocate=false` 或 `--no-colocate` 时 `.git` 不存在 |
+| 内部路径不可靠 | jj 文档明说非 colocated 的 git 仓库“hidden inside `.jj`” |
+
+一句话：**读 git 能读到更多行，但读到的不是 jj 认为存在的东西**。
+
+### 2. 接口：`LogEach` 加一个 limit 提示
+
+```go
+LogEach(limit int, fn func(Commit) bool) error
+```
+
+- `limit <= 0` 表示“不限”；
+- 它只是**提示**：调用方仍然用 `fn` 返回 `false` 来停止，后端可以用它避免做无用功（jj 用它拼 `-n`）；
+- 为什么值得改签名：300 提交实测全量 163ms、`-n 3` 116ms，差 47ms 全花在渲染 JSON 上（≈0.16ms/条）；100k 外推约 16s。对 `--limit 20` 这种首屏用法，下推不是优化而是可用性；
+- 同时把契约说清楚：**后端可能不是增量的**；kiln 侧内存仍是 O(1)，首行时间由后端决定。
+
+### 3. jj 实现
+
+```go
+const streamTemplate = `json(self) ++ "\n"` // 记录必须以换行结尾
+
+func (r ExecRunner) LogEach(limit int, fn func(vcs.Commit) bool) error {
+	args := []string{"log", "--no-graph", "-r", revset, "-T", streamTemplate}
+	if limit > 0 {
+		args = append(args, "-n", strconv.Itoa(limit))
+	}
+	// …StdoutPipe + stderr buffer + Start…
+	stopped, err := streamRecords(br, fn)
+	// 早停：Kill + 关 stdout + Wait（吞错，与 git 同）
+}
+```
+
+`streamRecords` 是纯函数，便于单测（jj 侧现有测试也都不 spawn 真 jj）：
+
+- `ReadBytes('\n')` 取一行；空行跳过；
+- `json.Unmarshal` 到 `{commit_id, description, author.timestamp}`；只取这三个字段，**忽略其它键**（`parents`/`change_id` 变不变都不影响）；
+- `description` `TrimRight("\n")`，与 `parseLog` 对同一条提交给出的 message 一致；
+- 时间用 `time.Parse(time.RFC3339, author.timestamp)`（`json(self)` 给的就是 RFC3339；模板里裸写 `author.timestamp()` 是 `2026-10-28 22:47:04.000 +08:00`，不能直接用）；
+- 坏行 → 报错（与 git 半条记录同样处理），不静默跳过。
+
+为什么用 `json(self)` 而不是自定义分隔符：现有 `@@KILN@@` 是“正文里几乎不会出现”的赌注，JSON 把正文换行转义掉，一条记录一行是硬保证；代价是记录变胖（约 400B/条），但 jj 本来就要把这些字节渲染出来。
+
+### 4. 顺序：用 jj 的，不排序
+
+- `jj log` 是拓扑序（“children before parents”），revsets 没有 `sort()`；要 author-date 只能缓存全部行再排序；
+- 而 jj 的行本来就“一次到齐”（首行≈全量），排序不会再多付延迟，只会多付内存（100k × ~100B ≈ 10MB 级，且要持有全部行）；
+- 取舍：**保留拓扑序 + 下推 `-n`**。线性历史下拓扑序就是 newest-first；合并历史下顺序不严格按日期，但每行都带 `date`，要严格序的消费方可自行排序；
+- 文档必须改成“git：author-date 倒序；jj：jj 的拓扑序”，不能再写“一律按 author-date 倒序”。
+
+### 5. 交付表现（jj vs git）
+
+| 项 | git | jj |
+| --- | --- | --- |
+| 首行 | 第一批提交到达即出（64ms/359ms@100k） | 等 jj 扫描+渲染完成（300 提交 116ms；100k 未测） |
+| 内存 | O(1) | O(1)（行在 jj 侧，不在 kiln 侧） |
+| `--limit` | 早停杀 git | 下推 `-n`，并在够数时同样杀进程 |
+| 顺序 | author-date 倒序 | 拓扑序（子先于父） |
+| 空仓 | 探 HEAD → 空流 | 0 行，天然空流 |
+| 破管道 | 静默 0（Windows） | 同（关管道 + Kill + WaitDelay） |
+
+### 6. 测试
+
+1. `streamRecords`：正常两行（含转义换行的 description）、`description` 尾换行被 trim、坏 JSON 报错、空行跳过、`fn` 返回 false 后不再读；
+2. 日期解析：`2026-10-28T22:18:36+08:00` → 原样 offset；
+3. CLI：现有 `streamRunner` 加 limit 形参后，`--limit N` 断言后端收到的 limit 是 N；`--limit` 缺省为 0；
+4. 真 jj 冒烟（apply 阶段手工，不进单测，与现有 jj 测试不 spawn 的约定一致）：临时 jj 仓 2 条动作 → `action log` 2 行、`--jsonl` 逐行可解析、改写后旧动作不出现、空仓 exit 0。
+
+### 7. 风险与证伪
+
+- **100k 的 jj 渲染**：16s 是外推，不是实测。falsifier：真仓 100k 全量超过约 5s 且 `--limit` 下推也救不回来 → 回退为“jj 仍不支持”，因为首屏体验不成立。
+- **`json(self)` 的格式**：只依赖三个键；若 jj 未来改键名，解析会失败并报错（不会静默错行），届时改字段映射即可。
+- **顺序差异**：消费方若默认“行序=日期序”，在合并历史上会错。falsifier：出现按行序取“最近 N 条”的用法 → 加缓冲排序，同时把 `-n` 下推去掉。
+- **`-n` 与 `--limit` 的语义**：`-n` 限制的是 jj 输出的提交数，kiln 仍按“动作数”停止；当跳过非动作提交时，`-n N` 可能不够 N 条动作 → 不能只靠 `-n` 收敛输出，必须保留 `fn` 早停（否则 `--limit 3` 可能只出 1 行）。这是实现时最容易写错的一处。
+- **jj 的 shim**：`jj.exe` 是 Rust 单体，没有 git 那种 shim 问题；但仍按 git 的收尾方式（Kill + 关管道 + WaitDelay）处理，避免第二个平台差异。
+
+### 8. 下一步
+
+- 无异议 → `conclude`：把 §0 的“承诺改对”写进契约（首行不保证、顺序按后端、limit 是提示），然后 `apply`。
+- 有异议集中在两处：jj 的顺序要不要靠缓冲换取 author-date；`LogEach` 加 limit 参数值不值得（也可以不改接口，接受 100k 全量渲染）。
