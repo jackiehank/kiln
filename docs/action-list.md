@@ -321,3 +321,38 @@ apply         terminal
 - 不读历史、不创建文件、不改现有命令输出；
 - `go test ./...`、`go vet`、`gofmt` 全过；
 - README / `machine-readable-output` 文档同步；`action log` 不受影响。
+
+## apply（2026-10-28）：落地 `action list`——`Config.Source` + `action` 组 + 文本/JSON
+
+### 改了什么
+
+- `internal/config/config.go`：`Config` 增加 `Source`（`file` / `default`）；`Read` 成功读文件后设 `file`，缺文件/仓外保持 `default`；新增 `SourceFile` / `SourceDefault` 常量与测试。
+- `internal/cli/cli.go`：
+  - `env` 增加 `configPath` / `configSource`，`Run` 从 `config.Read` 填入；
+  - 新增 `action` 组与 `action list`（`actionList`），文本一行一个 + `start` / `terminal` 英文列；`--json` 输出 `actions` / `source` / `config?`；
+  - `usageCommands` 增加 `kiln action list [--json]`；`usagePrologue` 的默认词表行补“生效词表见 `kiln action list`”；
+  - `action -h` / `action list -h` 打印组 help；`kiln action` 无子命令 exit 2；`--json=x` / 多余参数 exit 2。
+- `internal/i18n/catalog.go`：新命令描述、默认词表提示的 zh/en 文案。
+- `README.md` / `README.en.md`：命令表加 `action list`。
+- `docs/machine-readable-output.md`：新增 `action list --json` 小节与分平台路径说明。
+- `internal/cli/cli_test.go`：自定义词表文本、start+terminal 同体、JSON 文件源/默认源、仓外、Run 读仓配置、路径可访问、不 seed、非法参数。
+- `internal/config/config_test.go`：默认源、缺文件候选路径、无 `actions` 组时 `source=file`。
+
+### 验证
+
+- `gofmt -l internal` 干净；`go vet ./...`、`go test ./...` 全过；`go build` 成功。
+- 本仓 `action list`：6 个 action，`ask` 标 start，`conclude` / `apply` 标 terminal；`--json` 的 `source=file`，`config` 为 `C:\Users\jacki\kiln\.kilnconfig.jsonc`，`os.Stat` 可访问。
+- 临时自定义仓（`.git` + `.kilnconfig.jsonc` 的 `ask/probe/done`）：文本 `ask start` / `probe` / `done terminal`；JSON `source=file`，`config` 为原生绝对路径且 `Test-Path` 为真。
+- 仓外临时目录：`source=default`、无 `config`、默认词表、exit 0，且未创建 `.kilnconfig.jsonc`。
+- `--lang=en` 的 help 与命令描述无残留中文；`action -h` / `action list -h` 都能打印组用法。
+
+### 与 conclude 的差异（实现时校正）
+
+- conclude 写的是 `usageOtherFlags`，实际默认词表行在 `usagePrologue`（`usageOtherFlags` 是 per-command flags 块）；实现改的是 `usagePrologue`，结论里的意图不变。
+- `action list -h` 走 `action` 组 help（显示 `kiln action list [--json]`），而不是单独的子命令 help；与 `worktree` 组一致。
+- 文本列宽按所有 action 名的最大 `displayWidth` 对齐；测试里固定了自定义词表的输出。
+
+### 遗留
+
+- `action log` 未实现，仍在自己的 issue 里。
+- `-h` 仍只列“默认”词表（已提示去 `action list` 看生效值）；若要把 `-h` 改成生效词表，需改 `usageText` 签名，另开 issue。

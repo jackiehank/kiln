@@ -374,3 +374,25 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - `show --stat` 不再把 `body` 换成 diffstat，而是追加 `stat`。
 
 契约与四条成文规则（`id` vs `issue`、容器恒写、`title`/`commit` 粒度、JSON 不随语言变）见 `docs/read-json.md` 文末「批 A 的键名修订」。本文件的「遗留」清单不变。
+
+## 后续（2026-10-28）：`kiln action list --json`
+
+`action list` 是词表命令，不读历史、不需要仓库。`--json` 输出一份对象：
+
+```json
+{
+  "actions": {
+    "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+    "start": "ask",
+    "terminal": ["conclude", "apply"]
+  },
+  "source": "file",
+  "config": "C:\\Users\\jacki\\kiln\\.kilnconfig.jsonc"
+}
+```
+
+- `actions` 与 `.kilnconfig.jsonc` 的 `actions` 组同形；`names` 保持声明顺序；
+- `source`：`file`（读取了配置文件）或 `default`（缺文件 / 仓外）；`default` 时 `config` 省略；
+- `config` 是**当前 OS 的本地绝对路径**：Windows 用 `\`（JSON 源码里转义为 `\\`），POSIX 用 `/`；消费方解码后可直接 `os.Stat` / 打开，不要照抄源码里的转义；
+- 不做 `--jsonl`；空仓/仓外输出默认词表并 exit 0；配置解析失败 exit 1；
+- 不创建配置文件：`config path` 才会 seed，`action list` 只读。
