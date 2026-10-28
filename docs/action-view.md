@@ -273,3 +273,102 @@ kiln timeline [--jsonl] [--limit N]
 - 若认可这对命名：`conclude` 定稿“`action list` = 词表、`timeline` = 动作流；`action list` 带 `--json`，`timeline` 默认文本 + `--jsonl` + `--limit`；jj 明确不支持”；实现可拆两个 `apply`（词表命令小，先落）。
 - 若仍想在 `action list` 上保留实例语义：需要先回答“词表命令叫什么、为什么用户不会先猜错”，否则不要回到上一版。
 - 实现前仍需定死：`action list` 文本的 `start`/`terminal` 标记格式、`source`/`config` 的省略规则；`timeline` 的文本列宽/日期格式、NDJSON 字段、`--limit`/broken pipe、空仓提示、jj 错误文案。
+
+## conclude（2026-10-28）：action 组定名——`action list` 列词表，`action log` 列动作
+
+### 0. 裁决
+
+| 命令 | 作用 | 形态 |
+| --- | --- | --- |
+| `kiln action list [--json]` | 列出可用的 action 类型（词表、起点、终点） | 文本一行一个；`--json` 一份文档 |
+| `kiln action log [--jsonl] [--limit N]` | 按时间列出动作记录（动作实例） | 文本一行一条；`--jsonl` NDJSON；`--limit` |
+| `kiln action <future>` | `action` 组后续可扩展 | 每个新子命令单独定义边界，不在本次预埋 |
+
+一句话：**`action list` 是 schema，`action log` 是 events；两者都在只读的 `action` 组下。**
+
+### 1. 为什么是这两个名字
+
+- `action list` 最自然地被读成“有哪些 action 可用”；把它给词表，消除了上一版“`action list` 到底是词表还是实例”的歧义。
+- `action log` 与 `action list` 成组：`list` 列类型，`log` 列实例；用户不用在 `timeline` 与 `action list` 两个命名空间之间跳。
+- `log` 有作用域限定（`action`），不是顶层 `kiln log`；`git log`、`docker container logs`、`kubectl logs` 都是只读的“看日志”，不是“写日志”。
+- `log` 的审计联想必须写死边界：**它是当前提交的只读视图，不是改写史，也不是审计**；溯源仍回 jj `op log` / git `reflog`。
+- `timeline` 继续作为**概念名**（动作时间线）留在文档里，但不再是命令名；这样既保留“时间线”的表达，又让命令面稳定。
+
+help 文案必须把两句话放在第一行：
+
+```text
+kiln action list   列出可用的 action 类型（词表）；不是动作历史
+kiln action log    按时间显示动作记录（只读）；不是审计 / 改写史
+```
+
+### 2. `kiln action list` 规格
+
+```text
+kiln action list [--json]
+```
+
+- 输出生效的动作词表：`.kilnconfig.jsonc` 的 `actions`，没有则内置默认；
+- 文本：一个 action 一行，标注 `start` / `terminal`；无表头、无 legend，方便 `| wc -l`；
+- `--json`：
+  ```json
+  {
+    "actions": {
+      "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+      "start": "ask",
+      "terminal": ["conclude", "apply"]
+    },
+    "source": "file",
+    "config": "C:\\Users\\jacki\\kiln\\.kilnconfig.jsonc"
+  }
+  ```
+  - `source`：`file` 或 `default`；`config` 仅在 `file` 时出现；
+  - `actions` 与配置文件的 `actions` 组同形，便于对照；
+- **不需要仓库**：仓外/未初始化用默认词表，`source=default`；不读历史、不开后端；
+- 不做 `--jsonl` / `--limit` / 过滤；与 `do` / `commit` 共用同一个 `ActionSet`，列出的就是写侧接受的集合。
+
+### 3. `kiln action log` 规格
+
+```text
+kiln action log [--jsonl] [--limit N]
+```
+
+- 全局动作流：只留同时带 `issue:` + `action:` 的提交；author-date 倒序；
+- 默认文本：一行一条，含日期 / issue / action / 短 hash / subject；不做分组、ordinal、relations、stat；
+- `--jsonl`：一行一个动作对象，字段沿用 `timeline-stream` 的 `issue / action / commit / date / title / domain / tags`；
+- `--limit N`：最多 N 条动作后正常退出；N ≥ 1；非法 exit 2；
+- 不需要 `--all`（天生全局）；不提供 `--json`（一份数组会和 `--jsonl` 争视图）；不做过滤；
+- 不支持 jj：显式非 0 + stderr「暂不支持 jj」，不静默空输出；
+- 空仓/无动作：stdout 为空、exit 0；broken pipe 及时停扫描并结束 git 子进程；
+- **不按当前词表过滤历史**：旧/非法 action 仍会出现，合法性归 `check`。`action list` 是 schema，`action log` 是历史事实，两者不能互相修剪。
+
+文本是最小可读列表，不是富 timeline 视图：不做高亮、分组、交互；这些东西若要做，另开 issue。
+
+### 4. 与现有命令的边界
+
+| 命令 | 单位 | 边界 |
+| --- | --- | --- |
+| `list` | issue | issue 索引；`--action` 是“出现过某类动作的 issue”，不是动作列表 |
+| `list --action=X` | issue | 过滤 issue，不是 `action list` 的替代 |
+| `path <issue>` | 单 issue 的 path | issue 内的动作序列 + 关系/ordinal |
+| `show <issue> n` | 单个动作 | 动作详情；不做全局寻址 |
+| `action list` | 词表 | 当前可用的 action 类型；不读历史 |
+| `action log` | 动作实例 | 全局历史；不按当前词表过滤 |
+
+### 5. `action` 组的未来
+
+- 本次只落 `list` / `log`；不预埋 `action show` / `action search` / `action filter`。
+- 以后要加，仍在 `action` 组里加；每个新子命令必须先回答“与 `show <issue> n`、`list --search`、`path` 的边界是什么”，避免同一个问题有两个入口。
+- 组内子命令保持只读；写操作继续走顶层 `do` / `commit`。
+- `kiln action` 不带子命令时打印组用法（与 `kiln worktree` 一致）；具体文案 apply 定。
+
+### 6. 实现切分
+
+- `action list` 小、只读配置，先落；`action log` 需要流式后端与 NDJSON 契约，后落。
+- 二者可以各开一个实现 issue，也可以在同一个实现 issue 里分两个 `apply`；本 issue 只负责命名与形态，不再改代码。
+- `apply` 前仍需定死：`action list` 文本标记格式、`source`/`config` 省略规则；`action log` 文本列宽/日期格式、NDJSON 字段的 `title`/`domain` 语义、`--limit`/broken pipe/空仓、jj 错误文案、commit-graph 分档如何写进验收。
+
+### 7. 本结论的验收
+
+- 文档明确 `action list` = 词表、`action log` = 动作流，且说明 `log` 只读、非审计；
+- 明确 `action` 组可扩展，但本次不预埋其它子命令；
+- 现有命令零改动，`go test ./...` 不受影响。
