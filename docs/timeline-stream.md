@@ -101,3 +101,79 @@
 - `--limit` 是消费方“只读首屏”的止损：够 N 行就停，不必为 35MB 付完。
 - 与 `issue-list-scaling` 的“分页”不同：这是动作流，不是 issue 列表分页；但同样命中
   “消费方需要前 N 条”的触发条件。
+
+## collect（2026-10-28）：timeline 与 `git log` / `path` 的关系，以及入口候选
+
+> 本节只收事实与候选，不裁决入口，也不判必要性；这两件事留给下节 hypothesize。
+
+### 1. timeline 的形状：像 `git log`，但单位是 action
+
+| 维度 | `git log` | `path` | timeline（提案） |
+| --- | --- | --- | --- |
+| 范围 | 所有 commit | **一个 issue** 的动作 | **所有 issue** 的动作 |
+| 单位 | commit | pathDoc（issue + actions） | 一条 action 事件 |
+| 过滤 | 无 | 只留 issue + action | 只留 issue + action |
+| 顺序 | commit-date 默认，可 `--author-date-order` | 单 issue 内时间正序；`--all` 按 id | 全局 author-date 倒序 |
+| 输出 | 文本 / `--format` | 一份 JSON 文档 | NDJSON 流 |
+| 关系 / stat | 无 | 有 | 无 |
+| 首行 / limit | 原生支持 | 不支持（先建全史） | 要求首行早出 + `--limit` |
+
+结论：timeline 更像“**只保留 kiln 动作、解析成语义字段、按 author-date 流式输出**的 `git log`”，不是原始提交日志。它和 `path` 只共享底层 git 历史，unit / grouping / order / output / timing 都不是同一个视图。
+
+### 2. 既有命令面里“log”的生态位
+
+| 文档 | 事实 | 对 timeline 的含义 |
+| --- | --- | --- |
+| [action-diff](action-diff.md#L101) | 命令面按基数对齐：`path` ↔ `git log`（一个 issue 的动作串），`show` ↔ `git show`；`path --stat` ↔ `git log --stat` | kiln 早已把“log 的生态位”给了 `path`，只是范围是单 issue |
+| [evidence-fluidity](evidence-fluidity.md#L190) | 讨论过 `kiln log --rewrites`，最终[明确不做](evidence-fluidity.md#L226)：改写史溯源回 jj `op log` / git `reflog` | 被否的是“改写史视图”，不是“全局动作流”；`log` 这个名字会撞上这条已否的提案 |
+| [cli-necessity](cli-necessity.md#L151) | `path <issue>` 相当于 `jj log -r "issue(...)"` 的一个特例；`path` / `show` 属于“git 的 UX 包装”区 | 全局 log 类视图要过 `cli-necessity` 的必要性尺子，不能只靠“git log 也能看” |
+| `mvp-plan` | 命令面只有 `do` / `commit` / `path` / `status` / `check` / `list` / `graph`，没有 `log` | 没有“通用 log 命令”的历史决策可复用；timeline 是新面 |
+
+所以“kiln 讨论过要不要做 log 命令”更准确的说法是：**讨论过 `kiln log --rewrites` 并否决了改写史视图**；通用 `log` 从未立项。timeline 若叫 `log`，会同时继承“为什么不用 git log”和“改写史”两重误解；`timeline` 这个名字更贴近“语义动作流”。
+
+### 3. `path` 是否适合承载
+
+- `path` 的原始单位是一个 issue 的 pathDoc：标题/状态、编号动作、关系；文本视图也是“一个 issue 头 + 编号步骤 + 关系”（[cli.go](../internal/cli/cli.go#L1365)）。
+- `path --all --json` 是后来加的**批量包装**：`{"issues":[pathDoc…]}`，仍是一份文档装 N 个 issue 的 path，按 id 排（[path-batch](path-batch.md#L60)）。它的 `--all` 是“所有 issue 的 path”，不是“所有动作的平铺”。
+- timeline 的 `issue / action / commit / date / title / domain / tags` 是**动作事件**字段，没有 `ordinal` / `relations` / `stat`；顺序是全局 author-date，不是 id。两者只在“底层数据来自同一份 git 历史”这一点上共享。
+
+`path --all --timeline` 的读法是“所有 issue 的 path，但不是 path”，语义上确实别扭。
+
+### 4. 入口候选
+
+| 方案 | 入口 | 视图显式？ | 编码显式？ | 已知代价 |
+| --- | --- | --- | --- | --- |
+| A | `path --all --timeline --jsonl` | 是 | 是 | 三个 flag；`--all` 在 timeline 下恒真；`path` 出现第二种形状 |
+| B | `path --all --jsonl` | **否** | 是 | `--jsonl` 同时改形状与编码；`path <id> --jsonl` 语义不明 |
+| A' | `path --timeline --jsonl` | 是 | 是 | 少一个恒真 flag；仍有 `path` 第二种形状 |
+| C | `path --timeline` | 是 | 否（隐含 NDJSON） | flag 最少；未来文本 timeline 会改默认 |
+| D | `timeline --jsonl [--limit N]` | 是（命令名） | 是 | 多一个顶层命令 |
+
+契约侧的事实：
+
+- [machine-readable-output 规则 6](machine-readable-output.md#L199) 要求“同一命令的 JSON 形状不随 flag 变”；B 的 `--jsonl` 直接改 unit，A/A' 也仍然是 `path` 的第二种形状。
+- [规则 8](machine-readable-output.md#L201) 要求“stdout 只放一个 JSON 文档”；timeline 的 NDJSON 必然要写例外，区别只是例外落在 `path` 还是新命令上。
+- [path-batch](path-batch.md#L78) 已把“批量没改 schema，只是外面套了一层”写成契约；timeline 不是这种“套一层”。
+
+### 5. 本机方向性测量（2026-10-28）
+
+| 项 | 值 |
+| --- | --- |
+| 当前动作数 | 317 |
+| `path --all --json` | 150,478 bytes，单次约 188 ms |
+| `git log --author-date-order --format=…` 首条 | 约 130 ms（冷启动一次） |
+| 同命令全量 | 约 61 ms（热缓存） |
+
+这些只说明量级：当前 317 条动作下，`path --all` 仍是“先建全史再一次输出”；timeline 要成立，必须新增流式后端（现有 `vcs.Repo.Log()` 返回 `[]Commit`，是全量接口）。100k 目标需要自己的合成仓与计时，不能用上表外推。
+
+实现侧已确认的事实：
+
+- `vcs.Repo` 的 `Log()` 是全量 `[]Commit`；`StatLog` 已经开过“可选接口”的先例（`LogStats`），timeline 可照此加一个可选的流式 log 接口，jj 不实现就按需求 7 明确报“不支持”。
+- `path` 现在先 `engine.Build` 全史；timeline 必须绕过 `loadRepo()`，否则首行不可能早出。
+
+### 6. 留给 hypothesize 的问题
+
+1. timeline 是 `cli-necessity` 里的“新综合视图”（像 `status` / `graph` / `path`），还是“诚实的 UX 包装”（像 `show` / `path --stat`）？
+2. 如果是包装，它是否满足“明显更好”的立项条件（首行、limit、稳定 NDJSON）？
+3. 如果成立，入口选 A / A' / C / D 中的哪一个；B 是否应直接排除？
+4. 字段与边界：`title` 到底取 subject 还是 trailer title；`domain` 是 per-commit 还是 issue 级；NDJSON 如何写进既有“一份文档”契约；broken pipe / 空仓的退出码。
