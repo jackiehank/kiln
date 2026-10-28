@@ -69,6 +69,7 @@ var usageCommands = [][2]string{
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=] [--status=open|done] [--search=]", "按条件过滤问题"},
 	{"kiln action list [--json]", "列出可用的 action 类型（词表）"},
+	{"kiln action log [--jsonl] [--limit N]", "全局动作流（一条动作一行；--jsonl 给 agent 读；--limit 只看最近 N 条）"},
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
@@ -1236,10 +1237,7 @@ func (e *env) action(args []string) int {
 	}
 	// Parse first so flags may precede the subcommand (`action --json list`),
 	// the same shape `worktree` uses.
-	pos, f, _ := parse(args, "json")
-	if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
-		return code
-	}
+	pos, f, missing := parse(args, "json", "jsonl")
 	sub := ""
 	rest := pos
 	if len(pos) > 0 {
@@ -1250,10 +1248,43 @@ func (e *env) action(args []string) int {
 		if code := rejectExtra(e.errw, rest, 0, "kiln action list [--json]"); code != 0 {
 			return code
 		}
+		// The two subcommands share one flag namespace after parsing, so each
+		// refuses the other's flags instead of dropping them on the floor.
+		if f.has("jsonl") {
+			fmt.Fprintln(e.errw, i18n.T("action list 用 --json，不用 --jsonl"))
+			return 2
+		}
+		if f.has("limit") {
+			fmt.Fprintln(e.errw, i18n.T("--limit 只服务 action log"))
+			return 2
+		}
+		if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
+			return code
+		}
 		warnUnknownFlags(e.errw, f, allowedFlags("json"))
 		return e.actionList(f)
+	case "log":
+		if code := rejectExtra(e.errw, rest, 0, "kiln action log [--jsonl] [--limit N]"); code != 0 {
+			return code
+		}
+		allowed := allowedFlags("jsonl", "limit")
+		if code := rejectMissingValues(e.errw, missing, allowed); code != 0 {
+			return code
+		}
+		if code := rejectSwitchValues(e.errw, f, "jsonl"); code != 0 {
+			return code
+		}
+		if code := rejectRepeats(e.errw, f, "limit"); code != 0 {
+			return code
+		}
+		if f.has("json") {
+			fmt.Fprintln(e.errw, i18n.T("action log 用 --jsonl（一行一个动作），不用 --json"))
+			return 2
+		}
+		warnUnknownFlags(e.errw, f, allowed)
+		return e.actionLog(f)
 	default:
-		fmt.Fprintln(e.errw, i18n.T("用法: kiln action list [--json]"))
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln action list [--json] | kiln action log [--jsonl] [--limit N]"))
 		return 2
 	}
 }
@@ -1300,6 +1331,103 @@ func (e *env) actionList(f flags) int {
 			line += "  " + strings.Join(markers, ", ")
 		}
 		fmt.Fprintln(e.out, strings.TrimRight(line, " "))
+	}
+	return 0
+}
+
+// actionLog renders the global action stream: one row per commit that carries
+// both `issue:` and `action:`, newest author date first. It never builds the
+// issue model — one pass, one row at a time — so the first line arrives with the
+// first commit instead of after the whole history, and memory stays flat however
+// large the repository is.
+//
+// --limit and a consumer that went away both stop the scan through the sink's
+// false return; the backend kills its child at that point.
+func (e *env) actionLog(f flags) int {
+	limit := 0
+	if f.has("limit") {
+		n, err := strconv.Atoi(strings.TrimSpace(f.get("limit")))
+		if err != nil || n < 1 {
+			fmt.Fprint(e.errw, i18n.T("--limit 需要 ≥ 1 的整数（当前: %q）\n", f.get("limit")))
+			return 2
+		}
+		limit = n
+	}
+	backend, err := e.backend()
+	if err != nil {
+		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
+		return 1
+	}
+	stream, ok := backend.(vcs.LogEach)
+	if !ok {
+		fmt.Fprintln(e.errw, i18n.T("action log 暂不支持 jj（当前只实现 git 的流式读取）"))
+		return 1
+	}
+	jsonl := f.has("jsonl")
+	var scratch bytes.Buffer
+	enc := json.NewEncoder(&scratch)
+	enc.SetEscapeHTML(false)
+	var writeErr error
+	emitted := 0
+	// emit writes one row and reports whether the commit was an action at all.
+	emit := func(c vcs.Commit) bool {
+		fields, ok := trailer.Parse(c.Message, e.rel())
+		if !ok {
+			return false
+		}
+		label := fields.Title
+		if label == "" {
+			label = engine.Subject(c.Message)
+		}
+		if jsonl {
+			scratch.Reset()
+			if err := enc.Encode(actionLogDoc{
+				Issue:  fields.Issue,
+				Action: fields.Action,
+				Commit: c.ID,
+				Date:   c.Date.Format(time.RFC3339),
+				Title:  label,
+				Domain: fields.Domain,
+				Tags:   fields.Tags,
+			}); err != nil {
+				writeErr = err
+				return true
+			}
+			_, writeErr = e.out.Write(scratch.Bytes())
+			return true
+		}
+		line := fmt.Sprintf("%s  %s  %s  %s  %s",
+			c.Date.Local().Format("2006-01-02 15:04"),
+			pad(fields.Issue, 24),
+			pad(fields.Action, 12),
+			shortID(c.ID),
+			label)
+		_, writeErr = fmt.Fprintln(e.out, strings.TrimRight(line, " "))
+		return true
+	}
+	err = stream.LogEach(func(c vcs.Commit) bool {
+		kept := emit(c)
+		if writeErr != nil {
+			return false
+		}
+		if kept {
+			emitted++
+		}
+		return limit == 0 || emitted < limit
+	})
+	if writeErr != nil {
+		if isBrokenPipe(writeErr) {
+			return 0 // the consumer closed the pipe: not a kiln failure
+		}
+		fmt.Fprint(e.errw, i18n.T("输出失败: %v\n", writeErr))
+		return 1
+	}
+	if err != nil {
+		fmt.Fprint(e.errw, i18n.T("读取历史失败: %v\n", err))
+		return 1
+	}
+	if emitted == 0 {
+		fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
 	}
 	return 0
 }
@@ -2558,7 +2686,7 @@ func (e *env) list(args []string) int {
 		case len(terms) > 0:
 			fmt.Fprint(e.errw, i18n.T("没有匹配 %q 的问题\n", query))
 		case len(repo.Issues) == 0:
-			fmt.Fprintln(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）"))
+			fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
 		default:
 			fmt.Fprint(e.errw, i18n.T("没有匹配 %s 的问题\n", filterSummary(opts, status)))
 		}
@@ -3081,6 +3209,21 @@ type actionSetDoc struct {
 	Names    []string `json:"names"`
 	Start    string   `json:"start"`
 	Terminal []string `json:"terminal"`
+}
+
+// actionLogDoc is one NDJSON record of `kiln action log --jsonl`. There is no
+// envelope because every line is the same kind of record; the four identity keys
+// are always written, and the three descriptive ones are omitted when absent —
+// an absent key means "none", never an empty string. date keeps the commit's own
+// offset so a consumer never has to guess the timezone.
+type actionLogDoc struct {
+	Issue  string   `json:"issue"`
+	Action string   `json:"action"`
+	Commit string   `json:"commit"`
+	Date   string   `json:"date"`
+	Title  string   `json:"title,omitempty"`
+	Domain string   `json:"domain,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
 }
 
 // checkDoc is the `kiln check --json` document. passed mirrors the exit code —

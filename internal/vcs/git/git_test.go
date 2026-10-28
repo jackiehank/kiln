@@ -126,6 +126,13 @@ func commit(t *testing.T, dir, msg string) {
 	gitRun(t, dir, "-c", "user.name=kiln", "-c", "user.email=kiln@example.com", "commit", "-qm", msg)
 }
 
+// commitEmpty records a commit with no file change, for history-shape tests that
+// only care about messages and order.
+func commitEmpty(t *testing.T, dir, msg string) {
+	t.Helper()
+	gitRun(t, dir, "-c", "user.name=kiln", "-c", "user.email=kiln@example.com", "commit", "-q", "--allow-empty", "-m", msg)
+}
+
 // write puts body at root/rel, creating parent directories first.
 func write(t *testing.T, root, rel, body string) {
 	t.Helper()
@@ -319,5 +326,69 @@ func TestActionCheckedCommitsWithoutRechecking(t *testing.T) {
 	}
 	if !strings.Contains(out, "b.txt") {
 		t.Fatalf("the checked action must carry b.txt:\n%s", out)
+	}
+}
+
+// LogEach is the streaming face of Log: same records, same order, one at a time,
+// with multi-line bodies intact.
+func TestLogEachStreamsNewestFirstWithBodiesIntact(t *testing.T) {
+	dir := newRepo(t)
+	commitEmpty(t, dir, "second\n\nissue: b\naction: collect")
+	commitEmpty(t, dir, "third\n\nissue: c\naction: apply")
+	var got []vcs.Commit
+	if err := (ExecRunner{Dir: dir}).LogEach(func(c vcs.Commit) bool {
+		got = append(got, c)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("streamed %d commits, want 3", len(got))
+	}
+	for i, want := range []string{"third", "second", "init"} {
+		if !strings.HasPrefix(got[i].Message, want) {
+			t.Fatalf("record %d = %q, want the %q commit", i, got[i].Message, want)
+		}
+		if got[i].ID == "" || got[i].Date.IsZero() {
+			t.Fatalf("record %d lost its id or date: %+v", i, got[i])
+		}
+	}
+	if !strings.Contains(got[0].Message, "\n\nissue: c") {
+		t.Fatalf("the body after the subject must survive: %q", got[0].Message)
+	}
+}
+
+// Returning false stops the scan: the child is killed and the call reports
+// success, so --limit does not have to wait for the whole history.
+func TestLogEachStopsWhenTheSinkSaysSo(t *testing.T) {
+	dir := newRepo(t)
+	commitEmpty(t, dir, "second")
+	commitEmpty(t, dir, "third")
+	calls := 0
+	if err := (ExecRunner{Dir: dir}).LogEach(func(vcs.Commit) bool {
+		calls++
+		return false
+	}); err != nil {
+		t.Fatalf("an early stop is not an error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("sink called %d times, want 1", calls)
+	}
+}
+
+// A repository with no commits is an empty stream, not a failure: git exits 128
+// there, and the adapter answers with zero records.
+func TestLogEachOnEmptyRepositoryIsAnEmptyStream(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q")
+	calls := 0
+	if err := (ExecRunner{Dir: dir}).LogEach(func(vcs.Commit) bool {
+		calls++
+		return true
+	}); err != nil {
+		t.Fatalf("an empty repository must stream zero records: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("sink called %d times, want 0", calls)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1995,6 +1996,251 @@ func TestActionListRejectsBadArguments(t *testing.T) {
 			t.Fatalf("%v: exit code = %d, want 2 (stderr %q)", args, code, errb.String())
 		}
 	}
+}
+
+// streamRunner is a fake backend that also implements the optional streaming
+// surface. Fixtures are newest-first, like a real backend's order, and yielded
+// counts what the command actually asked for — the only way to prove --limit
+// stops the scan instead of slicing a finished slice.
+type streamRunner struct {
+	fakeRunner
+	yielded int
+	err     error
+}
+
+func (r *streamRunner) LogEach(fn func(vcs.Commit) bool) error {
+	if r.err != nil {
+		return r.err
+	}
+	for _, c := range r.commits {
+		r.yielded++
+		if !fn(c) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// actionLogRunner models the stream: two kiln actions and one commit that is not
+// an action, newest first.
+func actionLogRunner() *streamRunner {
+	base := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	return &streamRunner{fakeRunner: fakeRunner{commits: []vcs.Commit{
+		{ID: "ccc3333a", Date: base.Add(2 * time.Hour), Message: "第二条\n\nissue: beta\naction: collect\ntitle: 第二条"},
+		{ID: "bbb2222b", Date: base.Add(time.Hour), Message: "第一条\n\nissue: alpha\naction: ask\ntitle: 第一条\ndomain: cli\ntags: docs"},
+		{ID: "aaa1111c", Date: base, Message: "闲聊：没有 trailer"},
+	}}}
+}
+
+func newActionLogEnv(out, errw *bytes.Buffer, repo vcs.Repo) *env {
+	return &env{actions: model.DefaultActionSet(), repo: repo, out: out, errw: errw}
+}
+
+// The text view is the stream itself: one line per action, newest first, with the
+// author date in local time and the one-line label last.
+func TestActionLogPrintsOneLinePerAction(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newActionLogEnv(&out, &errb, actionLogRunner())
+	if code := e.action([]string{"log"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("action log printed %d lines, want 2:\n%s", len(lines), out.String())
+	}
+	stamp := time.Date(2026, 10, 28, 11, 0, 0, 0, time.UTC).Local().Format("2006-01-02 15:04")
+	if !strings.HasPrefix(lines[0], stamp) {
+		t.Fatalf("first line must start with the local author date %q:\n%s", stamp, lines[0])
+	}
+	for _, want := range []string{"beta", "collect", "ccc3333", "第二条"} {
+		if !strings.Contains(lines[0], want) {
+			t.Fatalf("first line missing %q:\n%s", want, lines[0])
+		}
+	}
+	for _, want := range []string{"alpha", "ask", "bbb2222", "第一条"} {
+		if !strings.Contains(lines[1], want) {
+			t.Fatalf("second line missing %q:\n%s", want, lines[1])
+		}
+	}
+	if strings.Contains(out.String(), "闲聊") {
+		t.Fatalf("a commit without trailers is not an action:\n%s", out.String())
+	}
+}
+
+// --jsonl is NDJSON: every line parses on its own, and the descriptive keys are
+// absent rather than empty when the commit declared nothing.
+func TestActionLogJSONLIsOneObjectPerLine(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newActionLogEnv(&out, &errb, actionLogRunner())
+	if code := e.action([]string{"log", "--jsonl"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("action log --jsonl printed %d lines, want 2:\n%s", len(lines), out.String())
+	}
+	var docs []actionLogDoc
+	for i, line := range lines {
+		if !json.Valid([]byte(line)) {
+			t.Fatalf("line %d is not one JSON object: %q", i, line)
+		}
+		var doc actionLogDoc
+		if err := json.Unmarshal([]byte(line), &doc); err != nil {
+			t.Fatalf("line %d: %v", i, err)
+		}
+		docs = append(docs, doc)
+	}
+	when := time.Date(2026, 10, 28, 11, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	if docs[0].Issue != "beta" || docs[0].Action != "collect" || docs[0].Commit != "ccc3333a" ||
+		docs[0].Date != when || docs[0].Title != "第二条" {
+		t.Fatalf("first record = %+v, want beta/collect/ccc3333a/%s/第二条", docs[0], when)
+	}
+	if strings.Contains(lines[0], `"domain"`) || strings.Contains(lines[0], `"tags"`) {
+		t.Fatalf("undeclared domain/tags must be omitted, not empty: %s", lines[0])
+	}
+	if docs[1].Domain != "cli" || len(docs[1].Tags) != 1 || docs[1].Tags[0] != "docs" {
+		t.Fatalf("second record must carry its own domain/tags: %+v", docs[1])
+	}
+}
+
+// --limit stops the scan: the backend is asked for one record, not for all of
+// them followed by a slice.
+func TestActionLogLimitStopsTheScan(t *testing.T) {
+	var out, errb bytes.Buffer
+	r := actionLogRunner()
+	e := newActionLogEnv(&out, &errb, r)
+	if code := e.action([]string{"log", "--limit", "1"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if got := len(strings.Split(strings.TrimRight(out.String(), "\n"), "\n")); got != 1 {
+		t.Fatalf("printed %d lines, want 1:\n%s", got, out.String())
+	}
+	if r.yielded != 1 {
+		t.Fatalf("backend handed over %d records, want 1: --limit must stop the scan", r.yielded)
+	}
+}
+
+// A consumer that walks away is not a failure: the write error is recognised,
+// the scan stops, and nothing is said on stderr.
+func TestActionLogStopsQuietlyWhenTheConsumerGoesAway(t *testing.T) {
+	w := &brokenPipeWriter{}
+	var errb bytes.Buffer
+	r := actionLogRunner()
+	e := &env{actions: model.DefaultActionSet(), repo: r, out: w, errw: &errb}
+	if code := e.action([]string{"log"}); code != 0 {
+		t.Fatalf("broken pipe must exit 0, got %d (stderr %q)", code, errb.String())
+	}
+	if errb.Len() != 0 {
+		t.Fatalf("broken pipe must stay silent, stderr = %q", errb.String())
+	}
+	if w.writes != 2 {
+		t.Fatalf("writes = %d, want 2 (second one fails)", w.writes)
+	}
+	if r.yielded != 2 {
+		t.Fatalf("backend handed over %d records, want 2: the failed write must stop the scan", r.yielded)
+	}
+}
+
+// Without the optional interface there is no fallback: the command says so
+// instead of quietly buffering the whole history.
+func TestActionLogRefusesABackendWithoutStreaming(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), repo: demoRunner(), out: &out, errw: &errb}
+	if code := e.action([]string{"log"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "暂不支持 jj") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// An empty history is an answer: exit 0, nothing on stdout, one hint on stderr.
+func TestActionLogEmptyHistoryIsAnAnswer(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := newActionLogEnv(&out, &errb, &streamRunner{})
+	if code := e.action([]string{"log"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout must stay empty, got %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "还没有任何动作") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// History is read as written: the issue is the raw trailer value (not the
+// normalised id) and an action name the current vocabulary dropped still shows.
+func TestActionLogKeepsRawIssueAndUnknownAction(t *testing.T) {
+	base := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	r := &streamRunner{fakeRunner: fakeRunner{commits: []vcs.Commit{
+		{ID: "ddd4444d", Date: base, Message: "手写标题\n\nissue: Foo_Bar\naction: retired"},
+	}}}
+	var out, errb bytes.Buffer
+	e := newActionLogEnv(&out, &errb, r)
+	if code := e.action([]string{"log", "--jsonl"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc actionLogDoc
+	if err := json.Unmarshal([]byte(strings.TrimRight(out.String(), "\n")), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Issue != "Foo_Bar" || doc.Action != "retired" {
+		t.Fatalf("record = %+v, want the raw issue and the historical action", doc)
+	}
+	if doc.Title != "手写标题" {
+		t.Fatalf("a commit without a title trailer falls back to its subject, got %q", doc.Title)
+	}
+}
+
+// A backend failure is reported on stderr with the history wording loadRepo uses.
+func TestActionLogReportsReadFailures(t *testing.T) {
+	var out, errb bytes.Buffer
+	r := actionLogRunner()
+	r.err = errors.New("boom")
+	e := newActionLogEnv(&out, &errb, r)
+	if code := e.action([]string{"log"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "读取历史失败: boom") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+// The flag surface is shared by both subcommands, so each one must refuse the
+// other's flags rather than dropping them.
+func TestActionLogRejectsBadArguments(t *testing.T) {
+	cases := [][]string{
+		{"log", "extra"},
+		{"log", "--json"},
+		{"log", "--jsonl=x"},
+		{"log", "--limit"},
+		{"log", "--limit=0"},
+		{"log", "--limit=-1"},
+		{"log", "--limit=x"},
+		{"log", "--limit", "1", "--limit", "2"},
+		{"list", "--jsonl"},
+		{"list", "--limit", "1"},
+	}
+	for _, args := range cases {
+		var out, errb bytes.Buffer
+		e := newActionLogEnv(&out, &errb, actionLogRunner())
+		if code := e.action(args); code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2 (stderr %q)", args, code, errb.String())
+		}
+	}
+}
+
+// brokenPipeWriter accepts one write and then reports a closed pipe, the same way
+// a real stdout does when the consumer stops reading.
+type brokenPipeWriter struct{ writes int }
+
+func (w *brokenPipeWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > 1 {
+		return 0, io.ErrClosedPipe
+	}
+	return len(p), nil
 }
 
 // A repository that turned isolation off records an action in the main area

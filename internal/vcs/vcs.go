@@ -91,6 +91,20 @@ type StatLog interface {
 	LogStats(short bool, want func(id string) bool) (map[string]string, error)
 }
 
+// LogEach is the streaming form of Repo.Log: a backend that can read history
+// incrementally implements it, so a large repository never has to be held in
+// memory before the first record is handed over. fn returns false to stop; the
+// backend then stops reading and releases its child process, and LogEach returns
+// nil — an early stop is normal, not a failure.
+//
+// It is optional, but unlike StatLog there is no fallback: calling Log would turn
+// the stream back into a buffer, which is exactly what the caller asked to avoid.
+// A backend that does not implement it is reported as unsupported, never
+// silently buffered.
+type LogEach interface {
+	LogEach(fn func(Commit) bool) error
+}
+
 // AreaHint is an optional cheap pre-check for ListWorkspaces: false means the
 // backend provably has no linked areas, so a caller may treat the listing as
 // empty without spawning anything. true means "maybe" — the caller still asks

@@ -3,9 +3,11 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +35,149 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 		return nil, err
 	}
 	return parseLog(out), nil
+}
+
+// streamLogFormat is the streaming form of logFormat: three NUL-separated fields,
+// with -z adding one more NUL after each record. A reader that has seen three
+// terminators therefore owns exactly one complete commit — no guessing where a
+// record ends, and no "the last one has no terminator" special case. NUL is git's
+// own machine separator; unlike the unit/record separators logFormat uses, a
+// commit body can never make it ambiguous.
+const streamLogFormat = "%H%x00%aI%x00%B"
+
+// LogEach streams commits newest-first to fn, stopping as soon as fn returns
+// false. See vcs.LogEach.
+//
+// History is never materialized: the first record is handed over as soon as git
+// prints it, so a large repository pays its first-commit latency, not its
+// whole-history latency. When fn stops early the child is killed — a stopped
+// reader leaves git blocked on a full pipe, and Wait would then never return.
+func (r ExecRunner) LogEach(fn func(vcs.Commit) bool) error {
+	cmd := exec.Command("git", "log", "-z", "--author-date-order", "--format="+streamLogFormat)
+	cmd.Dir = r.Dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("git log: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// Git for Windows' git.exe is a shim that spawns the real git and waits, so
+	// killing the direct child can leave the real one holding the inherited
+	// pipe. Wait would then block on the stderr copier until that process ends;
+	// the delay is the backstop that keeps a stop from becoming a hang.
+	cmd.WaitDelay = 3 * time.Second
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("git log: %w", err)
+	}
+	br := bufio.NewReaderSize(stdout, 64*1024)
+	stopped := false
+	var readErr error
+	for {
+		id, err := readNULField(br)
+		if err == io.EOF {
+			break // clean end between records
+		}
+		if err != nil {
+			readErr = err
+			break
+		}
+		date, err := readNULField(br)
+		if err != nil {
+			readErr = truncated(err)
+			break
+		}
+		msg, err := readNULField(br)
+		if err != nil {
+			readErr = truncated(err)
+			break
+		}
+		when, _ := time.Parse(time.RFC3339, strings.TrimSpace(date))
+		c := vcs.Commit{
+			ID:      strings.TrimSpace(id),
+			Date:    when,
+			Message: strings.TrimRight(msg, "\r\n"),
+		}
+		if !fn(c) {
+			stopped = true
+			break
+		}
+	}
+	if stopped || readErr != nil {
+		// Stop the child, then close our end of the pipe: killing the shim alone
+		// leaves the real git blocked on a write nobody reads, and closing the
+		// pipe is what lets it notice and exit.
+		_ = cmd.Process.Kill()
+		_ = stdout.Close()
+	}
+	waitErr := cmd.Wait()
+	if stopped {
+		return nil
+	}
+	if readErr != nil {
+		return readErr
+	}
+	if waitErr == nil {
+		return nil
+	}
+	// An empty repository is not a failure: `git log` exits 128 with "does not
+	// have any commits yet" before printing a byte. Probe HEAD and treat it as
+	// an empty stream; every other failure stays a failure.
+	if r.noHistory() {
+		return nil
+	}
+	return fmt.Errorf("git log: %s", failureText(stderr.String(), waitErr))
+}
+
+// readNULField reads one NUL-terminated field. io.EOF means "the stream ended
+// cleanly between records"; a record that ends mid-field is reported as
+// unexpected EOF instead of being silently dropped.
+func readNULField(br *bufio.Reader) (string, error) {
+	b, err := br.ReadBytes(0)
+	if err == io.EOF {
+		if len(b) == 0 {
+			return "", io.EOF
+		}
+		return "", io.ErrUnexpectedEOF
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(b[:len(b)-1]), nil
+}
+
+// truncated turns "the stream ended after one or two fields" into an unexpected
+// EOF: a half record is a broken read, not the end of history.
+func truncated(err error) error {
+	if err == io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
+// noHistory reports whether HEAD has no commit yet — the one git log failure that
+// is really an empty answer. It runs only on the failure path, so the happy path
+// still spawns a single process, and it reads nothing but the exit code: a
+// translated git message cannot change the verdict.
+func (r ExecRunner) noHistory() bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "HEAD")
+	cmd.Dir = r.Dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return false
+	}
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
+}
+
+// failureText picks the one-line reason for a failed git call: git's stderr when
+// it wrote one, else the exit status — the same rule runIn follows.
+func failureText(stderr string, err error) string {
+	if msg := strings.TrimSpace(stderr); msg != "" {
+		return msg
+	}
+	return err.Error()
 }
 
 // statLogFormat brackets each commit id with NULs so the diffstat block git

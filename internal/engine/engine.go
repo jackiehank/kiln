@@ -26,7 +26,7 @@ func ActionsFromCommits(commits []vcs.Commit, rel *model.RelationSet) []model.Ac
 		}
 		out = append(out, model.Action{
 			ID:        c.ID,
-			Subject:   subject(c.Message),
+			Subject:   Subject(c.Message),
 			Date:      c.Date,
 			Issue:     f.Issue,
 			Kind:      f.Action,
@@ -45,8 +45,11 @@ func ActionsFromCommits(commits []vcs.Commit, rel *model.RelationSet) []model.Ac
 	return out
 }
 
-// subject returns the first non-empty line of a commit message.
-func subject(message string) string {
+// Subject returns the first non-empty line of a commit message: the one-line
+// label a listing shows when the commit carries no `title:` trailer. It is
+// exported because `action log` needs exactly this fallback for the same reason
+// `list` does.
+func Subject(message string) string {
 	for _, line := range strings.Split(message, "\n") {
 		if s := strings.TrimSpace(line); s != "" {
 			return s
