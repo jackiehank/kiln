@@ -106,7 +106,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln show <issue> [n\|action]` | 展开某个动作的完整变更（默认最后一个；`n` 是 `path` 里的序号，**也可给动作名**——取该动作**最后一次**，有多个会在 stderr 提示，没有则列出可控序号）；`--stat` 只给文件统计 |
 | `kiln status [--json]` | 全库概览：按 domain 分组的目录视图 |
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
-| `kiln list [--domain=] [--tag=] [--action=] [--status=open\|done] [--search=] [--json]` | 按条件过滤 issue；`--action` 必须命中动作词表；`--tag` 只接受单个标签（不切逗号）；`--status=open` 只留未收尾的（末条动作不是终点）；`--search` 空白分词、词间 AND、字面量、大小写不敏感（搜 id / 标题 / 动作 subject）；空结果会在 stderr 说明是哪些条件没匹配 |
+| `kiln list [--domain=] [--tag=] [--action=] [--status=open\|done] [--search=] [--json]` | 按条件过滤 issue；`--action` 必须命中动作词表；`--tag` 只接受单个标签（不切逗号）；`--status=open` 只留未收尾的（末条动作不是终点）；`--search` 空白分词、词间 AND、字面量、大小写不敏感（搜 id / 标题 / 动作 subject），结果按 rank 0–4 排序（id 首词前缀 / id 全词 / 标题全词 / 单条动作全词 / 词分散），同档按末条动作日期降序、再按 id；`--json` 的搜索行带 `rank`，`hit` 带 `total`/`date`；空结果会在 stderr 说明是哪些条件没匹配 |
 | `kiln graph [--format=ascii\|mermaid\|json] [--mermaid] [--json] [--issue <id>] [--depth N]` | 关系图（`--mermaid` 出流程图文本；`--json` 出给 agent 读的一份文档，`--issue`/`--depth` 收窄成无向邻域，默认 `ascii`） |
 | `kiln worktree new <issue>` | 建一个专用工作区（详见「工作区模式」） |
 | `kiln worktree list` | 列出全部工作区及各自状态 |
