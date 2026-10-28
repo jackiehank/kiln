@@ -347,3 +347,49 @@ Q3=author | committer
 
 - `-h` 是否露出排序：本轮不做；触发条件是有用户仅看 `-h` 就误解顺序。
 - `rank` 是否也进文本视图：不进；文本只变顺序，布局与列不变。
+
+## 回复（2026-10-28，dsh-kiln 侧）
+
+Q1=A、Q2=A、Q3=author。D1（`*int`）与 D4（一次 `searchRows` 两个视图共用）没意见。
+
+### Q1=A：rank 0 只认首词前缀
+
+插件 `plugin/lib/client.js` 的 `searchIssues`（第 1017–1023 行）：
+
+```js
+const idHit = hasAll(id)
+const titleHit = hasAll(title)
+const actionHit = titleHit
+  ? null
+  : (actions.find((action) => hasAll(String(action?.title ?? ''))) ?? null)
+const rank = id.toLowerCase().startsWith(terms[0]) ? 0 : idHit ? 1 : titleHit ? 2 : actionHit !== null ? 3 : 4
+```
+
+`hasAll(text)` 是「全部词都在该字段里」，但 rank 0 只看 `startsWith(terms[0])`，**不要求其余词在 id**——其余词可以来自标题或动作。这正是插件现在对用户的行为，选 A 才能直接对齐；选 B 会让插件为了对齐改排序，又回到两套算法。
+
+本仓真实例子：query `kiln v0.2.0`，issue `kiln-v020-adapter` 的 id 以 `kiln` 开头但不含 `v0.2.0`（含在标题/动作里），插件排 rank 0。kiln 按 A 应同档；按 B 会落到 rank 1。
+
+### Q2=A：有日期在前，零值排最后
+
+插件 `byRecency`（第 849–854 行）：
+
+```js
+const leftDate = left.last?.date ?? ''
+const rightDate = right.last?.date ?? ''
+if (leftDate === rightDate) return left.id.localeCompare(right.id)
+return leftDate < rightDate ? 1 : -1
+```
+
+缺日期的空串自然排最后；两边都缺按 id。与 A 一致。B 会让比较器不满足传递性，`sort.Slice` 依赖初始顺序，不接受。git 后端正常数据不会出现零值，A 只是契约兜底。
+
+补充：插件现在按 ISO 字符串比较，跨时区会与「按时间」不一致；插件侧会改成按时间比较，kiln 按 D3 的时间比较即可，不需要迁就旧的字符串序。
+
+### Q3=author：author date
+
+插件展示的日期来自 `kiln path --json` 的 `actions[].date`；kiln 的 git 后端用 `%aI`（author date）填它（`internal/vcs/git/git.go:27`：`const logFormat = "%H%x1f%aI%x1f%B%x1e"`）。`hit.date` 必须同源，否则同一行在搜索结果预览与 `path` 里日期不一致。选 author。
+
+### 备注
+
+- 插件侧还有一处会对齐 kiln：`hit` 的抑制规则从「当前标题能解释」改成「id + 标题能解释」——这是插件改，不需要 kiln 动；kiln 保持现状即可。
+- `total` 用该 issue 的全部动作数；`date` 用命中动作的 author date，格式 `time.RFC3339`；两者与 `ordinal`/`action`/`commit`/`subject` 放进同一个 `hit` 对象。
+- 以上确认后，插件按需求 1–7 接 `list --search --json`；apply 后我们再做宿主路由与渲染，不再保留内存匹配的第二套排序。
