@@ -303,3 +303,101 @@
    dsh-kiln 的“数据只走 kiln --json”约定；本 test 只证明数据路径可行，不裁决插件架构。
 7. 因此：**不做 timeline 命令**是对的；若仍要“首行 ≤250ms + author-date 稳定”，
    要么要求仓库有 commit-graph，要么接受 ~360ms，要么退回 default 顺序并写明排序口径。
+
+## hypothesize（2026-10-28）：多客户端改变必要性——timeline 作为共享只读传输契约
+
+> 结论先行：单消费者下前一条 test 的结论不变（不需要命令）；但**如果未来会出现独立的
+> kiln-webui / kiln-tui，timeline 的必要性从“模型”转到“接口”**：与其让每个前端各写一份
+> `git log` + trailer 解析，不如做一条只读的 `kiln timeline --jsonl`，作为多客户端共享契约。
+> 入口选 **D（独立 timeline 命令）**，不选 A/A'（把第二种形状塞进 `path`），B 仍排除。
+> 这不是 conclude：是否接受“包装命令”、commit-graph/排序口径、jj 与 NDJSON 例外，留给上游裁决。
+
+### 1. 条件变化：从 1 个消费者到 N 个
+
+当前只有 dsh-kiln；test 已证明它可以直接 `git log`。但计划中的 webui/tui 会带来：
+
+- 2 个以上独立前端（插件退场前后还会并存）；
+- 不同语言/进程：浏览器端不能 spawn，必须有宿主/服务端；TUI 可能是 Go；
+- 每个前端都要重复：`issue+action` 识别、issue 归一化、action 词表、domain/tags、
+  author date、jj 差异、limit、broken pipe。
+
+这正是“一份实现 vs N 份实现”的问题，和单客户端时“git 也能做”不是同一个问题。
+
+### 2. 主张：做 D，`kiln timeline --jsonl [--limit N]`
+
+把 timeline 定义为**多客户端的只读传输契约**，不是新的核心模型视图：
+
+- 命令名直接说视图；NDJSON 例外只属于它；
+- `path` 零改动，不出现“第二种形状”；
+- webui 后端、TUI、dsh-kiln 都消费同一份行格式；
+- 识别/归一化/词表/jj/broken pipe 只在 kiln 内实现一次；
+- 性能与直读 git 同级（内部就是流式 `git log`），但契约稳定、测试集中。
+
+### 3. 为什么不是“每个客户端直读 git”
+
+| 成本 | 每个客户端直读 git | 一个 timeline 命令 |
+| --- | --- | --- |
+| 识别/归一化 | 每个客户端各写一份，容易漂移 | kiln 一份 |
+| jj | 每个客户端各处理或各自声明仅 git | kiln 统一（支持或明确报错） |
+| 字段/顺序 | 各写各的解析 | 一份 NDJSON 契约 |
+| 测试 | N 套 | 一套 |
+| 首行 | 64/360ms（取决于 commit-graph） | 同级 |
+| 新增面 | 无命令 | 多一个包装命令 |
+
+多客户端下，“多一个包装命令”比“N 份 trailer 解析”便宜。
+
+### 4. 入口比较
+
+| 方案 | 入口 | 多客户端视角 |
+| --- | --- | --- |
+| **D** | `timeline --jsonl [--limit N]` | **推荐**：名字/契约/例外都独立，`path` 不动 |
+| A' | `path --timeline --jsonl` | 可行但 `path` 出现第二种单位；未来契约更模糊 |
+| A | `path --all --timeline --jsonl` | `--all` 恒真，啰嗦 |
+| C | `path --timeline`（隐含 NDJSON） | 编码不显式，未来文本视图会改默认 |
+| B | `path --all --jsonl` | 排除：`--jsonl` 同时改形状与编码，撞既有 JSON 规则 |
+
+上游的 hypothesize 已说明：D 是唯一不碰既有命令契约的入口；单客户端时它显得多余，
+多客户端时它反而最合理。
+
+### 5. 验收口径按 test 修正
+
+test 的实测（100k）：
+
+- 有 commit-graph：author-date 首行 **64ms**、`--limit 50` **70ms**、全量 1.68s；
+- 无 commit-graph：首行 **359ms**、`--limit 50` 366ms、全量 1.35s；
+- `path --all`：首行 954ms、全量 1.12s / 35.6MB；
+- default 顺序：首行 64ms，但序是 commit-date/topology。
+
+因此不要把“首行 ≤250ms”写成无条件验收。建议分档：
+
+- 有 commit-graph：首行 ≤250ms、`--limit 50` ≤300ms；
+- 无 commit-graph：首行 ≤400ms（仍 2.6× 优于 `path --all`）；
+- 全量 ≤2s；不承诺总吞吐优于 `path --all`；
+- 排序默认 author-date；default 顺序作为可选/降级需显式写清。
+
+### 6. 契约要点（待上游 conclude 定）
+
+- NDJSON 与“stdout 一份 JSON 文档”规则的关系：作为 timeline 的显式例外，还是另立规则；
+- 字段：`title` 取 subject；`domain` 是 per-commit 还是 issue 级；`tags` 是否带；
+- `--limit`：是否必填/可选；`-n` 与过滤的语义（N 条动作而非 N 个提交）；
+- jj：等价支持，还是明确非 0「暂不支持」；
+- broken pipe / 空仓 / 非仓的退出码；
+- commit-graph 缺失时的文档承诺（≤400ms 还是提示用户生成）；
+- 该命令是否只读、是否承诺长期稳定（多客户端契约意味着不能随意改字段）。
+
+### 7. 反方 / 风险
+
+- **YAGNI**：如果最终只做一个 Go TUI 且直接 import kiln 内部包，命令可以不做；
+- **仍是包装**：它不新增模型/校验，按 `cli-necessity` 属于“诚实包装”；多客户端只改变
+  “明显更好”的判断，不改变分类；
+- **承诺成本**：一旦 webui/tui 依赖它，字段/顺序/NDJSON 就不能随便改；
+- **commit-graph 不可控**：插件只读，不能替用户生成；无 graph 的首行 360ms 要接受或写进文档；
+- **jj**：若只支持 git，要在契约里明确，不能静默空输出。
+
+### 8. 留给上游 conclude 的问题
+
+1. 是否接受 D（独立 `timeline --jsonl`）作为多客户端只读契约？如果不接受，是否明确
+   “各客户端直读 git、kiln 不提供”？
+2. 验收是否按 commit-graph 分档（≤250ms / ≤400ms）？
+3. NDJSON 如何写进既有“一份文档”规则；`--limit`/jj/broken pipe 的最终语义；
+4. 是否现在做，还是等 webui/tui 真正开工再做（YAGNI 的裁决）。
