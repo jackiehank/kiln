@@ -259,3 +259,47 @@
 - 若接受包装：入口按 D；先补 `test` 原型（`git log --author-date-order` 流式 + trailer 过滤 + `-n` 首行计时），再决定是否 `apply`。
 - `apply` 前必须定的契约：`title` 取 subject 还是 trailer title；`domain` 的 per-commit 语义；NDJSON 与既有“一份文档”规则的关系；broken pipe / 空仓退出码；100k 合成仓的计时口径。
 - 若最终不做：把“`git log` 直读”或“`path --all --json` 展平”写进 issue 的替代方案，不留下一个半成品命令面。
+
+## test（2026-10-28）：`git log` 原型能否替代新命令
+
+### 方法
+
+- 合成仓用 `git fast-import`，**1 提交 = 1 issue = 1 action**（空提交，`issue: issue-N` + `action: apply`），
+  规模 1k / 100k；author/committer date 每提交 +60s；
+- 原型约 60 行 Node：`spawn git log` + 逐记录解析（0x1e 分隔），格式只用需要的字段：
+  ```text
+  git log [--author-date-order] --format='%H%x1f%aI%x1f%s%x1f%(trailers:key=issue,valueonly)%x1f%(trailers:key=action,valueonly)%x1f%(trailers:key=domain,valueonly)%x1f%(trailers:key=tags,valueonly,separator=%x2C)%x1e'
+  ```
+- 过滤 issue+action 非空；测第一行、第 50 行、全量；`-n 50` 与“读够 50 行 kill”都试；
+- 对照 `kiln path --all --json` 的第一块 stdout/总耗时/字节；
+- 另测 `git commit-graph write --reachable` 之后同一条命令（commit-graph 是仓库侧性能前置，不是插件可写的东西）。
+
+### 结果（本机，Windows）
+
+| 场景 | 首行 | 第 50 行 | 全量 | 备注 |
+| --- | --- | --- | --- | --- |
+| 1k，author-date | 78 ms | 78 ms | 91 ms | 357 条动作的真相在此规模无差别 |
+| 100k，default 顺序 | 64 ms | 64 ms | 1,475 ms | 快，但顺序是 commit-date/topology |
+| 100k，author-date，无 commit-graph | 359 ms | 360 ms | 1,347 ms | 首行 >250ms 目标 |
+| 100k，author-date，有 commit-graph | **64 ms** | 66 ms | 1,681 ms | 首行达标；全量略慢 |
+| 100k，author-date + `-n 50`，无 commit-graph | 363 ms | 363 ms | 366 ms | git 仍要先走完约 360ms |
+| 100k，author-date + `-n 50`，有 commit-graph | **66 ms** | 66 ms | 70 ms | 提前停止有效 |
+| 100k，`kiln path --all --json` | 954 ms | — | 1,117 ms / 35.6 MB | 先 `engine.Build`，首块晚 |
+
+（首行/第 50 行相同，是因为第一次 data chunk 已经含多行；`-n 50` 才真正让 git 提前收尾。）
+
+### 结论
+
+1. **git 命令可以实现**：约 60 行解析 + 一条 `git log --format`，首行/limit/行数都对；
+   **没有新增 kiln 命令的必要**。
+2. **author-date 首行是否达标取决于 commit-graph**：没有它，100k 首行 ~359ms（仍比
+   `path --all` 的 954ms 快 2.6×）；有它 64ms（15×）。commit-graph 是仓库侧前置，
+   插件只读、不能替用户写。
+3. **default 顺序首行稳定 64ms**，但顺序是 commit-date/topology；`%aI` 仍是 author date，
+   所以“值”对、“序”可能和 `path` 的 author-date 排序不同（merge/rebase 才明显）。
+4. **全量并不更快**：git 全量 1.35–1.68s，`path --all` 1.12s；流式赢在首行，不在总吞吐。
+5. **`-n 50` / 读够 kill 都可行**；没有 commit-graph 时 `-n 50` 仍要 ~360ms，因为 git 首块迟。
+6. **插件直读 git 是另一条决定**：它会复制 kiln 的 trailer 过滤/归一化语义，并违反
+   dsh-kiln 的“数据只走 kiln --json”约定；本 test 只证明数据路径可行，不裁决插件架构。
+7. 因此：**不做 timeline 命令**是对的；若仍要“首行 ≤250ms + author-date 稳定”，
+   要么要求仓库有 commit-graph，要么接受 ~360ms，要么退回 default 顺序并写明排序口径。
