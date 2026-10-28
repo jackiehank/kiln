@@ -99,3 +99,83 @@
 - [Docker container ls](https://docs.docker.com/reference/cli/docker/container/ls/)
 - [kubectl reference](https://kubernetes.io/docs/reference/kubectl/)
 - [npm ls](https://docs.npmjs.com/cli/v10/commands/npm-ls)
+
+## hypothesize（2026-10-28）：选 `kiln action list`——单数名词 + 全词 `list`，只开 `list`
+
+> 结论先行：`action list` 是 collect 里唯一同时满足“单数名词组 / 全词 / 与顶层 `list` 区分 / 复用模型词”的候选，选它。命令形态为 **`kiln action list [--jsonl] [--limit N]`**：默认给人读的一行一条，`--jsonl` 给机器流；不需要 `--all`；当前**只开 `list`**，不做 `action show` / `action search`。主要风险是“action list”可能被读成“列出 action 词表”，用 help 文案和一次用户测试钉住；若读错严重，退回 `timeline`。
+
+### 1. 主张
+
+```text
+kiln action list [--jsonl] [--limit N]
+```
+
+- `action` 单数、`list` 全词：与 `worktree list`、`gh issue list`、`jj workspace list` 同形；与顶层 issue `list` 区分。
+- 全局：不带 `--all`，也不接受 issue 参数；时间顺序 author-date 倒序。
+- 默认文本：一行一条动作，含日期 / issue / action / 短 hash / subject；具体列宽 apply 定。
+- `--jsonl`：NDJSON，一行一个动作对象，字段与 `timeline-stream` 定的 action 视图一致。
+- `--limit N`：最多 N 条动作后正常退出；只跟 `action list`；N ≥ 1。
+- 当前**只开 `list`**：`show <issue> n` 仍是动作详情，`list --action` 仍是 issue 过滤；不新增 `action show` / `action search`。
+
+### 2. 为什么是 `action list`
+
+| 候选 | 判定 | 理由 |
+| --- | --- | --- |
+| **`action list`** | **选** | 单数名词组、全词 `list`、复用模型词 `action`、与顶层 `list` 区分；`config path` 证明单子命令组可接受 |
+| `actions` | 不选 | 复数破 kiln 名词组惯例；没有动词，默认行为（list？help？）不明确 |
+| `action log` / `log` | 不选 | `log` 撞 `git log` 与已否的 `log --rewrites`；`action log` 容易被读成审计 |
+| `timeline` | 备选 | 直接说视图，但不是资源名；与 `worktree` / `config` 组风格不同；作为 fallback 保留 |
+| `action ls` | 不选 | kiln 现有命令全用全词；`ls` 是 docker/npm 的短化传统，不是 kiln 的 |
+
+`action` 是 trailer 键、模型词、`show` 的选择器；命令名复用它，比 `timeline` / `log` 少一层翻译。
+
+### 3. 默认文本 + `--jsonl` 的产品形态
+
+- **默认文本**：`action list` 是 `list` 的 action 版，应该能直接给人看；一行一条，流式打印，不建全史。
+- **`--jsonl`**：机器契约，NDJSON；`action list` 是唯一带 NDJSON 的命令，作为“一份文档”规则的显式例外。
+- **不提供 `--json`**：一份 action 数组会和 `--jsonl` 争同一个视图，还要先缓冲；本轮不做。
+- **`--limit` 对两种输出都有效**：到 N 条动作就停，不是到 N 个提交。
+- **流式**：文本与 NDJSON 都是边扫边出；首行不等全仓。
+
+### 4. 边界与不做什么
+
+- 不做 `action show`：动作详情仍走 `show <issue> n`；将来若加，应先解决“全局按 commit 寻址”与现有 issue+ordinal 的关系。
+- 不做 `action search`：搜索仍走 `list --search`；动作流的过滤留给消费方或后续 issue。
+- 不做 `--domain` / `--tag` / `--action` 过滤：本轮只做“全部动作的时间线”；要过滤先在消费方做，或另开 issue。
+- 不做 `--all`、`--stat`、`--shortstat`、`--json`；`action list` 不是 `path` 的模式。
+- 不支持 jj：`action list` 在 jj 后端显式非 0 + stderr「暂不支持」，不静默空输出；等 jj 的流式/排序方案再补。
+- 空仓 / 无动作：stdout 为空、exit 0（“没有动作”不是错误）；stderr 是否给提示在 apply 定。
+- broken pipe：及时停止扫描、结束 git 子进程，不挂住；退出码优先 0，具体在 apply 定。
+
+### 5. 契约草案（apply 定死）
+
+| 项 | 草案 |
+| --- | --- |
+| 输出 | 默认文本一行一条；`--jsonl` 一行一个 JSON 对象 |
+| 字段 | `issue / action / commit / date / title / domain / tags`（与 `timeline-stream` 一致） |
+| 顺序 | author-date 倒序；拓扑约束下的顺序，文档写明 merge 多时不保证严格全局时间序 |
+| 过滤 | 只留同时带 `issue:` + `action:` 的提交 |
+| limit | N 条动作；N ≥ 1；无效 exit 2 |
+| 空/错 | 空仓/无动作 exit 0；读历史失败非 0；jj 明确非 0 |
+| NDJSON | `action list --jsonl` 是唯一例外；其他命令仍“一份 JSON 文档” |
+
+### 6. 反方与证伪
+
+**最大风险：`action list` 可能被读成“列出 action 词表”。** kiln 里 `action` 既是“动作实例”，也是“动作类型”（`ask` / `test` / …）；`action list` 听起来像列后者。
+
+- 缓解：help 文案第一句写“按时间列出动作（提交），不是列出动作词表；词表见 `kiln -h` / `.kilnconfig.jsonc`”。
+- 证伪：找 3–5 个用过 kiln 的人（或插件侧）只看命令名猜用途；多数猜“词表”就改名。
+- 备选顺序：`timeline` → `actions`（若愿意破单数惯例）→ `action log`。
+
+其他证伪条件：
+
+1. **默认文本不必要**：如果所有人都只用 `--jsonl`，`action list` 的“list”就是多余包装，应该用 `timeline --jsonl`。
+2. **组会生长**：如果很快要加 `action show` / `action search`，而它们与 `show` / `list --search` 的边界说不清，独立 `timeline` 反而更干净。
+3. **jj 必须首日支持**：如果 jj 用户要求等价，`action list` 的“git-only”承诺要重新评估（可先明确拒绝）。
+4. **`--jsonl` 必须显式**：如果用户期望 `action list` 默认 NDJSON，文本默认就是错的产品形态；需重新定。
+
+### 7. 下一步
+
+- 若认可 `action list`：本 issue 下一步是 `conclude`（定名、默认文本、只开 list、jj 拒绝、`--jsonl`/`--limit`），然后另开/继续 `apply` 实现。
+- 若对“词表歧义”不放心：先做一次极小用户测试或在 plugin 侧确认，再 conclude；不要直接 apply。
+- 实现前仍需定死：文本列宽/日期格式、`--limit` 与 broken pipe、空仓提示、jj 错误文案、NDJSON 字段的 `title`/`domain` 语义。
