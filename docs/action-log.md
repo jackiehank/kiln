@@ -365,3 +365,93 @@ const streamLogFormat = "%H%x00%aI%x00%B" // 记录之间由 -z 补 NUL
 
 - 若无异议：`conclude` 定稿后 `apply`，实现顺序按 §8（`vcs.LogEach` → git 实现 → 命令 → 文档）。
 - 异议可能集中在三处：`title` 兜底（要不要和 `path` 一样严格）、`domain` 只给单条（要不要牺牲流式换 issue 级）、Unix 破管道是否统一 0。这三处任一改动都不影响其余方案。
+
+## conclude（2026-10-28）：action log 定稿——git 单遍流式，一行一动作，`--jsonl` 逐条
+
+### 0. 裁决
+
+| 项 | 决定 | 理由 |
+| --- | --- | --- |
+| 入口 | `kiln action log [--jsonl] [--limit N]` | ask 已定；`action` 组只读，与 `action list` 同组 |
+| 后端接口 | 可选接口 `vcs.LogEach(fn func(Commit) bool) error`，**无回退** | 回退到 `Log()` 等于把流变回缓冲；与 `StatLog` 的“可选+回退”区别在于回退语义相反 |
+| git 读法 | `git log -z --author-date-order --format="%H%x00%aI%x00%B"`，`bufio.Reader` 按 NUL 读三段 | `-z` 给每条记录补 NUL（实测末字节 `00`），不要求正文无换行；NUL 是 git 官方分隔符，比 `\x1e/\x1f` 硬 |
+| 顺序 | author-date 倒序（`--author-date-order`） | ask 已定；它是拓扑序 + author-date 打破平局，合并可能让严格倒序不成立——文档写明 |
+| 早停 | sink 返回 `false` → 关 reader、`Kill`、`Wait` 吞错 | `--limit` 与破管道共用；不 Kill 会让 git 卡在写满的管道上 |
+| 空仓 | 零记录 + `git log` 失败时补 `git rev-parse --verify --quiet HEAD`：exit 1 → 空流 | 空仓 `git log` 退出 128；HEAD 探测只看退出码，不受语言影响，happy path 仍是单进程 |
+| jj | 不实现 `LogEach`，显式 exit 1 | 不静默缓冲；将来用 `jj log -T 'json(self)'` 实现，不改接口 |
+| 文本 | 一行一条：本地日期到分 / issue / action / 7 位 hash / label | 与 `path` 的列习惯一致；`| wc -l` 即动作数 |
+| `--jsonl` | NDJSON，一行一个对象 | 逐条可消费、可截断；`--json` 明确拒绝并指到 `--jsonl` |
+| `title` | `title:` trailer，缺省取提交首行 | 与 `list --json` 的 `issueTitle` 同规则；文本与 JSONL 用同一个 label |
+| `domain` / `tags` | 只给本条提交的声明 | 严格流式下 issue 级 domain/tags 拿不到（collect 的更正）；当前分类去 `list`/`status` 取 |
+| 过滤 | 只认 `issue:` + `action:`，不按当前词表过滤 | 与 `path`/`list`/`show`/`check` 对“动作”的定义一致 |
+| 破管道 | Windows 静默 exit 0；Unix 保持 SIGPIPE（可能 141） | 实测 git 与 rg 都静默 exit 0；Unix 的 141 是平台惯例，不覆盖 |
+| 空结果 | exit 0 + stderr 复用 `list` 的提示 | 空是答案，stdout 保持干净 |
+
+### 1. 命令契约
+
+```text
+$ kiln action log
+2026-10-28 22:17  action-list             collect      80d1a9c  collect：把问题写进契约文档
+2026-10-28 22:10  action-log              collect      edbe9be  collect 第二轮：同类工具的逐条读 git 与逐条交付做法
+
+$ kiln action log --limit 1
+2026-10-28 22:17  action-list             collect      80d1a9c  collect：把问题写进契约文档
+
+$ kiln action log --jsonl
+{"issue":"action-list","action":"collect","commit":"80d1a9c…","date":"2026-10-28T22:17:33+08:00","title":"collect：把问题写进契约文档","domain":"cli"}
+```
+
+- 文本：日期 `2006-01-02 15:04` **本地时区**；issue 补到 24、action 补到 12（同 `path`）、hash 取 7；超出宽度不截断，该行右移；末尾不留空格；无表头/legend。
+- JSONL：字段顺序 `issue / action / commit / date / title / domain / tags`；`commit` 全长；`date` 为 `time.RFC3339` 并保留提交原 offset；`title` / `domain` / `tags` 为空时**省略键**；一行一个对象、`\n` 结尾；`SetEscapeHTML(false)`，与 `writeJSON` 的转义习惯一致。
+- `issue` 是 trailer 原值（不 normalize）；`action` 已小写；词表外的历史动作照常出现。
+
+### 2. 参数与错误文案（apply 照抄）
+
+| 情形 | 输出 | 退出码 |
+| --- | --- | --- |
+| `--limit N`，N ≥ 1 | 最多输出 N 条后正常结束 | 0 |
+| `--limit 0` / 负数 / 非整数 | `--limit 需要 ≥ 1 的整数（当前: %q）` | 2 |
+| 重复 `--limit` | `flag --limit 只能给一次（当前给了 %d 次）`（`rejectRepeats`） | 2 |
+| `--json`（含 `action --json log`） | `action log 用 --jsonl（一行一个动作），不用 --json` | 2 |
+| 多余位置参数 | `rejectExtra` 的标准文案 | 2 |
+| 无子命令 / 未知子命令 | 组用法 `用法: kiln action list [--json] \| kiln action log [--jsonl] [--limit N]` | 2 |
+| jj 后端 | `action log 暂不支持 jj（当前只实现 git 的流式读取）` | 1 |
+| 读历史失败 | `读取历史失败: %v`（与 `loadRepo` 同文案） | 1 |
+| 空仓 / 无动作 | stderr `仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）` | 0 |
+
+`--limit` 数的是**输出的动作数**，不是扫描的提交数；够数即停，不读剩余历史。
+
+### 3. 交付与内存
+
+- 每条记录一次 `Write` 到 `e.out`，不套 `bufio`（首行不等待缓冲）；`pathBatchWriter` 那套 64KB 缓冲不适用于逐条流。
+- 内存：O(1)（一条记录 + `bufio.Reader` 的 64KB 缓冲），不再持有全史。
+- 不调 `loadRepo`：只走 `e.backend()` + `trailer.Parse`，坏掉的历史（不合规 issue id、未知 action 名）不影响本命令。
+
+### 4. 契约要写进 `machine-readable-output`
+
+新增一节，明确三件事：
+
+1. **NDJSON 是“一份文档”规则的显式例外**：stdout 是行分隔的 JSON 流，不是单个文档；理由不是内存（`pathBatchWriter` 已证明文档可流式），而是**逐条可消费、可截断、`jq`/`awk` 直接吃**；空流（0 行）是合法结果。
+2. **字段语义**：`title` 是“trailer title → subject 兜底”；`domain`/`tags` 是**本条提交**的声明，不是 issue 级；issue 级分类去 `list --json` / `status --json`。
+3. **退出码**：0 = 正常（含空结果、`--limit` 用尽、Windows 破管道）；1 = 后端不支持 / 读取失败；2 = 参数错误；Unix 上被 SIGPIPE 终止时 shell 看到 141，属平台惯例。
+
+### 5. 验收
+
+- `vcs.LogEach` 在 git 后端实现，jj 不实现；
+- 14 条测试全过（hypothesize §9）：文本顺序与格式、JSONL 逐行可解析、`--limit` 早停且**后端只被要求 N 条**、非法 `--limit`、空历史、破管道（`io.ErrClosedPipe`）静默 0、jj 不支持、`--json` 被拒、`--jsonl --limit`、`title` 兜底、issue 原值、词表外动作、真仓冒烟、help；
+- `go test ./...`、`go vet ./...`、`gofmt -l` 干净；
+- 性能按 test 分档：有 commit-graph 首行 ≤250ms、无 ≤400ms（100k 合成仓），全量 ≤2s；**不写“无条件 ≤250ms”**；
+- 本仓冒烟：`action log` 行数 = 当前动作总数（含本次新提交），`--jsonl` 逐行可解析，`--limit 3` 只出 3 行。
+
+### 6. 非目标与遗留
+
+- 不做 `--json`、`--all`、`--stat`、`--domain/--tag/--action` 过滤、`action show/search`；
+- 不改 `path` / `list` / `show` 的任何行为；
+- 遗留 1：jj 的流式读取（`json(self)` 已可行，另开 issue 或在本 issue apply 后补）；
+- 遗留 2：Unix 上 `| head` 可能 141，若成为痛点再评估 `signal.Ignore(SIGPIPE)`；
+- 遗留 3：`domain` 只有 per-commit 值，按当前分类筛需求出现时再议（不要偷偷在流里补）；
+- 遗留 4：无终止记录，截断只能靠退出码/行数判断；加 `summary` 会与“一行一条动作”冲突，暂不加。
+
+### 7. 下一步
+
+`apply`：按 `vcs.LogEach` + git 实现 → `actionLog` + 分派 + 管道判断 → 测试 → 文档（machine-readable-output、README 双语、help/i18n）的顺序落地。
