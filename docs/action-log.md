@@ -142,7 +142,7 @@ exit=1
 2. 早停与子进程：`--limit` 与 broken pipe 谁负责 `Kill`、谁负责 `Wait`、被杀的 `git` 错误怎么吞；`Wait` 必须在 reader 停止之后还是之前？
 3. 文本：日期用本地时间还是 UTC、精确到分还是秒；列序（日期 / issue / action / hash / title）；对齐与表头；空结果给不给 stderr 提示。
 4. `title` 语义：跟 `pathAction` 一样严格取 trailer（手写提交可能没有），还是跟 `issueTitle` 一样 subject 兜底？
-5. `domain` / `tags`：单条声明还是 issue 级？注意两者不对称——newest-first 单遍里 issue 级 `domain`（最后一个非空）**可以**在遇到该 issue 最新一条时确定；issue 级 `tags`（并集）**不可**，要全史。
+5. `domain` / `tags`：单条声明还是 issue 级？**更正**：上一版这里写成“issue 级 `domain` 可在 newest-first 单遍里确定”，是错的——只有“该 issue 最新一条自己声明了 domain”时才成立；若最新一条没声明、声明在更老的提交上，单遍读到最新一条时还没见过它，早已输出过。所以严格流式下 `domain` 也只能是单条；`tags` 并集同理不可得。
 6. 空仓：把 “no commits yet” 当空流，还是让 git 报错？判据是匹配 stderr 文案，还是先探 `HEAD`？
 7. broken pipe：两个平台统一成 exit 0 静默？Unix 的 SIGPIPE 默认行为要不要覆盖（默认就会静默死）？Windows 识别哪些错误码？
 8. `action log --json` / `action --json log` 怎么处理：明确拒绝并指向 `--jsonl`，还是当未知 flag 警告？
@@ -219,3 +219,149 @@ exit=1
 4. 退出码：早停/破管道统一 0；`--limit` 用完 0；jj 不支持用 1 还是 2；空仓 0。
 5. 非 UTF-8：sanitize 还是像 rg 那样两态（后者超出字段集，且改变消费方形状）。
 6. 终止记录：不加（守 ask 的字段集），还是加一条 `type:"summary"`（就与“一行一条动作”的承诺冲突，需要重新定义）。
+
+## hypothesize（2026-10-28）：`LogEach` 单遍流式；`-z` 三字段分帧；每条一次写；破管道静默 0
+
+> 结论先行：`vcs` 增加可选接口 `LogEach(fn func(Commit) bool) error`，git 用 `git log -z --author-date-order --format="%H%x00%aI%x00%B"` 逐条读，jj 不实现并显式报错（**不回退**到 `Log()`）；命令层每写一条就落地、不缓冲，`--limit` 与破管道都靠 sink 返回 `false` 早停；`--jsonl` 是 NDJSON，字段与 ask 一致，`title` 用“trailer title → subject 兜底”，`domain`/`tags` 只给本条提交自己的声明；空仓映射成空流 exit 0；Windows 上破管道静默 exit 0，Unix 保持 SIGPIPE 的平台惯例。
+
+### 0. 先更正一条事实
+
+collect 第一轮说“issue 级 `domain` 可以在 newest-first 单遍里确定”，**这是错的**：若最新一条没声明 `domain:`、声明在更老的提交上，读到最新一条时还没见过那个声明。严格流式下 `domain` 只能是**本条提交自己的声明**；`tags` 并集同理不可得。下面的方案按更正后的事实走。
+
+### 1. 接口：`vcs.LogEach`，可选但**不回退**
+
+```go
+// LogEach streams commits newest-first to fn and stops as soon as fn returns
+// false. It is the streaming form of Repo.Log: a backend that can read history
+// incrementally implements it, so a large repository never has to be held in
+// memory before the first row is printed.
+//
+// It is optional, but there is no fallback: Log() would turn the stream back
+// into a buffer, which is the one thing the caller asked not to happen. A
+// backend that does not implement it is reported as unsupported.
+type LogEach interface {
+	LogEach(fn func(Commit) bool) error
+}
+```
+
+- 与 `StatLog` 同一种“可选接口 + 类型断言”的形状，但**故意没有回退**（`StatLog` 的回退是等价语义，这里的回退是相反的语义）；
+- sink 用 `bool` 而不是 `error`：写入失败/破管道由闭包记在局部 `err` 里，返回 `false` 让后端干净地停；后端不需要为“正常停止”发明哨兵错误；
+- `false` 必须让后端**杀掉子进程**，不能只是不再读（否则 git 阻塞在写满的管道上）。
+
+### 2. git 实现：`-z` + 三个 NUL 字段
+
+```go
+const streamLogFormat = "%H%x00%aI%x00%B" // 记录之间由 -z 补 NUL
+```
+
+- 命令：`git log -z --author-date-order --format=…`，`StdoutPipe` + `bufio.Reader`（**不用 `Scanner`**，64KB 上限）；
+- 解析：按 NUL 读三段（hash / 日期 / 正文），第三段的结尾 NUL 就是 `-z` 的终止符；实测 1 条提交 = 3 个 NUL、末字节 `00`，所以“读到三段就是一个完整记录”，没有“最后一条没有终止符”的特例；
+- 正文沿用 `Log()` 的 `TrimRight(…, "\r\n")`，两条路径对同一条提交给出同样的 message；
+- 为什么换 `-z`/`%x00`：`\x1e`/`\x1f` 是“实践中不出现”，NUL 是 git 自己的机器分隔符（`-z` 文档 + `cat-file --batch` 同族），且**不要求正文没有换行**；
+- 为什么不用 `cat-file --batch`：那是“先有 id 再取详情”的请求/响应，`action log` 只需要一遍顺序扫描，`log` 更薄；
+- 早停：sink 返回 `false` → 关 reader、`Process.Kill()`、`Wait()` 并**吞掉**被杀错误，返回 `nil`；
+- 空仓：`git log` 在空仓退出 128。只在**一条记录都没读到**的失败路径上补一次 `git rev-parse --verify --quiet HEAD`（空仓 exit 1、非空 exit 0，实测）：exit 1 → 当作空流返回 `nil`；否则把原错误往上抛。happy path 仍然只有一个进程。
+
+### 3. jj：显式不支持，门留着
+
+- `jj.ExecRunner` 不实现 `LogEach`，命令报 `action log 暂不支持 jj（当前只实现 git 的流式读取）`，exit 1；
+- 不用 `Log()` 兜底：那会静默变成“全量读 + 排序”，与本命令的交付承诺相反；
+- 未来实现成本很低：实测 `jj log -T 'json(self)'` 就是一条提交一行紧凑 JSON（含 `commit_id` / `author.timestamp` / `description`），**不需要改接口**，只需在 jj 侧实现 `LogEach`。这一句写进文档，避免后来者以为要重设计。
+
+### 4. 命令与交付
+
+**文本**（一行一条，无表头/legend）：
+
+```text
+2026-10-28 22:17  action-list             collect      80d1a9c  collect：把问题写进契约文档
+```
+
+- 日期 `2006-01-02 15:04`，**本地时区**（文本给人看；JSON 保留原 offset）；
+- issue 按 `displayWidth` 补到 24、action 补到 12（同 `path` 的 12）、hash 取 7（`shortID`），超过宽度的不截断、只是该行右移；
+- 末尾 `TrimRight`，不留尾随空格；`kiln action log | wc -l` 就是动作数。
+
+**`--jsonl`**（NDJSON，字段顺序固定）：
+
+```json
+{"issue":"action-log","action":"collect","commit":"edbe9be…","date":"2026-10-28T22:17:33+08:00","title":"collect 第二轮：…","domain":"cli"}
+```
+
+- 字段：`issue / action / commit / date / title / domain / tags`，与 ask 一致；
+- `commit` 全长 hash；`date` 用 `time.RFC3339`（保留提交原始 offset），与 `path --json` / `show --json` 同；
+- `title` / `domain` / `tags` 为空时**省略键**（缺省即没有）；`tags` 是本条提交的 `tags:`；
+- 一行一个对象、以 `\n` 结尾；用 `Encoder` + `SetEscapeHTML(false)` 写进 scratch 再输出，保证与 `writeJSON` 同样的转义习惯。
+
+**写入**：每条记录直接写 `e.out`（一行一次 `Write`），**不套 `bufio`**——`pathBatchWriter` 的 64KB 缓冲正是首行延迟的敌人，而流式场景每条本来就要落地。10 万行 ≈ 10 万次写，相对 1.6s 的全史扫描可以忽略。
+
+**空结果**：exit 0；stderr 复用 `list` 已有的一句提示（`仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）`），中文与英文条目都在 catalog 里，不新增文案。
+
+### 5. 字段语义（三条要写进契约）
+
+1. **`title` = `title:` trailer，缺省时取提交首行**。和 `list --json` 的 `issueTitle` 同一条规则；`path --json` 的 `actions[].title` 仍是严格 trailer。ask 里文本写的是 subject——这里统一成同一个 label（没有 `title:` 时它就是 subject），因为同一行在两个视图里必须同名，否则“这条动作叫什么”取决于你问谁。kiln 自己写的提交 `subject == title`，两者只在手写/早期提交上分叉。
+2. **`issue` 是 trailer 原值，不 normalize**。`path` / `list` 也用它当键；`do` 写前才 normalize，所以老提交可能不规范，视图保持原样。
+3. **`domain` / `tags` 只给本条提交的声明**，不给 issue 级（见 §0）。当前分类去 `list --json` / `status --json` 取；这条差异写进 `machine-readable-output`，不让消费方猜。
+
+另外：**不按当前词表过滤**。不在词表里的历史动作照样出现——这是与 `path`/`list`/`check` 一致的定义；合法性是 `check` 的事，不是读路径的事。
+
+### 6. broken pipe：静默退出
+
+- Windows：写 `e.out` 报错且 `isBrokenPipe(err)` 为真 → 不再读、exit **0**、不打印；
+- `isBrokenPipe` 用两个构建标签文件放：`pipe_windows.go` 认 `io.ErrClosedPipe` / `syscall.EPIPE` / `ERROR_BROKEN_PIPE` / `ERROR_NO_DATA`，`pipe_other.go` 认前两个；
+- Unix：不覆盖 Go runtime 的 SIGPIPE 行为（写 fd 1 收到 EPIPE 会直接终止进程），这与 git / rg 一致；文档写明 `kiln action log | head` 在 Unix 上可能是 141 收场，shell 通常看到的是 `head` 的 0；
+- 实测依据：消费者读一行就关管道时 git 与 rg **都 exit 0 且无 stderr**；kiln 现在是打印错误 + exit 1，属于要修的那一类。
+
+### 7. 参数与帮助
+
+- `action` 组解析：switches 加 `jsonl`；allowed 按子命令给——`list` = `{json}`，`log` = `{jsonl, limit}`；
+- `action log --json`（或 `action --json log`）**明确拒绝**：`action log 用 --jsonl（一行一个动作），不用 --json`，exit 2；
+- `--limit`：`Atoi`，`< 1` 报 `--limit 需要 ≥ 1 的整数（当前: %q）`，exit 2；重复给按 `rejectRepeats` 拒绝；
+- 多余位置参数 `rejectExtra`，exit 2；
+- 组用法改成 `用法: kiln action list [--json] | kiln action log [--jsonl] [--limit N]`；
+- `usageCommands` 加一行：`kiln action log [--jsonl] [--limit N]` / `全局动作流（一条动作一行；--jsonl 给 agent 读；--limit 只看最近 N 条）`；
+- 不读 issue 模型：`action log` 只走 `e.backend()` + `trailer.Parse`，不调 `loadRepo`，因此坏掉的历史（不合规 issue id、未知 action 名）不影响它。
+
+### 8. 实现落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/vcs/vcs.go` | `LogEach` 接口与文档；不改 `Repo` |
+| `internal/vcs/git/git.go` | `LogEach` 实现：`-z` 流式、三段解析、早停 Kill、空仓探 HEAD |
+| `internal/vcs/jj/jj.go` | 不改（不实现 `LogEach`） |
+| `internal/cli/cli.go` | `action` 分派加 `log`；`actionLog`；`actionLogDoc`；组用法；`usageCommands` 行 |
+| `internal/cli/pipe_windows.go` / `pipe_other.go` | `isBrokenPipe` |
+| `internal/i18n/catalog.go` | 新文案的英文 |
+| `README.md` / `README.en.md` | 命令表加 `action log` |
+| `docs/machine-readable-output.md` | NDJSON 例外小节 + 字段语义（title 兜底、per-commit domain/tags、退出码） |
+| `internal/cli/cli_test.go`、`internal/vcs/git/git_test.go` | 下表 |
+
+### 9. 测试清单
+
+1. **文本**：3 条 fixture（newest-first）→ 3 行；顺序、日期格式、7 位 hash、`title` 兜底都对。
+2. **JSONL**：2 行、逐行 `json.Unmarshal` 成功；`commit` 全长、`date` 带 offset；`title/domain/tags` 缺失时**没有**这些键。
+3. **`--limit` 早停**：5 条 fixture + `--limit 2` → 2 行，且 fake 记录“只被要求了 2 条”（证明不是读完再切）。
+4. **`--limit` 非法**：`0` / `-1` / 非数字 → exit 2。
+5. **空历史**：fake 直接返回零条 → exit 0、stdout 空、stderr 有“还没有任何动作”提示。
+6. **破管道**：writer 第 2 次返回 `io.ErrClosedPipe` → exit 0、无 stderr、fake 早停（跨平台；不依赖真实管道）。
+7. **jj / 不支持的后端**：只实现 `Repo` 的 fake → exit 1 + 文案。
+8. **`--json` 被拒**：exit 2，文案指向 `--jsonl`。
+9. **`--jsonl --limit` 组合**：2 行、2 个对象。
+10. **`title` 兜底**：无 `title:` trailer 的提交 → 用首行；文本与 JSONL 同值。
+11. **原值保留**：`issue: Foo_Bar` → 输出 `Foo_Bar`（不 normalize）。
+12. **词表外动作**：`action: retired` 仍出现。
+13. **真仓冒烟**：临时 git 仓 3 提交（2 个动作、1 个非动作）→ 文本 2 行；空仓 → exit 0。
+14. **help**：`usageText` 含两条 `action` 用法；现有对齐测试仍过。
+
+### 10. 风险与证伪
+
+- **首行延迟**：无 commit-graph 的 100k 仓若 > 400ms，“流式”就只剩内存收益；falsifier 是实测超标 → 文档降级为“不保证首行上限”，先别把 ≤250ms 写死。
+- **`-z` 与 `%B` 的假设**：如果某些 git 版本在 `-z` 下给记录补的不是一个 NUL，三段解析会错位；用“读到 EOF 视为结束、半条记录报错”兜底，并保留真仓冒烟。
+- **拒绝 jj**：jj 用户会拿到 exit 1；falsifier 是有人真的要用 → 按 §3 用 `json(self)` 实现，不改接口。
+- **per-commit `domain` 大多为空**（多数 issue 只在 ask 声明一次）：若消费方要“按当前分类筛”，只能 join `list`；falsifier 出现就考虑加一个显式非流式的取法，而不是偷偷在流里补。
+- **Unix 141**：脚本 `set -o pipefail` 会把 `| head` 当失败；若真成为痛点，再评估 `signal.Ignore(SIGPIPE)` 统一成 0（Windows 不受影响）。
+- **文本列宽**：issue 超过 24 时该行右移；改用固定不补白也可，先按 `path` 的习惯。
+- **NDJSON 例外**：想要“一份文档”的消费者会失望；拒绝 `--json` 时已指到 `path --all --json` / `--jsonl`，不再提供第二条 `--json` 路径。
+
+### 11. 下一步
+
+- 若无异议：`conclude` 定稿后 `apply`，实现顺序按 §8（`vcs.LogEach` → git 实现 → 命令 → 文档）。
+- 异议可能集中在三处：`title` 兜底（要不要和 `path` 一样严格）、`domain` 只给单条（要不要牺牲流式换 issue 级）、Unix 破管道是否统一 0。这三处任一改动都不影响其余方案。
