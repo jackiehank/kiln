@@ -179,3 +179,97 @@ kiln action list [--jsonl] [--limit N]
 - 若认可 `action list`：本 issue 下一步是 `conclude`（定名、默认文本、只开 list、jj 拒绝、`--jsonl`/`--limit`），然后另开/继续 `apply` 实现。
 - 若对“词表歧义”不放心：先做一次极小用户测试或在 plugin 侧确认，再 conclude；不要直接 apply。
 - 实现前仍需定死：文本列宽/日期格式、`--limit` 与 broken pipe、空仓提示、jj 错误文案、NDJSON 字段的 `title`/`domain` 语义。
+
+## hypothesize（修订，2026-10-28）：两条命令分开——`action list` 列词表，`timeline` 列动作
+
+> 结论先行：上一节把 `action list` 给了“动作实例”，并把它可能被读成“列出动作词表”列为最大风险。现在这个风险变成需求：**action 可配置，确实需要一条列出可用 action 的命令**。因此把 `action list` 给**词表**，把全局动作实例视图改用 `timeline`。两条命令一起设计，避免用 `action types` / `config actions` 这类发现性更差的名字去绕开歧义。
+
+### 1. 两条命令的分工
+
+| 命令 | 回答的问题 | 单位 | 是否读历史 |
+| --- | --- | --- | --- |
+| `kiln action list [--json]` | 现在有哪些 action 可用？起点/终点是谁？ | 词表（action 类型） | **否**：只读配置（或默认词表） |
+| `kiln timeline [--jsonl] [--limit N]` | 全局按时间发生了哪些动作？ | 动作实例（提交） | 是：流式读 git 历史 |
+
+一句话：**`action list` 是 schema，`timeline` 是 events。**
+
+### 2. `kiln action list`
+
+```text
+kiln action list [--json]
+```
+
+- 输出生效的动作词表（`.kilnconfig.jsonc` 的 `actions`，没有则内置默认）；
+- 文本：一个 action 一行，标注 `start` / `terminal`；不加表头、不加 legend，方便 `| wc -l`；
+- `--json`：一份对象，字段尽量复用配置里的词：
+  ```json
+  {
+    "actions": {
+      "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+      "start": "ask",
+      "terminal": ["conclude", "apply"]
+    },
+    "source": "file",
+    "config": "C:\\Users\\jacki\\kiln\\.kilnconfig.jsonc"
+  }
+  ```
+  - `source`：`file`（读了配置文件）或 `default`（内置词表）；
+  - `config`：仅 `source=file` 时出现；默认时省略；
+  - `actions` 的形状与 `.kilnconfig.jsonc` 的 `actions` 组同形，便于对照。
+- **不需要仓库**：仓外/未初始化时用默认词表，`source=default`；不读 git 历史，不为它开后端。
+- 不做 `--jsonl`、不做 `--limit`、不加过滤：词表很小，一份文档足够。
+- 与 `do` / `commit` 使用同一个 `ActionSet`：`do` 拒绝非法 action 的判据，和这里列出的集合必须同源。
+
+### 3. `kiln timeline`
+
+```text
+kiln timeline [--jsonl] [--limit N]
+```
+
+- 全局动作流：只留同时带 `issue:` + `action:` 的提交；按 author-date 倒序；
+- 默认文本：一行一条动作，含日期 / issue / action / 短 hash / subject；不做 issue 分组、不做 ordinal/relations/stat；
+- `--jsonl`：NDJSON，一行一个动作对象，字段沿用 `timeline-stream` 定的 `issue / action / commit / date / title / domain / tags`；
+- `--limit N`：最多 N 条动作后正常退出；N ≥ 1；
+- 不需要 `--all`（timeline 天生全局）；不提供 `--json`（一份数组会和 `--jsonl` 争同一个视图）；
+- 不支持 jj：显式非 0 + stderr「暂不支持 jj」，不静默空输出；
+- 空仓/无动作：stdout 为空、exit 0；broken pipe 及时停扫描、结束 git 子进程。
+
+**文本最小视图的边界**：这不是 `timeline-stream` 里说“本轮不做”的富 timeline 视图；它只是“一行一条、能直接用眼睛看”的最小文本，不做高亮、分组、交互。若连这层也不想要，`timeline` 可以只保留 `--jsonl`；但那样 `timeline` 无 flag 时没有输出形态，产品上更差。
+
+### 4. 为什么不是别的分配
+
+| 方案 | 问题 |
+| --- | --- |
+| `action list` = 实例，`action types` = 词表 | 保留上一版命名，但 `action list` 仍然最容易被读成词表；`types` 发现性差，等于把歧义藏起来 |
+| `action list` = 实例，`config actions` = 词表 | `config` 命名空间语义上合理，但用户不会先想到去 `config` 下找“我能用哪些 action”；`action list` 仍然歧义 |
+| `actions` = 词表，`timeline` = 实例 | `actions` 复数破单数惯例，且“the actions”也可能指实例 |
+| `action list` = 词表，`action log` / `log` = 实例 | `log` 撞 `git log` 与已否的 `log --rewrites`；`action log` 像审计 |
+| **`action list` = 词表，`timeline` = 实例** | **选**：两个名字分别对应“schema / events”，歧义消失；`timeline` 是视图名，像 `status` / `graph` 一样可接受 |
+
+`timeline` 不是资源名，这是它的代价；但它回答的是“按时间看事件”，本来就是视图，不是资源。反过来，`action list` 回答“有哪些类型”，资源/词表语义更强。
+
+### 5. 与现有命令的边界
+
+| 命令 | 单位 | 边界 |
+| --- | --- | --- |
+| `list` | issue | issue 索引；`--action` 是“出现过某类动作的 issue”，不是动作列表 |
+| `path <issue>` | 单 issue 的 path | issue 内的动作序列 + 关系/ordinal |
+| `show <issue> n` | 单个动作 | 动作详情；不做全局寻址 |
+| `action list` | 词表 | 当前可用的 action 类型；不读历史 |
+| `timeline` | 动作实例 | 全局历史；**不按当前词表过滤**——历史里的旧/非法 action 仍会出现，合法性归 `check` |
+
+最后一条很重要：`action list` 是当前 schema，`timeline` 是历史事实。不要因为某个 action 已从配置里删掉，就让 timeline 静默漏掉历史提交。
+
+### 6. 风险与证伪
+
+1. **`timeline` 不是资源名**：如果用户一致期待 `action timeline` / `actions`，说明“视图名”不成立；可把实例命令改名为 `actions`，但 `action list` 继续留给词表。
+2. **两条命令是否过度**：`action list` 很小，`timeline` 是另一个视图；如果实践里没人问“有哪些 action”，词表命令可以退化成 `-h` 已经够用，砍掉 `action list`。但 action 可配置后，独立命令的价值是机器可读（`--json`）与脚本可用。
+3. **`action list` 与 `-h` 重复**：`-h` 是帮助，不是稳定 JSON 契约；`action list --json` 给 agent/脚本，二者不冲突。
+4. **timeline 默认文本是否必要**：如果插件/客户端只用 `--jsonl`，文本是额外实现；但它让命令可被人直接使用，且与 `list` 的文本默认一致。若砍掉文本，`--jsonl` 必须变成必填。
+5. **词表过滤**：如果产品要求 timeline 只显示当前合法 action，那是另一个决定；本方案选择“历史事实不因配置变化而消失”，并交给 `check` 报非法。
+
+### 7. 下一步
+
+- 若认可这对命名：`conclude` 定稿“`action list` = 词表、`timeline` = 动作流；`action list` 带 `--json`，`timeline` 默认文本 + `--jsonl` + `--limit`；jj 明确不支持”；实现可拆两个 `apply`（词表命令小，先落）。
+- 若仍想在 `action list` 上保留实例语义：需要先回答“词表命令叫什么、为什么用户不会先猜错”，否则不要回到上一版。
+- 实现前仍需定死：`action list` 文本的 `start`/`terminal` 标记格式、`source`/`config` 的省略规则；`timeline` 的文本列宽/日期格式、NDJSON 字段、`--limit`/broken pipe、空仓提示、jj 错误文案。
