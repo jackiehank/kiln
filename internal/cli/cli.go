@@ -2261,10 +2261,75 @@ func searchHit(p *model.Issue, terms []string) *listHit {
 	}
 	for i, a := range p.Actions {
 		if containsAll(a.Subject, terms) {
-			return &listHit{Ordinal: i + 1, Action: a.Kind, Commit: a.ID, Subject: a.Subject}
+			return &listHit{
+				Ordinal: i + 1,
+				Action:  a.Kind,
+				Commit:  a.ID,
+				Subject: a.Subject,
+				Total:   len(p.Actions),
+				Date:    a.Date.Format(time.RFC3339),
+			}
 		}
 	}
 	return nil
+}
+
+// searchRank buckets a match the way the caller orders search results: 0 is an
+// id that starts with the first term (the other terms may live in the title or
+// an action), 1 an id holding every term, 2 the current title, 3 one action
+// subject, and 4 a match spread over several fields. It assumes the issue
+// already passed filterSearch; rank 4 is a fallback, not a second filter.
+func searchRank(p *model.Issue, terms []string) int {
+	if strings.HasPrefix(strings.ToLower(p.ID), strings.ToLower(terms[0])) {
+		return 0
+	}
+	if containsAll(p.ID, terms) {
+		return 1
+	}
+	if containsAll(issueTitle(p), terms) {
+		return 2
+	}
+	for _, a := range p.Actions {
+		if containsAll(a.Subject, terms) {
+			return 3
+		}
+	}
+	return 4
+}
+
+// searchRow is one issue in a search result: the issue, its rank, and the hit
+// that explains the match. Both the JSON and the text view walk one slice of
+// these, so the two orders cannot drift apart.
+type searchRow struct {
+	p    *model.Issue
+	rank int
+	hit  *listHit
+}
+
+// lastDate is the issue's most recent action date, the search tie-break key.
+func lastDate(p *model.Issue) time.Time {
+	if a, ok := p.Last(); ok {
+		return a.Date
+	}
+	return time.Time{}
+}
+
+// lessSearchRow orders search results by rank, then newest last action first,
+// then id. Dates compare as times, not strings; a missing date sorts after every
+// known one so the order stays total.
+func lessSearchRow(a, b searchRow) bool {
+	if a.rank != b.rank {
+		return a.rank < b.rank
+	}
+	ad, bd := lastDate(a.p), lastDate(b.p)
+	switch {
+	case ad.IsZero() != bd.IsZero():
+		return bd.IsZero()
+	case !ad.Equal(bd):
+		return ad.After(bd)
+	default:
+		return a.p.ID < b.p.ID
+	}
 }
 
 // containsAll reports whether every term occurs in haystack, case-insensitively.
@@ -2389,9 +2454,44 @@ func (e *env) list(args []string) int {
 			fmt.Fprint(e.errw, i18n.T("没有匹配 %s 的问题\n", filterSummary(opts, status)))
 		}
 	}
+	filter := filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action, Status: status, Search: query}
+	// Search is the only view that reorders: rank first, then the newest last
+	// action, then id. Rows are built once so the text and JSON views below walk
+	// the same order and share the same hit.
+	if len(terms) > 0 {
+		rows := make([]searchRow, 0, len(ids))
+		for _, id := range ids {
+			p := repo.Issues[id]
+			rows = append(rows, searchRow{p: p, rank: searchRank(p, terms), hit: searchHit(p, terms)})
+		}
+		sort.Slice(rows, func(i, j int) bool { return lessSearchRow(rows[i], rows[j]) })
+		if f.has("json") {
+			doc := listDoc{Filter: filter, Count: len(rows), Issues: make([]listIssue, 0, len(rows))}
+			for _, r := range rows {
+				rank := r.rank
+				doc.Issues = append(doc.Issues, listIssue{
+					issueCore: issueCore{ID: r.p.ID, Domain: r.p.Domain, Action: r.p.State(), Done: e.isDone(r.p)},
+					Rank:      &rank,
+					Title:     issueTitle(r.p),
+					Commit:    issueCommit(r.p),
+					Hit:       r.hit,
+					Tags:      r.p.Tags,
+				})
+			}
+			return e.writeJSON(doc)
+		}
+		for _, r := range rows {
+			line := fmt.Sprintf("%s %s %s", pad(r.p.ID, 30), pad(stateWord(r.p), 12), issueTitle(r.p))
+			if r.hit != nil {
+				line += "  ← " + r.hit.Subject
+			}
+			fmt.Fprintln(e.out, line)
+		}
+		return 0
+	}
 	if f.has("json") {
 		doc := listDoc{
-			Filter: filterQuery{Domain: opts.Domain, Tag: opts.Tag, Action: opts.Action, Status: status, Search: query},
+			Filter: filter,
 			Count:  len(ids),
 			Issues: make([]listIssue, 0, len(ids)),
 		}
@@ -2401,22 +2501,10 @@ func (e *env) list(args []string) int {
 				issueCore: issueCore{ID: p.ID, Domain: p.Domain, Action: p.State(), Done: e.isDone(p)},
 				Title:     issueTitle(p),
 				Commit:    issueCommit(p),
-				Hit:       searchHit(p, terms),
 				Tags:      p.Tags,
 			})
 		}
 		return e.writeJSON(doc)
-	}
-	if len(terms) > 0 {
-		for _, id := range ids {
-			p := repo.Issues[id]
-			line := fmt.Sprintf("%s %s %s", pad(p.ID, 30), pad(stateWord(p), 12), issueTitle(p))
-			if hit := searchHit(p, terms); hit != nil {
-				line += "  ← " + hit.Subject
-			}
-			fmt.Fprintln(e.out, line)
-		}
-		return 0
 	}
 	for _, id := range ids {
 		p := repo.Issues[id]
@@ -2852,6 +2940,7 @@ type filterQuery struct {
 
 type listIssue struct {
 	issueCore
+	Rank   *int     `json:"rank,omitempty"`
 	Title  string   `json:"title,omitempty"`
 	Commit string   `json:"commit,omitempty"`
 	Hit    *listHit `json:"hit,omitempty"`
@@ -2866,6 +2955,8 @@ type listHit struct {
 	Action  string `json:"action"`
 	Commit  string `json:"commit"`
 	Subject string `json:"subject"`
+	Total   int    `json:"total"`
+	Date    string `json:"date"`
 }
 
 // checkDoc is the `kiln check --json` document. passed mirrors the exit code —

@@ -2240,6 +2240,65 @@ func newSearchEnv(out, errw *bytes.Buffer) *env {
 	return &env{actions: model.DefaultActionSet(), repo: searchRunner(), out: out, errw: errw}
 }
 
+func newListEnv(out, errw *bytes.Buffer, repo vcs.Repo) *env {
+	return &env{actions: model.DefaultActionSet(), repo: repo, out: out, errw: errw}
+}
+
+// searchCommit builds one action so the ranking fixtures stay readable.
+func searchCommit(id string, at time.Time, issue, domain, action, title string) vcs.Commit {
+	msg := fmt.Sprintf("%s\n\nissue: %s\naction: %s\ntitle: %s", title, issue, action, title)
+	if domain != "" {
+		msg += "\ndomain: " + domain
+	}
+	return vcs.Commit{ID: id, Date: at, Message: msg}
+}
+
+// rankRunner models one issue per rank bucket for the query "cache lru". Dates
+// run against the rank order on purpose: rank must dominate recency.
+func rankRunner() fakeRunner {
+	base := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{commits: []vcs.Commit{
+		searchCommit("r5b", base.Add(5*time.Hour+time.Minute), "spread", "design", "collect", "淘汰 lru"),
+		searchCommit("r5a", base.Add(5*time.Hour), "spread", "design", "ask", "起点 cache"),
+		searchCommit("r4c", base.Add(4*time.Hour+2*time.Minute), "action-only", "cli", "collect", "收尾：策略"),
+		searchCommit("r4b", base.Add(4*time.Hour+time.Minute), "action-only", "cli", "test", "测 cache lru 命中"),
+		searchCommit("r4a", base.Add(4*time.Hour), "action-only", "cli", "ask", "起点"),
+		searchCommit("r3", base.Add(3*time.Hour), "title-only", "design", "ask", "cache lru 策略"),
+		searchCommit("r2", base.Add(2*time.Hour), "lru-cache", "cli", "ask", "起点"),
+		searchCommit("r1", base.Add(time.Hour), "cache-lru", "cli", "ask", "起点"),
+	}}
+}
+
+// tieRunner has three rank-1 issues: b and c share the newest date, so their id
+// decides; a is older and comes last.
+func tieRunner() fakeRunner {
+	base := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{commits: []vcs.Commit{
+		searchCommit("a-cache", base.Add(time.Hour), "a-cache", "cli", "ask", "起点"),
+		searchCommit("b-cache", base.Add(2*time.Hour), "b-cache", "cli", "ask", "起点"),
+		searchCommit("c-cache", base.Add(2*time.Hour), "c-cache", "cli", "ask", "起点"),
+	}}
+}
+
+// undatedRunner pins the zero-date branch: known dates first, then the missing
+// ones by id.
+func undatedRunner() fakeRunner {
+	base := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	return fakeRunner{commits: []vcs.Commit{
+		searchCommit("dated-cache", base, "dated-cache", "cli", "ask", "起点"),
+		searchCommit("undated-cache", time.Time{}, "undated-cache", "cli", "ask", "起点"),
+		searchCommit("undatedTwo-cache", time.Time{}, "undatedTwo-cache", "cli", "ask", "起点"),
+	}}
+}
+
+// prefixRunner is the Q1=A example: the id only carries the first term, the
+// title carries the rest.
+func prefixRunner() fakeRunner {
+	return fakeRunner{commits: []vcs.Commit{
+		searchCommit("p1", time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC), "cache-basics", "cli", "ask", "LRU 策略"),
+	}}
+}
+
 // --search is a literal, case-insensitive AND over id, the current title and
 // every action subject; the row only carries hit when the id and title cannot
 // explain why it matched.
@@ -2251,8 +2310,8 @@ func TestListSearchFindsIdTitleAndActionSubjects(t *testing.T) {
 		{"cache", nil},    // id alone explains it
 		{"淘汰", nil},       // the current title shows it
 		{"cache 淘汰", nil}, // split over id + title
-		{"LFU", &listHit{Ordinal: 1, Action: "ask", Commit: "s1", Subject: "缓存淘汰是否要引入 LFU"}},   // only an early action says it
-		{"lru 命中率", &listHit{Ordinal: 2, Action: "test", Commit: "s2", Subject: "测了 LRU 命中率"}}, // case-insensitive, two terms, one action
+		{"LFU", &listHit{Ordinal: 1, Action: "ask", Commit: "s1", Subject: "缓存淘汰是否要引入 LFU", Total: 3, Date: "2026-05-01T09:00:00Z"}},   // only an early action says it
+		{"lru 命中率", &listHit{Ordinal: 2, Action: "test", Commit: "s2", Subject: "测了 LRU 命中率", Total: 3, Date: "2026-05-01T10:00:00Z"}}, // case-insensitive, two terms, one action
 	}
 	for _, c := range cases {
 		var out, errb bytes.Buffer
@@ -2388,6 +2447,223 @@ func TestListSearchTextShowsTitleAndHit(t *testing.T) {
 	for _, want := range []string{"cache-eviction", "收尾：淘汰策略落地", "← 缓存淘汰是否要引入 LFU"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("search text missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func firstColumnIDs(out string) []string {
+	var ids []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		ids = append(ids, strings.Fields(line)[0])
+	}
+	return ids
+}
+
+// Search results carry one rank per row and are ordered by it: id prefix, id,
+// title, one action, then a spread match. The fixture's dates run the other way,
+// so a result sorted by recency would fail.
+func TestListSearchRanksAndOrdersRows(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, rankRunner()).list([]string{"--json", "--search", "cache lru"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	want := []struct {
+		id   string
+		rank int
+	}{
+		{"cache-lru", 0},
+		{"lru-cache", 1},
+		{"title-only", 2},
+		{"action-only", 3},
+		{"spread", 4},
+	}
+	if doc.Count != len(want) || len(doc.Issues) != len(want) {
+		t.Fatalf("rows = %d (count %d), want %d", len(doc.Issues), doc.Count, len(want))
+	}
+	for i, w := range want {
+		row := doc.Issues[i]
+		rank := -1
+		if row.Rank != nil {
+			rank = *row.Rank
+		}
+		if row.ID != w.id || rank != w.rank {
+			t.Fatalf("row %d = %s rank %d, want %s rank %d", i, row.ID, rank, w.id, w.rank)
+		}
+	}
+}
+
+// Same rank falls back to the newest last action, then to the id; equal dates
+// must not be compared as strings.
+func TestListSearchTieBreaksOnLastDateThenID(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, tieRunner()).list([]string{"--json", "--search", "cache"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	want := []string{"b-cache", "c-cache", "a-cache"}
+	if len(doc.Issues) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(doc.Issues), len(want))
+	}
+	for i, id := range want {
+		row := doc.Issues[i]
+		if row.ID != id {
+			t.Fatalf("row %d = %s, want %s", i, row.ID, id)
+		}
+		if row.Rank == nil || *row.Rank != 1 {
+			t.Fatalf("%s rank = %v, want 1", row.ID, row.Rank)
+		}
+	}
+}
+
+// A missing date sorts after every known one; two missing dates fall back to id.
+func TestListSearchSortsMissingDatesLast(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, undatedRunner()).list([]string{"--json", "--search", "cache"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	want := []string{"dated-cache", "undated-cache", "undatedTwo-cache"}
+	if len(doc.Issues) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(doc.Issues), len(want))
+	}
+	for i, id := range want {
+		if got := doc.Issues[i].ID; got != id {
+			t.Fatalf("row %d = %s, want %s", i, got, id)
+		}
+	}
+}
+
+// Q1=A: rank 0 only needs the first term to prefix the id; the other terms may
+// come from the title. The query is uppercased to keep the prefix case-blind.
+func TestListSearchRankPrefixOnlyNeedsFirstTerm(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, prefixRunner()).list([]string{"--json", "--search", "CACHE LRU"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if len(doc.Issues) != 1 || doc.Issues[0].ID != "cache-basics" {
+		t.Fatalf("rows = %+v", doc.Issues)
+	}
+	if doc.Issues[0].Rank == nil || *doc.Issues[0].Rank != 0 {
+		t.Fatalf("rank = %v, want 0", doc.Issues[0].Rank)
+	}
+}
+
+// The text view walks the same sorted rows as the JSON view.
+func TestListSearchTextOrderMatchesJSON(t *testing.T) {
+	var textOut, textErr bytes.Buffer
+	if code := newListEnv(&textOut, &textErr, rankRunner()).list([]string{"--search", "cache lru"}); code != 0 {
+		t.Fatalf("text exit code = %d, stderr = %q", code, textErr.String())
+	}
+	textIDs := firstColumnIDs(textOut.String())
+
+	var jsonOut, jsonErr bytes.Buffer
+	if code := newListEnv(&jsonOut, &jsonErr, rankRunner()).list([]string{"--json", "--search", "cache lru"}); code != 0 {
+		t.Fatalf("json exit code = %d, stderr = %q", code, jsonErr.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(jsonOut.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, jsonOut.String())
+	}
+	if len(textIDs) != len(doc.Issues) {
+		t.Fatalf("text rows = %d, json rows = %d", len(textIDs), len(doc.Issues))
+	}
+	for i, id := range textIDs {
+		if doc.Issues[i].ID != id {
+			t.Fatalf("row %d: text %s, json %s", i, id, doc.Issues[i].ID)
+		}
+	}
+}
+
+// Without --search there is no rank key at all, and rows stay in id order.
+func TestListJSONWithoutSearchOmitsRank(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, rankRunner()).list([]string{"--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(out.String(), `"rank"`) {
+		t.Fatalf("plain list --json must not carry rank:\n%s", out.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	want := []string{"action-only", "cache-lru", "lru-cache", "spread", "title-only"}
+	if len(doc.Issues) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(doc.Issues), len(want))
+	}
+	for i, id := range want {
+		if doc.Issues[i].ID != id {
+			t.Fatalf("row %d = %s, want %s", i, doc.Issues[i].ID, id)
+		}
+		if doc.Issues[i].Rank != nil {
+			t.Fatalf("%s rank = %v, want nil", id, doc.Issues[i].Rank)
+		}
+	}
+}
+
+func TestListTextWithoutSearchKeepsIDOrder(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, rankRunner()).list(nil); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := firstColumnIDs(out.String())
+	want := []string{"action-only", "cache-lru", "lru-cache", "spread", "title-only"}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("row %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// rank survives the other filters: the composed result is still rank-ordered.
+func TestListSearchRankComposesWithFilters(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := newListEnv(&out, &errb, rankRunner()).list([]string{"--json", "--search", "cache lru", "--domain", "cli"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc listDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	want := []struct {
+		id   string
+		rank int
+	}{
+		{"cache-lru", 0},
+		{"lru-cache", 1},
+		{"action-only", 3},
+	}
+	if doc.Count != len(want) || len(doc.Issues) != len(want) {
+		t.Fatalf("rows = %d (count %d), want %d", len(doc.Issues), doc.Count, len(want))
+	}
+	for i, w := range want {
+		row := doc.Issues[i]
+		rank := -1
+		if row.Rank != nil {
+			rank = *row.Rank
+		}
+		if row.ID != w.id || rank != w.rank {
+			t.Fatalf("row %d = %s rank %d, want %s rank %d", i, row.ID, rank, w.id, w.rank)
 		}
 	}
 }
