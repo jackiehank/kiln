@@ -105,3 +105,115 @@ kiln action list [--json]
 4. 仓外/缺配置/配置错误：`action list` 是否也在配置错误时 exit 1？仓外是否输出默认词表并 exit 0？
 5. `-h` 写死默认词表：本 issue 是否顺手同步？如果同步，`usageText` 签名与 help 测试怎么改；如果不同步，是否在 README/`action list -h` 里说明“`-h` 显示默认，生效词表用 `action list`”？
 6. 实现落点：新增 `action` 命令组 + `list` 子命令；DTO；`env` 是否加 `configPath`/`source`；测试与 i18n 的最小集。
+
+## hypothesize（2026-10-28）：文本一行一个 + 英文 `start`/`terminal`；JSON 镜像配置；`source` 由 `Config` 提供
+
+> 结论先行：文本保持“一行一个 action + 可选的 `start` / `terminal` 列”，不加表头/legend，保证 `| wc -l` 干净；`--json` 的 `actions` 组与 `.kilnconfig.jsonc` 同形，外加 `source` / `config`；`source` 不靠命令内 `stat`，而是在 `config.Read` 里加一个字段；`action list` 不读历史、不 seed、仓外可用。`-h` 不改成“生效词表”（它写的是“默认”），只加一行指到 `action list`。
+
+### 1. 文本格式
+
+```text
+ask           start
+hypothesize
+collect
+test
+conclude      terminal
+apply         terminal
+```
+
+- 一行一个 action，顺序 = 配置 `names` 的顺序；
+- `start` / `terminal` 用英文列，与配置/JSON 字段同词；两者都成立时写 `start, terminal`；
+- 列宽按 `displayWidth` 对齐；没有标记的行不补尾随空格；
+- 不加表头、不加 legend；`kiln action list | wc -l` 就是 action 数；
+- 不在文本里输出 `source` / `config`：文本是“给人扫一眼的词表”，来源信息交给 `--json` 或 `config path`。
+
+为什么用英文标记而不是“起点/终点”：action 名、配置键、JSON 字段都是英文；文本里再用一套中文标记，会让 `action list` 与配置文件对不上。中文解释放在 help/README 即可。
+
+### 2. `--json` 形状
+
+```json
+{
+  "actions": {
+    "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+    "start": "ask",
+    "terminal": ["conclude", "apply"]
+  },
+  "source": "file",
+  "config": "C:\\Users\\jacki\\kiln\\.kilnconfig.jsonc"
+}
+```
+
+- `actions` 与 `.kilnconfig.jsonc` 的 `actions` 组**同形**：`names` / `start` / `terminal`；
+- `source` 恒显：`file`（文件存在且读取成功）或 `default`（缺文件 / 仓外 / 未自定义）；
+- `config` 只在 `source=file` 时出现；`default` 时省略（缺省即省略）；
+- 顶层永远是一个对象；`--json` 只此一种文档，不做 `--jsonl`；
+- `actions.names` 保持配置顺序；`terminal` 由 `Names()` + `IsTerminal` 派生，顺序同 `names`。
+
+### 3. `source` 判定：给 `config.Config` 加字段，不在命令里 stat
+
+- `config.Config` 增加 `Source string`（`file` / `default`），由 `Read` 在成功读完文件后设 `file`；缺文件/仓外保持 `default`；
+- `config.Path` 的语义不变（“找到的候选路径”），不拿它当“文件存在”的判据；
+- `env` 增加 `configPath` / `configSource`，`Run` 从 `cfg` 填入；`action list` 直接使用，不重复 `config.Read`；
+- 测试里手工构造 `env` 时这两个字段可能为空：`action list` 把空 `configSource` 当 `default`，空 `configPath` 不输出 `config`；
+- `action list` **不调用 `config.Ensure`**：只读命令不能写文件；
+- 配置解析失败时，`Run` 已在 dispatch 前 `配置错误` exit 1；`action list` 不需要自己吞错并显示默认词表（静默回退会掩盖配置错误）。
+
+### 4. 仓外 / 缺文件 / 自定义
+
+| 场景 | 输出 |
+| --- | --- |
+| 仓外（无 `.git` / `.jj`） | 默认词表；`source=default`；无 `config`；exit 0 |
+| 仓内但没有 `.kilnconfig.jsonc` | 默认词表；`source=default`；无 `config`；不创建文件 |
+| 仓内有配置文件，`actions` 完整 | 文件里的词表；`source=file`；`config` = 文件路径 |
+| 仓内有配置文件，但没有 `actions` 组 | 默认词表；`source=file`（文件确实被读了）；`config` = 文件路径 |
+| 配置文件解析失败 | `Run` 报配置错误，exit 1；`action list` 不输出 |
+
+“文件存在但 `actions` 省略”时 `source=file` 是刻意的：source 说的是“读的是文件还是内置默认”，不是“actions 组是否被自定义”。如果以后需要区分，再加字段。
+
+### 5. `-h` 怎么处理
+
+- `kiln -h` 的 `action 词表默认: ...` 行本来就写着“默认”，不是“生效”；本 issue **不**把 `usageText` 改成接收 `ActionSet`（那会牵动签名、所有调用点与 help 测试）；
+- 在该行末尾补一句：`（生效词表见 kiln action list）`，让自定义仓的用户知道去哪看；
+- `usageCommands` 增加 `kiln action list [--json]` 一行；
+- `kiln action` 不带子命令 → 打印 `action` 组用法并 exit 2（与 `worktree` 一致）；`action list -h` 走组 help，具体在 apply 定；
+- `action list` 的 `--json` 开关值、额外位置参数按现有 parser 规则拒绝（exit 2）。
+
+### 6. 实现落点
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/config/config.go` | `Config` 加 `Source`；`Read` 成功读文件后设 `file`，缺文件/仓外保持 `default`；补测试 |
+| `internal/cli/cli.go` | `Run` 支持 `action`；`env` 加 `configPath` / `configSource`；新增 `action` 分派与 `actionList`；DTO；`usageCommands` 与 `usageOtherFlags` 行；`action` 组用法 |
+| `internal/i18n/catalog.go` | 新命令描述、组用法、`action list` 的 help 行；英文对应 |
+| `README.md` / `README.en.md` | 命令表加 `action list` |
+| `docs/machine-readable-output.md` | 补 `action list --json` 的小节（一份对象；`actions` / `source` / `config`） |
+| `internal/cli/cli_test.go` | 文本/JSON/仓外/缺文件/自定义/不创建文件/非法参数/help |
+
+实现顺序建议：先 `config.Source` + 测试，再 CLI 命令 + 测试，最后文档。
+
+### 7. 测试清单
+
+1. **文本**：自定义词表 `ask/probe/done`（start=ask，terminal=done）；`ask` 标 start，`done` 标 terminal，`probe` 无标记；行数 = 3；CJK action 名的对齐（若允许）。
+2. **start+terminal 同一 action**：临时 ActionSet 自定义 `ask` 同时 start/terminal，文本写 `start, terminal`。
+3. **JSON 文件源**：临时仓 `.kilnconfig.jsonc` 自定义；`source=file`，`config` 为绝对路径，`actions` 同形；golden 逐字节。
+4. **JSON 默认源**：仓外/无文件；`source=default`，无 `config`；golden。
+5. **`actions` 省略**：文件只有其他键；`source=file`，词表默认。
+6. **不创建文件**：仓内无配置，跑 `action list` 后 `os.Stat(.kilnconfig.jsonc)` 仍不存在。
+7. **错误**：配置解析失败 → `Run` exit 1；`action list --json=x` / 多余位置参数 → exit 2。
+8. **help**：`usageText` 含 `kiln action list` 与“生效词表见”提示；`action` 无子命令 exit 2。
+9. **不读历史**：`action list` 在 `e.repo == nil` 的 env 上也能跑；不调用 backend。
+10. **真仓冒烟**：本仓 `action list` / `--json`；临时自定义仓各一次。
+
+### 8. 风险与证伪
+
+- **英文标记**：如果中文用户觉得 `start`/`terminal` 突兀，可改成 i18n 的“起点/终点”；但那会让文本与配置键不同词，默认先按英文。
+- **`source=file` 但 `actions` 省略**：有人会认为应该是 `default`；本方案选择“source 指读取来源”，若实践反对再改。
+- **`-h` 仍不显示生效词表**：如果用户只看 `-h` 仍被默认列表误导，下一步再改 `usageText` 接收 `ActionSet`；本 issue 先用一行提示兜底。
+- **JSON 形状**：如果消费者更想要平铺 `names/start/terminal`，改 DTO 即可；本方案选镜像配置，便于与文件对照。
+- **配置错误静默回退**：不做；否则 `action list` 会掩盖坏配置，与 `Read` 的严格性冲突。
+
+### 9. 下一步
+
+- 若认可：本 issue 可 `conclude` 后进入 `apply`；实现顺序按 §6。
+- 若对英文标记/`source` 语义有异议，先改这两处，再 conclude。
+- `action log` 仍在自己的 issue 里等实现，不受本 issue 影响。
