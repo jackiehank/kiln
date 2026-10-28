@@ -202,9 +202,10 @@ var enCatalog = map[string]string{
 	"用规范信息直接提交（--only 只提交列出的路径）":                  "commit with the canonical message (--only commits just the listed paths)",
 	"重建问题的研究路径（可加 --stat / --shortstat / --json）": "rebuild an issue's research path (add --stat / --shortstat / --json)",
 	"展开某个动作的完整变更（可加 --stat / --json）":             "show one action's full change (add --stat / --json)",
-	"全库概览":    "whole-repository overview",
-	"语义完整性校验": "semantic completeness check",
-	"按条件过滤问题": "filter issues by field",
+	"全库概览":                "whole-repository overview",
+	"语义完整性校验":             "semantic completeness check",
+	"按条件过滤问题":             "filter issues by field",
+	"列出可用的 action 类型（词表）": "list the available action types (vocabulary)",
 	"问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）": "issue relation graph (--mermaid prints flowchart text; --json is for agents, --issue/--depth narrows the neighbourhood)",
 	"建 worktree（main 只读，动作只在 worktree 提交）":                          "create a worktree (main is read-only; actions commit in a worktree)",
 	"列出全部 worktree（含 main）及各自状态（可加 --json）":                         "list every worktree (main included) and its state (add --json)",
@@ -220,11 +221,11 @@ var enCatalog = map[string]string{
 用法:
 `: "kiln — issue tracking and path rebuilding driven by git trailers\n\nusage:\n",
 	`
-action 词表默认: ask | hypothesize | collect | test | conclude | apply
+action 词表默认: ask | hypothesize | collect | test | conclude | apply（生效词表见 kiln action list）
 worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）
 提交范围: 默认提交当前工作区的全部改动（快照）；--only <paths> 只提交列出的路径（两后端同义；空动作允许）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
-`: "\ndefault action vocabulary: ask | hypothesize | collect | test | conclude | apply\ndefault worktree: off (commits on main allowed) | on (actions commit in a worktree only — run kiln worktree new <issue> first)\ncommit scope: by default the whole working area is committed (a snapshot); --only <paths> commits just the listed paths (same meaning on both backends; empty actions are allowed)\n(config: .kilnconfig.jsonc at the repository root, JSONC; kiln config path prints the path)\n",
+`: "\ndefault action vocabulary: ask | hypothesize | collect | test | conclude | apply (effective vocabulary: kiln action list)\ndefault worktree: off (commits on main allowed) | on (actions commit in a worktree only — run kiln worktree new <issue> first)\ncommit scope: by default the whole working area is committed (a snapshot); --only <paths> commits just the listed paths (same meaning on both backends; empty actions are allowed)\n(config: .kilnconfig.jsonc at the repository root, JSONC; kiln config path prints the path)\n",
 	`
 path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）  --json（机器可读输出）
 path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接给多条问题）

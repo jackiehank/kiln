@@ -34,7 +34,7 @@ const usageHeader = `kiln — git-trailer 驱动的问题追踪与路径重建
 `
 
 const usagePrologue = `
-action 词表默认: ask | hypothesize | collect | test | conclude | apply
+action 词表默认: ask | hypothesize | collect | test | conclude | apply（生效词表见 kiln action list）
 worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）
 提交范围: 默认提交当前工作区的全部改动（快照）；--only <paths> 只提交列出的路径（两后端同义；空动作允许）
 （配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
@@ -68,6 +68,7 @@ var usageCommands = [][2]string{
 	{"kiln status", "全库概览"},
 	{"kiln check [--verbose]", "语义完整性校验"},
 	{"kiln list [--domain=] [--tag=] [--action=] [--status=open|done] [--search=]", "按条件过滤问题"},
+	{"kiln action list [--json]", "列出可用的 action 类型（词表）"},
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
@@ -281,15 +282,17 @@ func isWide(r rune) bool {
 // instead of touching a real repository; it is opened lazily, so commands that
 // need no repo (do) still work outside one.
 type env struct {
-	actions   *model.ActionSet
-	relations *model.RelationSet
-	dir       string
-	vcsPref   string
-	worktree  string
-	repo      vcs.Repo
-	kind      vcs.Kind // the backend that was opened, recorded for backend-specific wording
-	out       io.Writer
-	errw      io.Writer
+	actions      *model.ActionSet
+	relations    *model.RelationSet
+	dir          string
+	vcsPref      string
+	worktree     string
+	configPath   string
+	configSource string
+	repo         vcs.Repo
+	kind         vcs.Kind // the backend that was opened, recorded for backend-specific wording
+	out          io.Writer
+	errw         io.Writer
 }
 
 // rel returns the relation vocabulary, falling back to the built-in default
@@ -447,7 +450,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "version", "--version", "-V":
 		return printVersion(stdout)
-	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config":
+	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config", "action":
 		// handled below
 	default:
 		if now, ok := retiredCommands[cmd]; ok {
@@ -462,7 +465,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, i18n.T("配置错误: %v\n", cfgErr))
 		return 1
 	}
-	e := &env{actions: cfg.Actions, relations: cfg.Relations, dir: ".", vcsPref: cfg.VCS, worktree: cfg.Worktree, out: stdout, errw: stderr}
+	e := &env{
+		actions:      cfg.Actions,
+		relations:    cfg.Relations,
+		dir:          ".",
+		vcsPref:      cfg.VCS,
+		worktree:     cfg.Worktree,
+		configPath:   cfg.Path,
+		configSource: cfg.Source,
+		out:          stdout,
+		errw:         stderr,
+	}
 	switch cmd {
 	case "do":
 		return e.write(rest, false)
@@ -484,6 +497,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.workspace(rest)
 	case "config":
 		return e.config(rest)
+	case "action":
+		return e.action(rest)
 	}
 	return 2
 }
@@ -1206,6 +1221,100 @@ func (e *env) config(args []string) int {
 		fmt.Fprintln(e.out, i18n.T("（原本不存在，已写入一份带注释的默认配置）"))
 	}
 	return 0
+}
+
+// action implements the read-only `action` group. Only `list` exists today;
+// `log` will join it later.
+func (e *env) action(args []string) int {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			if text, ok := commandUsageText(e.rel(), "action"); ok {
+				fmt.Fprint(e.out, text)
+				return 0
+			}
+		}
+	}
+	// Parse first so flags may precede the subcommand (`action --json list`),
+	// the same shape `worktree` uses.
+	pos, f, _ := parse(args, "json")
+	if code := rejectSwitchValues(e.errw, f, "json"); code != 0 {
+		return code
+	}
+	sub := ""
+	rest := pos
+	if len(pos) > 0 {
+		sub, rest = pos[0], pos[1:]
+	}
+	switch sub {
+	case "list":
+		if code := rejectExtra(e.errw, rest, 0, "kiln action list [--json]"); code != 0 {
+			return code
+		}
+		warnUnknownFlags(e.errw, f, allowedFlags("json"))
+		return e.actionList(f)
+	default:
+		fmt.Fprintln(e.errw, i18n.T("用法: kiln action list [--json]"))
+		return 2
+	}
+}
+
+// actionList prints the effective vocabulary, not the history: the text view is
+// one action per line with optional start/terminal markers, and --json mirrors
+// the config's actions block plus where it came from.
+func (e *env) actionList(f flags) int {
+	if f.has("json") {
+		source := e.configSource
+		if source == "" {
+			source = config.SourceDefault
+		}
+		doc := actionListDoc{
+			Actions: actionSetDoc{
+				Names:    e.actions.Names(),
+				Start:    e.actions.Start(),
+				Terminal: terminalNames(e.actions),
+			},
+			Source: source,
+		}
+		if source == config.SourceFile && e.configPath != "" {
+			doc.Config = e.configPath
+		}
+		return e.writeJSON(doc)
+	}
+	names := e.actions.Names()
+	width := 0
+	for _, name := range names {
+		if w := displayWidth(name); w > width {
+			width = w
+		}
+	}
+	for _, name := range names {
+		line := pad(name, width)
+		var markers []string
+		if e.actions.IsStart(name) {
+			markers = append(markers, "start")
+		}
+		if e.actions.IsTerminal(name) {
+			markers = append(markers, "terminal")
+		}
+		if len(markers) > 0 {
+			line += "  " + strings.Join(markers, ", ")
+		}
+		fmt.Fprintln(e.out, strings.TrimRight(line, " "))
+	}
+	return 0
+}
+
+// terminalNames lists the terminal actions in declaration order. ActionSet has
+// no direct accessor, and deriving keeps the order the config declares.
+func terminalNames(set *model.ActionSet) []string {
+	names := set.Names()
+	terminal := make([]string, 0, len(names))
+	for _, name := range names {
+		if set.IsTerminal(name) {
+			terminal = append(terminal, name)
+		}
+	}
+	return terminal
 }
 
 // workspaceList prints every working area, main first, aligned by path and role
@@ -2957,6 +3066,21 @@ type listHit struct {
 	Subject string `json:"subject"`
 	Total   int    `json:"total"`
 	Date    string `json:"date"`
+}
+
+// actionListDoc is `kiln action list --json`: the effective vocabulary, mirroring
+// the config's actions block, plus where it came from. Config is omitted when
+// the defaults are in force; Source is always present.
+type actionListDoc struct {
+	Actions actionSetDoc `json:"actions"`
+	Source  string       `json:"source"`
+	Config  string       `json:"config,omitempty"`
+}
+
+type actionSetDoc struct {
+	Names    []string `json:"names"`
+	Start    string   `json:"start"`
+	Terminal []string `json:"terminal"`
 }
 
 // checkDoc is the `kiln check --json` document. passed mirrors the exit code —

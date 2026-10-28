@@ -69,8 +69,48 @@ func TestReadFallsBackToDefaultsOutsideRepo(t *testing.T) {
 	if cfg.Path != "" || cfg.VCS != "auto" || cfg.Worktree != WorktreeOff {
 		t.Fatalf("cfg = %+v, want no path, auto, and isolation off", cfg)
 	}
+	if cfg.Source != SourceDefault {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceDefault)
+	}
 	if cfg.Actions.Start() != "ask" || !cfg.Actions.IsTerminal("apply") {
 		t.Fatalf("unexpected defaults: %v", cfg.Actions.Names())
+	}
+}
+
+// A repository without a config file still gets the defaults, but it must say
+// so: the candidate path exists for `config path` to seed later, yet no file
+// was read.
+func TestReadReportsDefaultSourceWhenFileIsMissing(t *testing.T) {
+	root := mkRepo(t)
+	cfg, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Source != SourceDefault {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceDefault)
+	}
+	if want := filepath.Join(root, FileName); cfg.Path != want {
+		t.Fatalf("Path = %q, want %q", cfg.Path, want)
+	}
+	if cfg.Actions.Start() != "ask" {
+		t.Fatalf("defaults not applied: %v", cfg.Actions.Names())
+	}
+}
+
+// A file with no actions block is still the source of the defaults: Source says
+// which file was read, not whether it changed the vocabulary.
+func TestReadKeepsFileSourceWithoutActionsBlock(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{"vcs": "git"}`)
+	cfg, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Source != SourceFile {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceFile)
+	}
+	if cfg.Actions.Start() != "ask" || cfg.Actions.IsValid("probe") {
+		t.Fatalf("actions should stay default: %v", cfg.Actions.Names())
 	}
 }
 
@@ -93,6 +133,12 @@ func TestReadParsesGroupedJSONC(t *testing.T) {
 	}
 	if cfg.VCS != "jj" {
 		t.Fatalf("VCS = %q, want jj", cfg.VCS)
+	}
+	if cfg.Source != SourceFile {
+		t.Fatalf("Source = %q, want %q", cfg.Source, SourceFile)
+	}
+	if want := filepath.Join(root, FileName); cfg.Path != want {
+		t.Fatalf("Path = %q, want %q", cfg.Path, want)
 	}
 }
 

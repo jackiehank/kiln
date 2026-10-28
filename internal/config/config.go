@@ -37,9 +37,16 @@ type file struct {
 	Worktree string `json:"worktree"`
 }
 
+// Config sources: where the effective vocabulary came from.
+const (
+	SourceFile    = "file"    // a config file was read
+	SourceDefault = "default" // built-in defaults (no file, or outside a repository)
+)
+
 // Config is everything kiln reads from a repository's config file.
 type Config struct {
-	Path      string             // the file kiln used ("" outside a repository)
+	Path      string             // the candidate file path ("" outside a repository)
+	Source    string             // SourceFile or SourceDefault
 	Actions   *model.ActionSet   // the vocabulary (built-in defaults when unset)
 	Relations *model.RelationSet // the relation vocabulary (built-in defaults when unset)
 	VCS       string             // backend preference: auto | git | jj
@@ -63,7 +70,7 @@ func (c Config) Isolated() bool { return c.Worktree == WorktreeOn }
 // exists but does not parse is an error, so a misspelled key is never silently
 // ignored.
 func Read(startDir string) (Config, error) {
-	cfg := Config{Actions: model.DefaultActionSet(), Relations: model.DefaultRelationSet(), VCS: "auto", Worktree: WorktreeOff}
+	cfg := Config{Actions: model.DefaultActionSet(), Relations: model.DefaultRelationSet(), VCS: "auto", Worktree: WorktreeOff, Source: SourceDefault}
 	path, ok := Path(startDir)
 	if !ok {
 		return cfg, nil // outside a repository: do still works, on the defaults
@@ -99,6 +106,7 @@ func Read(startDir string) (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
 	cfg.Actions = set
+	cfg.Source = SourceFile
 	return cfg, nil
 }
 

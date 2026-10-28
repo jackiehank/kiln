@@ -1806,6 +1806,197 @@ func TestConfigUnknownSubcommand(t *testing.T) {
 	}
 }
 
+func customActionSet(t *testing.T, names []string, start string, terminal []string) *model.ActionSet {
+	t.Helper()
+	set, err := model.NewActionSet(names, start, terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
+// `action list` prints the effective vocabulary, one action per line, with
+// markers only where they apply. No header or legend keeps `| wc -l` clean.
+func TestActionListRendersTheEffectiveVocabulary(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: customActionSet(t, []string{"ask", "probe", "done"}, "ask", []string{"done"}),
+		out:     &out,
+		errw:    &errb,
+	}
+	if code := e.action([]string{"list"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	want := "ask    start\nprobe\ndone   terminal\n"
+	if got := out.String(); got != want {
+		t.Fatalf("action list =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// Start and terminal are independent sets: a custom vocabulary may make one
+// action both, and the row has to say so instead of picking one marker.
+func TestActionListMarksStartAndTerminalTogether(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{
+		actions: customActionSet(t, []string{"ask", "done"}, "ask", []string{"ask", "done"}),
+		out:     &out,
+		errw:    &errb,
+	}
+	if code := e.action([]string{"list"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"ask   start, terminal", "done  terminal"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("action list missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The JSON view mirrors the config's actions block and says where it came from;
+// the path is the OS-native absolute path, so os.Stat on the decoded value works.
+func TestActionListJSONCarriesTheFileSource(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, config.FileName)
+	if err := os.WriteFile(path, []byte(`{"actions":{"names":["ask","probe","done"],"start":"ask","terminal":["done"]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	e := &env{
+		actions:      customActionSet(t, []string{"ask", "probe", "done"}, "ask", []string{"done"}),
+		configPath:   path,
+		configSource: config.SourceFile,
+		out:          &out,
+		errw:         &errb,
+	}
+	if code := e.action([]string{"list", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc actionListDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Source != config.SourceFile || doc.Config != path {
+		t.Fatalf("source/config = %q/%q, want %q/%q", doc.Source, doc.Config, config.SourceFile, path)
+	}
+	if !reflect.DeepEqual(doc.Actions.Names, []string{"ask", "probe", "done"}) ||
+		doc.Actions.Start != "ask" ||
+		!reflect.DeepEqual(doc.Actions.Terminal, []string{"done"}) {
+		t.Fatalf("actions = %+v", doc.Actions)
+	}
+	if _, err := os.Stat(doc.Config); err != nil {
+		t.Fatalf("the emitted path is not accessible: %v", err)
+	}
+}
+
+// Defaults have no file to point at: source=default and config is omitted
+// entirely rather than serialized as an empty string.
+func TestActionListJSONOmitsConfigForDefaults(t *testing.T) {
+	var out, errb bytes.Buffer
+	e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+	if code := e.action([]string{"list", "--json"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if strings.Contains(out.String(), `"config"`) {
+		t.Fatalf("default source must omit config:\n%s", out.String())
+	}
+	var doc actionListDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Source != config.SourceDefault || doc.Config != "" {
+		t.Fatalf("source/config = %q/%q", doc.Source, doc.Config)
+	}
+}
+
+// Outside a repository there is no config file, but the command still works on
+// the built-in vocabulary.
+func TestActionListWorksOutsideARepository(t *testing.T) {
+	t.Chdir(t.TempDir())
+	var out, errb bytes.Buffer
+	if code := Run([]string{"action", "list", "--json"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc actionListDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Source != config.SourceDefault || doc.Config != "" {
+		t.Fatalf("source/config = %q/%q", doc.Source, doc.Config)
+	}
+	if !reflect.DeepEqual(doc.Actions.Names, model.DefaultActionSet().Names()) {
+		t.Fatalf("names = %v", doc.Actions.Names)
+	}
+}
+
+// Inside a repository with a config file, Run picks up both the custom
+// vocabulary and the file source; the emitted path is native and accessible.
+func TestActionListRunReadsTheRepositoryConfig(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, config.FileName)
+	if err := os.WriteFile(path, []byte(`{"actions":{"names":["ask","probe","done"],"start":"ask","terminal":["done"]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var out, errb bytes.Buffer
+	if code := Run([]string{"action", "list", "--json"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	var doc actionListDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("not one JSON document: %v\n%s", err, out.String())
+	}
+	if doc.Source != config.SourceFile || doc.Config != path {
+		t.Fatalf("source/config = %q/%q, want %q/%q", doc.Source, doc.Config, config.SourceFile, path)
+	}
+	if _, err := os.Stat(doc.Config); err != nil {
+		t.Fatalf("the emitted path is not accessible: %v", err)
+	}
+	if !reflect.DeepEqual(doc.Actions.Names, []string{"ask", "probe", "done"}) {
+		t.Fatalf("names = %v", doc.Actions.Names)
+	}
+}
+
+// Listing is read-only: a repository without a config must not gain one, even
+// though `config path` would seed it.
+func TestActionListDoesNotSeedAConfigFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	var out, errb bytes.Buffer
+	if code := Run([]string{"action", "list"}, &out, &errb); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "start") {
+		t.Fatalf("default vocabulary did not render:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, config.FileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("action list created a config file: %v", err)
+	}
+}
+
+// The group is strict about its one subcommand and its one switch.
+func TestActionListRejectsBadArguments(t *testing.T) {
+	cases := [][]string{
+		nil,
+		{"nope"},
+		{"list", "extra"},
+		{"list", "--json=x"},
+	}
+	for _, args := range cases {
+		var out, errb bytes.Buffer
+		e := &env{actions: model.DefaultActionSet(), out: &out, errw: &errb}
+		if code := e.action(args); code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2 (stderr %q)", args, code, errb.String())
+		}
+	}
+}
+
 // A repository that turned isolation off records an action in the main area
 // without any guard — no --force needed.
 func TestCommitInMainAllowedWhenWorktreeOff(t *testing.T) {
