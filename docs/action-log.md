@@ -455,3 +455,46 @@ $ kiln action log --jsonl
 ### 7. 下一步
 
 `apply`：按 `vcs.LogEach` + git 实现 → `actionLog` + 分派 + 管道判断 → 测试 → 文档（machine-readable-output、README 双语、help/i18n）的顺序落地。
+
+## apply（2026-10-28）：落地 `action log`，含两处实现期修正
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/vcs/vcs.go` | 新增可选接口 `LogEach(fn func(Commit) bool) error`；文档写明“可选但不回退” |
+| `internal/vcs/git/git.go` | `LogEach`：`git log -z --author-date-order --format="%H%x00%aI%x00%B"` + `bufio.Reader` 三段解析；早停 Kill + 关管道；空仓探 `rev-parse --verify --quiet HEAD` |
+| `internal/engine/engine.go` | `subject` → 导出 `Subject`，供 `action log` 复用同一条“首行兜底”规则 |
+| `internal/cli/cli.go` | `action` 分派加 `log`；`actionLog`；`actionLogDoc`；组用法与 `usageCommands` 行；`--json` / `--jsonl` / `--limit` 的互相拒绝 |
+| `internal/cli/pipe_windows.go` / `pipe_other.go` | `isBrokenPipe` 分平台实现 |
+| `internal/i18n/catalog.go` | 8 条新文案的英文 |
+| `internal/cli/cli_test.go` | 9 个 `TestActionLog*` 用例 + `streamRunner` / `brokenPipeWriter` 两个测试替身 |
+| `internal/vcs/git/git_test.go` | 3 个 `TestLogEach*` 用例 + `commitEmpty` 辅助 |
+| `README.md` / `README.en.md` / `docs/machine-readable-output.md` | 命令表 + NDJSON 契约 |
+
+### 2. 实现期发现并修正的两件事
+
+**（a）Git for Windows 的 `git.exe` 是 shim。** 只 `Process.Kill()` 直接子进程时，真正的 git 仍活着并持有继承来的管道；`cmd.Wait()` 会卡在 stderr 复制 goroutine 上，`--limit` 直接挂死（实测：命令挂 120s，`Get-Process` 里还有一个 git）。修法两条并用：
+
+- 停的时候**关掉我们自己这一端的 stdout 管道**——真 git 下一次写就失败并退出；
+- 给 `cmd.WaitDelay` 一个 3s 上限，兜住任何仍被占用的 I/O。
+
+修后 `action log --limit 3` 与 `--jsonl --limit 1` 都在 ~117ms 返回（含 git 启动）。
+
+**（b）空结果提示在英文模式下一直没翻译。** `list` 那句用的是 `fmt.Fprintln` + 不带 `\n` 的 key，而 catalog 的 key 带 `\n`，查找永远落空。改成 `fmt.Fprint` + 带 `\n` 的 key（两处），英文空仓现在输出 `no actions in this repository yet (...)`。
+
+### 3. 验证
+
+- `gofmt -l internal cmd` 干净；`go vet ./...` 无输出；`go test ./...` 全过（cli 2.9s / git 11.8s）；
+- 真仓：`action log` 339 行 = `status --json` 的 339 个动作；`--limit 3` 只出 3 行且 ~117ms；`--jsonl --limit 2` 两行都是合法 JSON，`commit` 全长、`date` 带 `+08:00`、未声明的 `domain`/`tags` 不出现；
+- 拒绝：`--json`（exit 2，文案指向 `--jsonl`）、`--limit 0`（exit 2）、`action list --jsonl`（exit 2）；
+- 空仓（临时 `git init`）：exit 0、stdout 空、stderr 一行提示；jj 仓（`jj git init --colocate`）：exit 1、`action log 暂不支持 jj（当前只实现 git 的流式读取）`；
+- 破管道：用 Go 父进程读一行后关管道，kiln exit 0 且 stderr 为空（PowerShell 的 `StandardOutput.Close()` 不真正关句柄，不能拿它当破管道测——那次“挂起”是写满缓冲的正常背压，不是缺陷）；
+- 英文：`--lang en action log --json`、`--limit 0`、空仓提示、`action -h` 全部无中文。
+
+### 4. 遗留（与 conclude 一致，未变）
+
+- jj 的流式读取（`json(self)` 一行一提交，已实测可行）；
+- Unix 上 `| head` 可能以 141 收场；需要统一 0 时再评估 `signal.Ignore(SIGPIPE)`；
+- `domain` / `tags` 只有 per-commit 值，按当前分类筛要走 `list` / `status`；
+- 无终止记录，截断只能靠退出码与行数判断。

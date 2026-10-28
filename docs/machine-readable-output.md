@@ -396,3 +396,21 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - `config` 是**当前 OS 的本地绝对路径**：Windows 用 `\`（JSON 源码里转义为 `\\`），POSIX 用 `/`；消费方解码后可直接 `os.Stat` / 打开，不要照抄源码里的转义；
 - 不做 `--jsonl`；空仓/仓外输出默认词表并 exit 0；配置解析失败 exit 1；
 - 不创建配置文件：`config path` 才会 seed，`action list` 只读。
+
+## 后续（2026-10-28）：`kiln action log --jsonl`
+
+`action log` 是**行分隔**输出，不是“一份 JSON 文档”：每条动作一行、一个独立对象。
+
+```json
+{"issue":"action-log","action":"collect","commit":"edbe9be…","date":"2026-10-28T22:17:33+08:00","title":"collect 第二轮：…","domain":"cli","tags":["docs"]}
+```
+
+- 这是本文件“stdout 只放一份文档”规则的**显式例外**。理由不是内存（`path --all --json` 已经证明文档可以流式生成），而是交付形态：逐条可消费、可截断、`jq -c .` / `awk` 直接吃；空流（0 行）是合法结果；
+- `--json` 与 `--jsonl` 的区别就是名字本身：`--json` 给一份文档，`--jsonl` 给一条一条。`action log --json` 被明确拒绝并指向 `--jsonl`，不会静默降级；
+- 字段固定为 `issue / action / commit / date / title / domain / tags`，顺序固定；`issue` `action` `commit` `date` 恒显，其余为空时**省略键**（缺省即没有）；
+- `commit` 是全长 hash；`date` 用 `time.RFC3339` 并保留提交自己的 offset，与 `path --json` / `show --json` 一致；
+- `title` 取 `title:` trailer，缺省时用提交首行——与 `list --json` 的 `title` 同一条兜底规则；`path --json` 的 `actions[].title` 仍是严格 trailer；
+- `domain` / `tags` 是**本条提交自己的声明**，不是 issue 级：历史只从新到旧读一遍，读第一行时还看不到更老的声明。要当前分类请用 `list --json` / `status --json`；
+- 只认 `issue:` + `action:`，**不按当前词表过滤**：词表外的历史动作照常出现，与 `path`/`list`/`show` 对“动作”的定义一致；合法性是 `check` 的事；
+- 退出码：`0` 正常（含空结果、`--limit` 用尽、Windows 上消费者提前关管道）；`1` 后端不支持（jj）或读历史失败；`2` 参数错误。Unix 上被 SIGPIPE 终止时 shell 看到 `141`，这是平台惯例（git 与 rg 同样），不是 kiln 额外定义；
+- 没有终止记录：`--limit` 用尽或流被截断只能靠退出码与行数判断；加一条 `summary` 会推翻“一行一条动作”，暂不做。
