@@ -7,11 +7,15 @@
 package jj
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
+
 	"strings"
 	"time"
 
@@ -39,6 +43,113 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 		return nil, err
 	}
 	return parseLog(out), nil
+}
+
+// streamTemplate renders one commit per line as a compact JSON object. json(self)
+// escapes newlines inside the description, so a line is always exactly one
+// record; the explicit "\n" is load-bearing — without it jj concatenates every
+// object onto a single line (measured: 200 commits, one line).
+const streamTemplate = `json(self) ++ "\n"`
+
+// streamRecord is the subset of json(self) kiln needs. Other keys (parents,
+// change_id, bookmarks…) are ignored on purpose: the log surface may grow, and
+// kiln only depends on identity, date and message.
+type streamRecord struct {
+	CommitID    string `json:"commit_id"`
+	Description string `json:"description"`
+	Author      struct {
+		Timestamp string `json:"timestamp"`
+	} `json:"author"`
+}
+
+// LogEach streams jj's visible commits to fn, stopping as soon as fn returns
+// false. See vcs.LogEach.
+//
+// Unlike git, jj is not incremental: it computes the whole log before writing the
+// first line (measured: 141 ms first line vs 152 ms total at 200 commits). There
+// is no `-n` shortcut either: -n counts commits, not kiln actions, so a run of
+// non-action commits would cut the stream short and make --limit under-deliver.
+// The cost of a `--limit` on jj is therefore the full scan, and the benefit is
+// only that kiln stops reading early.
+func (r ExecRunner) LogEach(fn func(vcs.Commit) bool) error {
+	args := []string{"log", "--no-graph", "-r", revset, "-T", streamTemplate}
+	cmd := exec.Command("jj", args...)
+	cmd.Dir = r.Dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("jj log: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// Same backstop as the git adapter: a stopped reader must never be able to
+	// turn Wait into a hang.
+	cmd.WaitDelay = 3 * time.Second
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("jj log: %w", err)
+	}
+	stopped, readErr := streamRecords(bufio.NewReaderSize(stdout, 64*1024), fn)
+	if stopped || readErr != nil {
+		_ = cmd.Process.Kill()
+		_ = stdout.Close()
+	}
+	waitErr := cmd.Wait()
+	if stopped {
+		return nil
+	}
+	if readErr != nil {
+		return readErr
+	}
+	if waitErr != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = waitErr.Error()
+		}
+		return fmt.Errorf("jj log: %s", msg)
+	}
+	return nil
+}
+
+// streamRecords turns one JSON object per line into commits. A line that does not
+// decode is an error: silently skipping it would hide a truncated or corrupt
+// stream. Blank lines are ignored so a trailing newline stays harmless.
+func streamRecords(br *bufio.Reader, fn func(vcs.Commit) bool) (bool, error) {
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(strings.TrimSpace(string(line))) > 0 {
+			c, perr := parseStreamRecord(line)
+			if perr != nil {
+				return false, perr
+			}
+			if !fn(c) {
+				return true, nil
+			}
+		}
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+}
+
+// parseStreamRecord decodes one json(self) line. A wrong shape or a timestamp
+// that is not RFC3339 is reported, not papered over: the command's date column
+// would otherwise silently become a zero time.
+func parseStreamRecord(line []byte) (vcs.Commit, error) {
+	var rec streamRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return vcs.Commit{}, fmt.Errorf("jj log: %w", err)
+	}
+	when, err := time.Parse(time.RFC3339, rec.Author.Timestamp)
+	if err != nil {
+		return vcs.Commit{}, fmt.Errorf("jj log: %w", err)
+	}
+	return vcs.Commit{
+		ID:      rec.CommitID,
+		Date:    when,
+		Message: strings.TrimRight(rec.Description, "\r\n"),
+	}, nil
 }
 
 // Action records one kiln action and returns the new commit's id. Unlike git there

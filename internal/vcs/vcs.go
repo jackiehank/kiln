@@ -97,6 +97,15 @@ type StatLog interface {
 // backend then stops reading and releases its child process, and LogEach returns
 // nil — an early stop is normal, not a failure.
 //
+// There is deliberately no limit parameter: only the caller knows which commits
+// are actions, so a backend cannot turn "N actions" into "N commits" without
+// under-delivering (jj's `log -n` counts commits, and a run of non-action commits
+// would end the stream early). fn is the only stop authority.
+//
+// A backend may still be non-incremental (jj computes its whole log before the
+// first line); LogEach is allowed to hand records over one at a time anyway, and
+// kiln's own memory stays O(1) either way.
+//
 // It is optional, but unlike StatLog there is no fallback: calling Log would turn
 // the stream back into a buffer, which is exactly what the caller asked to avoid.
 // A backend that does not implement it is reported as unsupported, never

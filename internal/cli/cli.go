@@ -1360,7 +1360,7 @@ func (e *env) actionLog(f flags) int {
 	}
 	stream, ok := backend.(vcs.LogEach)
 	if !ok {
-		fmt.Fprintln(e.errw, i18n.T("action log 暂不支持 jj（当前只实现 git 的流式读取）"))
+		fmt.Fprintln(e.errw, i18n.T("当前后端不支持 action log 的流式读取"))
 		return 1
 	}
 	jsonl := f.has("jsonl")

@@ -2120,6 +2120,29 @@ func TestActionLogLimitStopsTheScan(t *testing.T) {
 	}
 }
 
+// --limit counts actions, not commits: a run of commits without trailers must
+// not eat the budget, or the stream would end early with fewer rows than asked.
+func TestActionLogLimitCountsActionsNotCommits(t *testing.T) {
+	base := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	r := &streamRunner{fakeRunner: fakeRunner{commits: []vcs.Commit{
+		{ID: "ccc1", Date: base.Add(5 * time.Hour), Message: "noise one"},
+		{ID: "bbb2", Date: base.Add(4 * time.Hour), Message: "noise two"},
+		{ID: "aaa3", Date: base.Add(3 * time.Hour), Message: "third\n\nissue: x\naction: ask\ntitle: third"},
+		{ID: "ddd4", Date: base.Add(2 * time.Hour), Message: "fourth\n\nissue: x\naction: collect\ntitle: fourth"},
+	}}}
+	var out, errb bytes.Buffer
+	e := newActionLogEnv(&out, &errb, r)
+	if code := e.action([]string{"log", "--limit", "2"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	if got := len(strings.Split(strings.TrimRight(out.String(), "\n"), "\n")); got != 2 {
+		t.Fatalf("printed %d lines, want 2:\n%s", got, out.String())
+	}
+	if r.yielded != 4 {
+		t.Fatalf("backend handed over %d records, want 4 (two actions are past the noise)", r.yielded)
+	}
+}
+
 // A consumer that walks away is not a failure: the write error is recognised,
 // the scan stops, and nothing is said on stderr.
 func TestActionLogStopsQuietlyWhenTheConsumerGoesAway(t *testing.T) {
@@ -2149,7 +2172,7 @@ func TestActionLogRefusesABackendWithoutStreaming(t *testing.T) {
 	if code := e.action([]string{"log"}); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errb.String(), "暂不支持 jj") {
+	if !strings.Contains(errb.String(), "当前后端不支持") {
 		t.Fatalf("stderr = %q", errb.String())
 	}
 }

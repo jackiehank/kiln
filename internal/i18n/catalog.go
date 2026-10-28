@@ -212,7 +212,7 @@ var enCatalog = map[string]string{
 	"action log 用 --jsonl（一行一个动作），不用 --json":                                "action log takes --jsonl (one action per line), not --json",
 	"用法: kiln action list [--json] | kiln action log [--jsonl] [--limit N]": "usage: kiln action list [--json] | kiln action log [--jsonl] [--limit N]",
 	"--limit 需要 ≥ 1 的整数（当前: %q）\n":                                          "--limit needs an integer >= 1 (got: %q)\n",
-	"action log 暂不支持 jj（当前只实现 git 的流式读取）":                                   "action log does not support jj yet (only git is read incrementally)",
+	"当前后端不支持 action log 的流式读取":                                              "this backend has no streaming read for action log",
 	"输出失败: %v\n": "cannot write the output: %v\n",
 	"问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）": "issue relation graph (--mermaid prints flowchart text; --json is for agents, --issue/--depth narrows the neighbourhood)",
 	"建 worktree（main 只读，动作只在 worktree 提交）":                          "create a worktree (main is read-only; actions commit in a worktree)",
