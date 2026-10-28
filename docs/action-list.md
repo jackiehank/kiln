@@ -217,3 +217,107 @@ apply         terminal
 - 若认可：本 issue 可 `conclude` 后进入 `apply`；实现顺序按 §6。
 - 若对英文标记/`source` 语义有异议，先改这两处，再 conclude。
 - `action log` 仍在自己的 issue 里等实现，不受本 issue 影响。
+
+## conclude（2026-10-28）：action list 定稿——文本一行一个；JSON 镜像配置；`config` 用当前 OS 原生路径
+
+### 0. 裁决
+
+| 项 | 决定 |
+| --- | --- |
+| 命令 | `kiln action list [--json]` |
+| 文本 | 一行一个 action；`start` / `terminal` 英文列；无表头 / legend |
+| JSON | 一份对象；`actions: {names,start,terminal}` + `source` + `config?` |
+| `source` | `file` / `default`；由 `config.Config.Source` 提供，不靠命令内 `stat` |
+| `config` | **当前 OS 的本地绝对路径**；Windows 用 `\`，POSIX 用 `/`；不强制 `ToSlash` |
+| 仓外 / 缺文件 | 默认词表，`source=default`，无 `config`，exit 0 |
+| 配置错误 | `Run` 先报错 exit 1；`action list` 不静默回退 |
+| 副作用 | 不读历史、不开后端、不 `config.Ensure`、不创建配置文件 |
+| `-h` | 默认词表行末尾加“生效词表见 `kiln action list`”；不改 `usageText` 签名 |
+
+### 1. 文本定稿
+
+```text
+ask           start
+hypothesize
+collect
+test
+conclude      terminal
+apply         terminal
+```
+
+- 顺序 = 配置 `names`；`start` / `terminal` 同时成立写 `start, terminal`；
+- 按 `displayWidth` 对齐；无标记行不补尾随空格；无表头 / legend；
+- `kiln action list | wc -l` 等于 action 数；
+- 文本不输出 `config` 路径；路径只在 `--json` 与 `config path` 里出现。
+
+### 2. JSON 与路径口径（本轮新增的硬要求）
+
+```json
+{
+  "actions": {
+    "names": ["ask", "hypothesize", "collect", "test", "conclude", "apply"],
+    "start": "ask",
+    "terminal": ["conclude", "apply"]
+  },
+  "source": "file",
+  "config": "C:\\Users\\jacki\\kiln\\.kilnconfig.jsonc"
+}
+```
+
+- `config` 必须是**当前操作系统可直接访问的本地绝对路径**：
+  - Windows：`C:\Users\jacki\kiln\.kilnconfig.jsonc`（JSON 里反斜杠转义为 `\\`）；
+  - Linux / macOS：`/home/jacki/kiln/.kilnconfig.jsonc`。
+- 实现直接使用 `config.Path`（`filepath.Abs` / `filepath.Join` 已产出 OS 原生分隔符）；**不要**为了好看调用 `filepath.ToSlash`，也不要把路径写死成 `/` 或 `\`。
+- JSON 字符串中的 `\\` 是编码结果；消费方解码后的字符串就是原生路径，可直接 `os.Stat` / 打开 / 传给子进程。文档要说明“用解码后的值，不要照抄 JSON 源码里的转义”。
+- `source=default` 时省略 `config`；`source=file` 时 `config` 为绝对路径。
+- 测试不要硬编码 `C:\` 或 `/`：用 `filepath.Join(root, ".kilnconfig.jsonc")` 构造期望值，再 `os.Stat(doc.Config)` 验证可访问；这样 Windows 与 POSIX CI 同一份测试都能过。
+- 文档示例分平台写两条（Windows / POSIX），不要把某一条当成唯一契约。
+
+### 3. `source` / 仓外 / 配置错误
+
+- `config.Config` 加 `Source string`：成功读文件后 `file`；缺文件 / 仓外保持 `default`；
+- `Config.Path` 仍是“候选路径”，不拿它当“文件存在”的判据；
+- `env` 加 `configPath` / `configSource`，`Run` 填入；测试手工 env 为空时按 `default` 处理，空 path 不输出 `config`；
+- 仓外：默认词表、`source=default`、无 `config`、exit 0；
+- 仓内缺文件：同上，且**不创建** `.kilnconfig.jsonc`；
+- 文件存在但 `actions` 省略：`source=file`、`config` 有值、词表默认；
+- 配置解析失败：`Run` 在 dispatch 前 exit 1，`action list` 不输出、不回退默认。
+
+### 4. `-h`
+
+- `usageCommands` 增加 `kiln action list [--json]`；
+- `usageOtherFlags` 的 `action 词表默认:` 行末尾加“（生效词表见 `kiln action list`）”；
+- 不改 `usageText` 签名，不把 `-h` 改成生效词表；`-h` 行明确写“默认”，`action list` 才是生效视图；
+- `kiln action` 无子命令 → 组用法 exit 2；`action list` 的额外参数 / `--json=x` 按现有 parser 规则 exit 2；
+- `action` 组后续可加 `log`，本 issue 不实现。
+
+### 5. 实现与测试
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/config/config.go` | `Config.Source`；`Read` 设置 `file`/`default`；测试 |
+| `internal/cli/cli.go` | `Run` 支持 `action`；`env` 加 config 字段；`actionList` + DTO；文本/JSON；help 行 |
+| `internal/i18n/catalog.go` | 命令描述、组用法、默认词表提示；zh/en |
+| `README.md` / `README.en.md` | 命令表加 `action list` |
+| `docs/machine-readable-output.md` | `action list --json` 小节；分平台路径示例 |
+| `internal/cli/cli_test.go` | 文本 / JSON / 仓外 / 缺文件 / 自定义 / 不创建文件 / 路径可访问 / 参数 / help |
+
+必测：
+
+1. 自定义词表文本：`ask/probe/done`，start/terminal 标记正确，行数 = 3；
+2. start+terminal 同一 action → `start, terminal`；
+3. JSON 文件源：`source=file`、`config` 等于 `filepath.Join(root, ".kilnconfig.jsonc")`、`os.Stat` 成功；golden 不含硬编码分隔符；
+4. JSON 默认源：`source=default`、无 `config`；
+5. 文件存在但 `actions` 省略：`source=file`、默认词表；
+6. 仓内无文件跑 `action list`：不创建文件；
+7. 配置错误：exit 1；`--json=x` / 多余参数：exit 2；
+8. `-h` 含新命令与“生效词表见”提示；`action` 无子命令 exit 2；
+9. `e.repo == nil` 时也能跑，不调用 backend；
+10. 真仓 + 临时自定义仓各跑一次，`--json` 的 `config` 在本机可访问。
+
+### 6. 验收
+
+- 文本、JSON 与上述裁决一致；`config` 在 Windows/POSIX 各自是原生绝对路径，解码后 `os.Stat` 成功；
+- 不读历史、不创建文件、不改现有命令输出；
+- `go test ./...`、`go vet`、`gofmt` 全过；
+- README / `machine-readable-output` 文档同步；`action log` 不受影响。
