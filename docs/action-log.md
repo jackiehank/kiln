@@ -764,3 +764,84 @@ conclude 定了 limit 提示、并让 jj 拼 `-n`，理由是 100k 时渲染约 
 - **jj 100k 渲染未测**（16s 为外推）。若要解决，正确方向不是 `-n`（会少给行），而是让调用方先给候选集、或把“哪条提交是动作”下沉给后端——两者都超出本 issue；
 - jj 顺序是拓扑序；要 author-date 时加缓冲排序（并接受 O(n) 内存）；
 - jj 会先快照工作副本，脏工作区可能拖慢首行；`--ignore-working-copy` 未采用（会改变语义），另议。
+
+## conclude（2026-10-28，第六轮）：下游接入定稿——`--jsonl` 是唯一机器入口
+
+> 这一节是写给消费者（插件 / agent）的，不是写给实现者的。文本视图只给人看，**不要解析**；机器入口只有 `--jsonl`。
+
+### 1. 记录形状
+
+```json
+{"issue":"action-log","action":"apply","commit":"7b808426a5a93ba5b4c5c374f87ea71b934352a2","date":"2026-10-28T23:06:28+08:00","title":"apply 第五轮：文档按后端写清顺序与首行，--limit 不下推"}
+```
+
+| 字段 | 恒有 | 类型 | 含义 |
+| --- | --- | --- | --- |
+| `issue` | 是 | string | `issue:` trailer 的**原值**，未 normalize（老提交可能是 `Foo_Bar`） |
+| `action` | 是 | string | `action:` trailer，已小写 |
+| `commit` | 是 | string | 全长 40 位 hash（不是 7 位短 hash） |
+| `date` | 是 | string | RFC3339，保留提交自己的 offset（`+08:00` / `Z`） |
+| `title` | 否 | string | `title:` trailer；缺省时是提交首行（与 `list --json` 的 `title` 同规则） |
+| `domain` | 否 | string | **本条提交**声明的分类，不是 issue 级 |
+| `tags` | 否 | string[] | **本条提交**声明的标签，不是 issue 级并集 |
+
+缺省规则：**键直接省略**，不会出现 `null`、`""` 或 `[]`。消费方必须按“缺省即没有”处理，不能假设键存在。
+
+### 2. 调用契约
+
+- 只输出同时带 `issue:` 与 `action:` 的提交；**不按当前 action 词表过滤**（词表外的历史动作也会出现）；
+- 顺序按后端：git 是 author-date 倒序；jj 是 jj 的拓扑序（线性历史下即 newest-first）；
+- `--limit N` 数的是**动作**，不是提交（中间夹无 trailer 的提交不占配额）；
+- 退出码：`0` 正常（含空结果、`--limit` 用尽、Windows 上消费者提前关管道）；`1` 读历史失败；`2` 参数错误；
+- 空仓 / 无动作：`exit 0`、stdout 为空、stderr 一行提示——**stdout 永远只有记录**；
+- `--json` 会被拒绝（exit 2）并提示用 `--jsonl`，不会静默降级；
+- Unix 上若消费方提前关闭管道，进程可能以 `141`（SIGPIPE）结束；这是平台惯例，按“我主动关的”处理即可。
+
+### 3. 两个接值班点
+
+1. **没有终止记录**：NDJSON 没有 `summary` 收尾行，EOF 就是结束。判断“读完”靠退出码与行数，不要假设最后一行特殊。
+2. **没有增量游标**：目前没有 `--since` / `--after`。只想看新动作时，读到已知 commit 就自己停（配 `--limit` 给上界），或按 `date` 过滤。
+
+### 4. 最小接入示例（Node）
+
+```js
+const { spawn } = require('node:child_process');
+
+export function tailActions(repoDir, limit, onAction, onDone) {
+  const p = spawn('kiln', ['action', 'log', '--jsonl', '--limit', String(limit)], { cwd: repoDir });
+  let buf = '';
+  p.stdout.setEncoding('utf8');
+  p.stdout.on('data', (b) => {
+    buf += b;
+    for (let i; (i = buf.indexOf('\n')) >= 0; ) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (line) onAction(JSON.parse(line));
+    }
+  });
+  p.on('close', (code) => onDone(code, buf.trim())); // 0 = 正常，含空结果
+}
+```
+
+要点：按行切、不按字节切（一条记录可能跨 chunk）；`JSON.parse` 失败说明契约被破坏，不要吞掉；`--limit` 传数字字符串。`kiln` 不在 PATH 时写绝对路径（Windows 上是 `kiln.exe`）。
+
+### 5. 最小接入示例（PowerShell）
+
+```powershell
+.\kiln.exe action log --jsonl --limit 5 |
+  ForEach-Object { $_ | ConvertFrom-Json } |
+  Select-Object issue, action, date, title
+```
+
+`ConvertFrom-Json` 会把 `date` 转成 `DateTime`（显示成本地时间）；需要原始 RFC3339 字符串就直接读 `$_` 文本再解析。
+
+### 6. 不在接入面里的东西
+
+`--json`、`--all`、`--domain/--tag/--action` 过滤、`--since/--after`、`--stat`、终止记录、`action show/search` —— 都要另开 issue，不要在当前契约上假设。
+
+### 7. 接入验收（本仓实测）
+
+- `action log --jsonl --limit 3` 三行，逐行 `ConvertFrom-Json` 成功；`commit` 全长、`date` 带 `+08:00`、未声明的 `domain`/`tags` 不出现；
+- 空结果时 stdout 为空、exit 0、提示只在 stderr；
+- `--limit 0` exit 2；
+- jj 仓同样可用（顺序为拓扑序，首行等 jj 扫完）。
