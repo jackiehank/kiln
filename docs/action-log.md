@@ -498,3 +498,67 @@ $ kiln action log --jsonl
 - Unix 上 `| head` 可能以 141 收场；需要统一 0 时再评估 `signal.Ignore(SIGPIPE)`；
 - `domain` / `tags` 只有 per-commit 值，按当前分类筛要走 `list` / `status`；
 - 无终止记录，截断只能靠退出码与行数判断。
+
+## collect（2026-10-28，第三轮）：jj 到底能不能流式读
+
+> 触发问题：jj 的兼容模式（colocated）本来就用 git，能不能直接读 `.git`？原生 `jj log` 能不能像 git 那样逐条吐？
+> 实测环境：jj 0.45.1、git 2.55.0.windows.3。
+
+### 1. 先纠正前提：colocated 现在是 jj 的**默认**
+
+- `jj git init --help` 原文：`--colocate` “**This is the default**”，除非 `git.colocate=false`；`--no-colocate` 才把 git 仓库藏进 `.jj/repo/store/git`。
+- 所以主流 jj 仓库都有 `.git`，git 确实能读——用户的直觉对了一半。
+- 没 colocate 也不是没有 git：`.jj/repo/store/git` 就是一个真 git 仓库，`git --git-dir=.jj/repo/store/git log --all` 实测可读（2 条用户提交 + 4 条空 message 的内部提交，靠 `refs/jj/keep/*` 保活）。
+
+### 2. colocated 里 git 看到的是什么（实测）
+
+| 场景 | `jj log` | `git log`（HEAD） | `git log --all` |
+| --- | --- | --- | --- |
+| 两个 jj 提交 | 2 条 | 2 条，一致 | 更多（keep refs） |
+| 改写（`jj describe -r @-`）后 | 只有编辑后的 | 只有编辑后的 | **旧提交还在**（`second: probe` 8534639）+ 空 message 内部提交 |
+| 空仓 | 0 条，exit 0 | 无提交 | — |
+
+- jj 把被改写的提交**藏起来**，但仍用 `refs/jj/keep/<hash>` 保活；`--all` 会把它们翻出来，等于给同一次动作多一行。
+- HEAD 链接近 jj 的可见集，但 HEAD 只有一条链；`all()` 覆盖所有可见 head（多 bookmark / 多工作区），HEAD 链会漏。
+- jj 改写会换 `commit_id`（`ade098d` → `3a4d880`），这本身就是两套模型的分歧；读 git 会让一次动作以两个 id 出现。
+
+### 3. 原生 `jj log` **不是流式的**（实测）
+
+| 仓规模 | 命令 | 首行 | 全量 |
+| --- | --- | --- | --- |
+| 200 提交 | `jj log -T 'json(self) ++ "\n"'` | **141ms** | 152ms |
+| 300 提交 | 同上 | — | 163ms |
+| 300 提交 | 同上 + `-n 3` | — | 116ms |
+| 300 提交 | 同上 + `-n 50` | — | 121ms |
+| 300 提交 | `git log --author-date-order` | — | 71ms |
+
+- 200 提交时**首行 ≈ 全量**：jj 先把 revset/渲染算完再吐第一字节，与 git 的“首行 64ms / 全量 1.35s（100k）”是两种曲线。
+- `-n 3` 仍要 116ms：`--limit` 下推给 jj 只省渲染和输出，省不了扫描。
+- 结论：jj 上没有“首行早于全量”的免费午餐；`action log` 在 jj 上若要成立，交付契约得从“首行流式”退成“输出与内存流式”。
+
+### 4. 记录框架与字段（实测）
+
+- `-T 'json(self)'` **不带换行时 200 个对象挤在一行**（`Measure-Object -Line` 得 1）；必须 `json(self) ++ "\n"`。JSON 会把正文换行转义成 `\n`，所以“一条提交一行”成立。
+- `json(self)` 的 `author.timestamp` 是 RFC3339 带 offset（`2026-10-28T22:18:36+08:00`）；模板里直接 `author.timestamp()` 得到的是 `2026-10-28 22:47:04.000 +08:00`（空格 + 毫秒），不能直接当 RFC3339 解析。
+- `description` 带尾部 `\n`；正文就是 commit message，`trailer.Parse` 原样可用，不需要新的解析器。
+- **顺序是拓扑序**：`jj log --help` 写的是 “ordered with children before parents”；revsets 没有 `sort()`，`--reversed` 只翻转。要 author-date 只能自己缓存排序（O(n) 内存），与本 issue 的卖点直接冲突。
+- 空仓免费：`all() ~ root() ~ @` 为 0 条、exit 0，不像 git 那样 128。
+- 分页：管道下把 `PAGER` / `JJ_PAGER` 设成不存在的命令也不影响（实测）；另有 `--no-pager`。
+
+### 5. 四条可选路线
+
+| 路线 | 读法 | 优点 | 代价 |
+| --- | --- | --- | --- |
+| A 原生 jj | `jj log -T 'json(self) ++ "\n"'` | 语义正确（隐藏被改写提交、覆盖所有 head）、空仓免费、一条一行 | **非流式**（首行=全量）；顺序是拓扑序 |
+| B 读 colocated `.git` | 复用 git 的 `LogEach` | 增量、按 author-date、代码几乎零新增 | `--all` 有幽灵（keep refs / 内部提交）、HEAD 链漏其它 head、colocate 可被配置关掉 |
+| C 读 `.jj/repo/store/git` | 同上，指向内部 store | 非 colocated 也能读 | 依赖 jj 内部路径（文档明说“hidden inside .jj”）、幽灵问题同 B |
+| D 维持不支持 | 现状 | 契约不退化 | jj 用户拿不到 |
+
+### 6. 留给下一轮的问题
+
+1. **接受“jj 非流式”吗？** 若接受，`action log` 在 jj 上首行=全量，`--limit` 只省输出；文档要把“首行延迟”从契约里拿掉，改成“内存与输出流式”。
+2. **顺序**：jj 只有拓扑序。接受拓扑序 + 文档说明，还是为 author-date 缓存排序（破坏流式），还是继续不支持？
+3. **B/C 的语义坑**（幽灵提交、漏 head、内部路径）能不能接受？不能的话 A 是唯一正确路线。
+4. 若走 A：`json(self)` 直接解析（简单、字段多、吃 jj 版本）还是自定义模板 + 分隔符（要选一个正文里不会出现的标记，现有 `@@KILN@@` 就是这种思路）。
+5. `--limit` 要不要下推 `jj log -n`？实测省不了 116ms 固定成本，但能省 jj 侧渲染与输出。
+6. 若仍不支持，文案从“暂不支持 jj”改成“jj 暂不支持（可先用 `kiln path --all` 看全量）”，并把原因写成“交付曲线不同”，别写成“做不到”。
