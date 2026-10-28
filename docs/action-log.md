@@ -719,3 +719,48 @@ func (r ExecRunner) LogEach(limit int, fn func(vcs.Commit) bool) error {
 ### 5. 下一步
 
 `apply`：`vcs` 签名 → git/jj 实现 → cli 调用 → 测试 → 文档（machine-readable-output、README 双语、i18n 清理）。
+
+## apply（2026-10-28，第五轮）：jj 支持落地；`limit` 提示在实现时被证伪并撤掉
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/vcs/vcs.go` | `LogEach(fn)`；文档写明“故意没有 limit 参数”与“后端可以非增量” |
+| `internal/vcs/git/git.go` | 不变（本来就用 `fn` 早停） |
+| `internal/vcs/jj/jj.go` | 实现 `LogEach`：`jj log --no-graph -r revset -T 'json(self) ++ "\n"'`；`streamRecords` 纯函数；早停 Kill + 关管道 + `WaitDelay` |
+| `internal/cli/cli.go` | 去掉 jj 专用分支，保留“后端不支持流式”的兜底 |
+| `internal/i18n/catalog.go` | 删“暂不支持 jj”，加“当前后端不支持 action log 的流式读取” |
+| `internal/vcs/jj/jj_test.go` | 4 个 `streamRecords` 用例（逐行解析 / 早停 / 坏行 / 空行） |
+| `internal/cli/cli_test.go` | 新增 `TestActionLogLimitCountsActionsNotCommits` |
+| `README.md` / `README.en.md` / `docs/machine-readable-output.md` | 顺序与首行按后端；`--limit` 不下推 |
+
+### 2. 撤掉 conclude 的一个设计：`LogEach(limit, fn)` 不成立
+
+conclude 定了 limit 提示、并让 jj 拼 `-n`，理由是 100k 时渲染约 16s。实现时发现这是**错的**：
+
+- `jj log -n N` 数的是**提交**，不是 kiln 动作；
+- `--limit 3` 若前 3 条提交里只有 1 条带 trailer，jj 输出 3 条提交就结束，kiln 只打印 1 行、读到 EOF、exit 0 —— **少给行且不报错**；
+- 没有任何后端能安全使用这个提示：只有调用方知道哪条提交是动作，后端拿不到这个知识。
+
+于是参数被删掉，接口回到 `LogEach(fn)`；`vcs.LogEach` 与 `jj.LogEach` 的注释都写明了“为什么没有 limit”。诚实记录的代价：**jj 上 `--limit` 不再省扫描/渲染，只省读取与输出**，100k 的渲染风险仍在（16s 依旧是外推，见遗留）。
+
+### 3. jj 实现的要点
+
+- 记录框架：`json(self) ++ "\n"` —— 换行是必需的，否则 jj 把所有对象拼成一行（实测 200 提交 1 行）；
+- 只取 `commit_id` / `description` / `author.timestamp` 三个键，其它键（`parents` / `change_id` / `bookmarks`）忽略；
+- `description` 去尾换行，与 `Log()` 对同一条提交给出的 message 一致；
+- 坏 JSON、坏时间戳都报错，不静默跳过（日期列变成零时间比失败更难查）；
+- 空行跳过；早停：Kill + 关 stdout + `WaitDelay`，与 git 同一套收尾。
+
+### 4. 验证
+
+- `gofmt -l` 干净、`go vet ./...` 无输出、`go test ./...` 全过；
+- 真 jj 仓（colocated，中间夹一条无 trailer 的提交）：`action log` 2 行、顺序 newest-first；`--jsonl` 两行合法，`date` 带 `+08:00`；`--limit 2` 仍给 2 条动作（证明没有 `-n` 少给）；改写最新动作后旧提交消失、只剩 EDITED；空仓 exit 0 + 一行提示；
+- git 仓回归：行数 = `status --json` 的动作数，`--limit 3` 仍在 ~120ms 量级，破管道静默 0。
+
+### 5. 遗留
+
+- **jj 100k 渲染未测**（16s 为外推）。若要解决，正确方向不是 `-n`（会少给行），而是让调用方先给候选集、或把“哪条提交是动作”下沉给后端——两者都超出本 issue；
+- jj 顺序是拓扑序；要 author-date 时加缓冲排序（并接受 O(n) 内存）；
+- jj 会先快照工作副本，脏工作区可能拖慢首行；`--ignore-working-copy` 未采用（会改变语义），另议。
