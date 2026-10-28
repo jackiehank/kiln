@@ -40,7 +40,7 @@ Pick one of three ways.
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-The binary lands in `$GOBIN` (default `$(go env GOPATH)/bin`, on Windows `%USERPROFILE%\go\bin`); make sure it is on `PATH`. Pin a version with `@v0.2.0` if you like.
+The binary lands in `$GOBIN` (default `$(go env GOPATH)/bin`, on Windows `%USERPROFILE%\go\bin`); make sure it is on `PATH`. Pin a version with `@v0.3.0` if you like.
 
 **2. Build it yourself (single binary, no external dependencies)**
 
@@ -54,7 +54,7 @@ go build -o kiln ./cmd/kiln
 
 Take the artifact for your platform from [Releases](https://github.com/jackiehank/kiln/releases) and put it on `PATH` (Windows: `kiln.exe`). Every `v*` tag is built by GitHub Actions into five artifacts — Windows amd64, macOS arm64/amd64, Linux amd64/arm64 — plus `checksums.txt`; Termux and other arm64 Linux environments take `kiln_linux_arm64`. The tag must be `v0.x` / `v1.x`: the module path has no `/v2`, so Go's version stamping ignores a higher major.
 
-A single-binary CLI, with no `require` in `go.mod`. `kiln --version` tells you which build you run (release artifacts print the tag, e.g. `v0.2.0`).
+A single-binary CLI, with no `require` in `go.mod`. `kiln --version` tells you which build you run (release artifacts print the tag, e.g. `v0.3.0`).
 
 ## Five-minute tour
 

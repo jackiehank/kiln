@@ -31,3 +31,9 @@ README.en.md:57  release artifacts print the tag, e.g. `v0.2.0`.
 ## 记录
 
 - 2026-10-28：v0.3.0 发布后同步。
+
+## apply（2026-10-28）：四处示例改为 v0.3.0
+
+- `README.md:45` / `README.md:59`、`README.en.md:43` / `README.en.md:57`：`v0.2.0` → `v0.3.0`；
+- 不改 `search-result-contract` 里那条历史 query 例子（`kiln v0.2.0` 是当时的真实输入，不是用法示例）；
+- 验证：`rg -n 'v0\.2\.0' README.md README.en.md` 无输出；`rg -n 'v0\.3\.0' README.md README.en.md` 命中四行。

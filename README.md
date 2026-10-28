@@ -42,7 +42,7 @@ kiln 把两样东西都拆成**原子**，再让复杂性从**组合**里长出�
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.2.0` 之类的版本写法固定版本。
+二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.3.0` 之类的版本写法固定版本。
 
 **2. 自己构建（单文件、零外部依赖）**
 
@@ -56,7 +56,7 @@ go build -o kiln ./cmd/kiln
 
 从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。每个 `v*` tag 由 GitHub Actions 构建五个产物：Windows amd64、macOS arm64/amd64、Linux amd64/arm64，并附 `checksums.txt`；Termux 等 arm64 Linux 环境取 `kiln_linux_arm64`。tag 需是 `v0.x` / `v1.x`——模块路径没有 `/v2`，更高的主版本会被 Go 的版本戳忽略。
 
-单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.2.0`）。
+单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.3.0`）。
 
 ## 五分钟上手
 
