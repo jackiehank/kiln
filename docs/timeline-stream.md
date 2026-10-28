@@ -177,3 +177,85 @@
 2. 如果是包装，它是否满足“明显更好”的立项条件（首行、limit、稳定 NDJSON）？
 3. 如果成立，入口选 A / A' / C / D 中的哪一个；B 是否应直接排除？
 4. 字段与边界：`title` 到底取 subject 还是 trailer title；`domain` 是 per-commit 还是 issue 级；NDJSON 如何写进既有“一份文档”契约；broken pipe / 空仓的退出码。
+
+## hypothesize（2026-10-28）：timeline 过不了严格必要性线，只能按“诚实包装”立项
+
+> 结论先行：按 `cli-necessity` 的四件事逐条量，timeline **不新增模型、校验、规范化写**；“综合”这一项也只是把 `path --all` 已有的动作再投影成全局流，而 `git log --author-date-order` 原生就能流式 + `-n`。所以它**过不了“git 表达不了”的严格必要性线**。它能过的是 `show` / `path --stat` 那条“诚实包装”线：承认可被 git + 约定替代，只在“明显更好”时立项。若按包装立项，入口优先独立 `timeline`（不冻结命令面时）；若要求核心必要性，则不做。
+
+### 1. 尺子：`cli-necessity` 要求什么
+
+该 issue 的[结论](cli-necessity.md#L904)把必要性收在四件事：**模型、校验、综合、规范化写**；`path` 因为“按 issue 重建有序路径”被列为必要，`show` / `path --stat` 则被明确归为**诚实的包装**——“有价值，但可被 git 直接替代”，只能靠更好用来赢（[6 条观察](cli-necessity.md#L103)）。它还要求：读与单提交展示应与后端重合、甚至让给后端，不必假装 CLI 更权威。
+
+因此“能不能过”要分开问：
+
+- **严格必要性**：timeline 是否提供了 git + 约定表达不了的东西？
+- **包装立项**：如果不能，它是否至少是“明显更好”的包装，并且不冒充权威？
+
+### 2. 逐条体检
+
+| 尺子 | timeline 的增量 | 判断 |
+| --- | --- | --- |
+| 模型 | 无新实体/字段；`issue/action/date/domain/tags` 全部来自现有 `Action` 与 trailer | 否 |
+| 校验 | 无新规则；不参与 `check` | 否 |
+| 综合 | 把 `path --all` 已有的动作按 author-date 展平/重排；没有新增 `path` 的 ordinal/relations、`status` 的 domain 分组、`graph` 的边 | **弱/否** |
+| 规范化写 | 只读 | 否 |
+
+唯一新增的是**交付形态**：全局 author-date 顺序、首行早出、`--limit`、稳定 NDJSON。这些是时序/契约，不是模型语义。
+
+对比一下“必要”的邻居为什么站得住：
+
+- `path`：新增了 **issue → 有序动作序列**的重建，带 ordinal、progress、relations；git 给不出。
+- `status` / `graph`：新增 **domain 分组 / 关系边** 的综合；git 给不出。
+- `show` / `path --stat`：只是单提交展示，`cli-necessity` 已判为包装。
+- timeline：没有新增上述任何一种结构；它回答的“全局最近动作”可以从 `path --all --json` 展平得到，而 `git log --author-date-order` 原生就能流式 + limit。
+
+### 3. 反方：它也可以被算作“综合视图”
+
+最强的反方理由是：**“全局动作最近发生了什么”本身是一个模型问题**，只有 kiln 知道可配置的 action 词表与 `issue + action` 的准入规则（写侧归一化也只发生在 kiln）；`path --all` 虽然包含数据，但不是这个问题的直接视图。插件的首屏成本也是真的：当前 317 动作 `path --all --json` 已 150 KB / 188 ms，100k 时约 35–47 MB，不能要求消费方先吃完整文档。
+
+但这条理由落到 `cli-necessity` 的尺子上仍然不够：
+
+1. **数据不是新的，只是投影**：`path --all` 已包含全部动作；展平 + 排序是消费方几行代码的事。`status`/`graph`/`path` 的必要性来自“重建结构”，不是“换个排法”。
+2. **流式 + limit 是 git 的原生能力**：`git log --author-date-order --format=… -n N` 已经能首行早出、按 N 停；kiln 的增量只是“按词表过滤 + 解析 trailer + 稳定字段”。这是**约定层**的工作，不是模型层。
+3. **如果任何再投影都算综合**，那每个输出格式都能自称“必要视图”，这条尺子就失效了。
+
+所以：**“全局最近动作”是一个合理的问题，但 timeline 只是其中一种交付方式，不是唯一能回答它的视图；它主要是一个把已有模型数据送到消费方眼前的交付层。**
+
+### 4. 裁决
+
+- **严格必要性：不过。** timeline 不新增模型 / 校验 / 规范化写；综合项也只是再投影。按 `cli-necessity` 的结论，它应归入 `show` / `path --stat` 的“诚实包装”，而不是 `path` / `status` / `graph` 的“必要视图”。
+- **诚实包装：条件性通过。** 满足以下四条才立项：
+  1. **明显更好**：对目标消费者，首行/`--limit`/内存显著优于 `git log` + 脚本和 `path --all --json`；不是“也能用”。
+  2. **同源**：字段全部由同一份 trailer 解析与配置词表产生，不引入第二套语义或第二份真相。
+  3. **不冒充权威**：文档写明它是流式读视图，不是审计/完整历史契约；不改写、不校验。
+  4. **契约完整**：NDJSON、字段、顺序、`--limit`、jj 不支持、broken pipe、空仓的退出码都写死。
+- **如果包装这条也不接受**：不做 timeline；插件用 `git log` 或 `path --all --json` 自行展平。这是与“核心只保留四件事”最一致的选择。
+
+### 5. 对入口的含义
+
+既然它是包装，就**不能用“必要性”为新命令辩护**；入口应由契约清晰度和 UX 决定：
+
+- **D（`timeline --jsonl [--limit N]`）**：包装命令，名字直接说视图；NDJSON 例外只属于它；不需要 `--all`；`path` 零改动。代价是多一个命令。
+- **A'（`path --timeline --jsonl`）**：不扩命令面时的次优；`--all` 应去掉（timeline 天生全局）；仍然让 `path` 出现第二种形状。
+- **A（`path --all --timeline --jsonl`）**：可接受但啰嗦；`--all` 是恒真 flag。
+- **B（`path --all --jsonl`）**：应排除。`--jsonl` 同时改形状与编码，撞[规则 6](machine-readable-output.md#L199)（schema 不随 flag 变）和[规则 8](machine-readable-output.md#L201)（stdout 一个文档）；`path <id> --jsonl` 也无定义。
+- **C（`path --timeline`，隐含 NDJSON）**：flag 最少，但未来加文本视图会改默认，不如显式 `--jsonl`。
+
+说明：A / A' 也不是零成本——它们同样让 `path` 出现第二种形状，严格说也碰规则 6 的字面；区别是 `--timeline` 明说“换视图”，而 B 让格式 flag 悄悄承担视图变化。D 是唯一不碰既有命令契约的。
+
+**建议**：若接受“诚实包装”，用 **D**；若命令面冻结，用 **A'**；不要 B。若连包装都不接受，则**不要做 timeline**——此时 A' 也会与“核心只保留四件事”的立场自相矛盾。
+
+### 6. 证伪条件与检验
+
+1. **包装可替代性**：写一个 `git log --author-date-order` + trailer 解析的原型。若它以可接受的代码量就能达到首行 / `--limit` / 内存目标，说明 timeline 的增量主要是包装而非能力；此时只有“明显更省事”才立项，否则不做。
+2. **`path --all --json` 可承受**：10k / 100k 动作下若消费方能接受先读完整文档（或分块），“流式”的增量消失，退回包装判断。
+3. **出现新语义**：若要让每行都有 issue 级 `domain`（而非 per-commit）、或加校验/过滤语义，timeline 就不再是纯投影；那要重新按“综合视图”审必要性，而不是套用本结论。
+4. **首行目标不可达**：若流式后端 + `--limit` 仍达不到 250 ms / 500 ms，包装连自己的承诺都不成立。
+5. **NDJSON 契约收不了口**：若“一份文档”规则无法干净地写成“timeline 例外”，契约成本高于收益，不做。
+
+### 7. 下一步
+
+- 先把本结论作为**分类**而不是**否决**：timeline 是包装，不是核心视图。
+- 若接受包装：入口按 D；先补 `test` 原型（`git log --author-date-order` 流式 + trailer 过滤 + `-n` 首行计时），再决定是否 `apply`。
+- `apply` 前必须定的契约：`title` 取 subject 还是 trailer title；`domain` 的 per-commit 语义；NDJSON 与既有“一份文档”规则的关系；broken pipe / 空仓退出码；100k 合成仓的计时口径。
+- 若最终不做：把“`git log` 直读”或“`path --all --json` 展平”写进 issue 的替代方案，不留下一个半成品命令面。
