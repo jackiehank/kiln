@@ -662,3 +662,60 @@ func (r ExecRunner) LogEach(limit int, fn func(vcs.Commit) bool) error {
 
 - 无异议 → `conclude`：把 §0 的“承诺改对”写进契约（首行不保证、顺序按后端、limit 是提示），然后 `apply`。
 - 有异议集中在两处：jj 的顺序要不要靠缓冲换取 author-date；`LogEach` 加 limit 参数值不值得（也可以不改接口，接受 100k 全量渲染）。
+
+## conclude（2026-10-28，第四轮）：jj 支持定稿——原生读取、非增量、拓扑序
+
+### 0. 裁决
+
+| 项 | 决定 | 理由 |
+| --- | --- | --- |
+| jj 支持 | **实现**，原生 `jj log -T 'json(self) ++ "\n"'` | 语义正确（隐藏被改写提交、覆盖所有 head、空仓免费）；不读 git |
+| 不读 git 的原因 | 拒绝 B/C | `--all` 有 keep-ref 幽灵、HEAD 链漏 head、colocate 可关、store 是内部路径 |
+| 接口 | `LogEach(limit int, fn func(Commit) bool) error` | jj 需要 `-n` 下推；limit 只是提示，停止仍由 `fn` 决定 |
+| 首行承诺 | **只对 git**；jj 首行 = jj 扫描+渲染完成 | 实测 200 提交首行 141ms ≈ 全量 152ms |
+| 顺序 | git author-date 倒序；jj 拓扑序（子先于父） | jj 无 `sort()`，排序要缓存全部行；`date` 字段可让消费方自行排 |
+| 空仓 | jj 天然 0 行 exit 0 | 无需 HEAD 探测 |
+| 破管道 / 早停 | 与 git 同一收尾：Kill + 关管道 + `WaitDelay` | 平台差异只该有一处，不该有第二处 |
+| 其余契约 | 不变：只认 `issue:`+`action:`、`title` 兜底、`domain`/`tags` per-commit、退出码 0/1/2 | 同一条命令，字段与语义不按后端分叉 |
+
+### 1. 契约修订（apply 时必须写进文档）
+
+1. **顺序按后端**：git 是 author-date 倒序；jj 是 jj 的拓扑序（“children before parents”，线性历史下即 newest-first）。每行都带 `date`，需要严格序的消费方自行排序。
+2. **首行按后端**：git 在第一批提交到达时就出首行；jj 等它扫描+渲染完才一次到齐。`--limit N` 两边都只输出 N 条动作，但 jj 的下推是 `-n`（省渲染，不省扫描）。
+3. **其余不变**：只留 `issue:` + `action:` 的提交；`title` = trailer → subject 兜底；`domain`/`tags` 只给本条提交；退出码 0（正常/空/limit/破管道）、1（读失败）、2（参数）；Unix 上 141 是平台惯例。
+
+`machine-readable-output` 的 NDJSON 小节加一段“jj 后端”的说明；README 双语把“jj 暂不支持”换成实际行为。
+
+### 2. 代码改动点
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/vcs/vcs.go` | `LogEach` 签名加 `limit int`；文档写明“提示、可非增量、内存 O(1) 由 kiln 保证” |
+| `internal/vcs/git/git.go` | 签名同步（忽略 limit，仍靠 `fn` 早停）；注释说明为什么不需要 limit |
+| `internal/vcs/jj/jj.go` | 实现 `LogEach`；`streamRecords` 纯函数；`streamTemplate = json(self) ++ "\n"` |
+| `internal/cli/cli.go` | 调用传 `limit`；删除“暂不支持 jj”分支与文案 |
+| `internal/i18n/catalog.go` | 删除已无引用的“action log 暂不支持 jj…”条目 |
+| `internal/cli/cli_test.go` | `streamRunner` 签名 + 断言后端收到的 limit；`--limit` 缺省为 0 |
+| `internal/vcs/git/git_test.go` | 调用加 `0` |
+| `internal/vcs/jj/jj_test.go` | `streamRecords` 用例 |
+| `README.md` / `README.en.md` / `docs/machine-readable-output.md` | 顺序与首行的按后端说明 |
+
+### 3. 验收
+
+- `streamRecords`：正常两行、`description` 尾换行被 trim、正文含换行仍是一行、坏 JSON 报错、空行跳过、`fn` 返回 false 后不再读；
+- 时间：`2026-10-28T22:18:36+08:00` 解析后保留 offset；
+- CLI：`--limit 3` 时后端收到的 limit 是 3，缺省是 0；
+- 真 jj 冒烟（手工，不进单测）：2 条动作 → `action log` 2 行；`--jsonl` 每行可解析；改写后旧动作不出现；空仓 exit 0；`--limit 1` 一行；
+- git 回归：`go test ./...`、真仓行数 = 动作数、`--limit 3` 仍在 ~120ms 量级、破管道静默 0；
+- 文档不再出现“jj 暂不支持”。
+
+### 4. 非目标与遗留
+
+- 不做缓冲排序（jj 的 author-date 需求出现时再加，并去掉 `-n` 下推）；
+- 不做 100k jj 基准（外推 16s 仅作风险记录；apply 时若顺手可测一次）；
+- 不动 `path` / `list` / `show`；
+- 不处理 `jj` 快照工作副本可能带来的额外延迟（`--ignore-working-copy` 不在本 issue 范围）。
+
+### 5. 下一步
+
+`apply`：`vcs` 签名 → git/jj 实现 → cli 调用 → 测试 → 文档（machine-readable-output、README 双语、i18n 清理）。
