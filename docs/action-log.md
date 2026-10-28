@@ -148,3 +148,74 @@ exit=1
 8. `action log --json` / `action --json log` 怎么处理：明确拒绝并指向 `--jsonl`，还是当未知 flag 警告？
 9. NDJSON 在 `machine-readable-output` 里的例外怎么写才诚实——理由不是内存（`pathBatchWriter` 已经证明文档可流式），而是逐条可消费、可截断、`jq` 可直接吃。
 10. 验收分档与 commit-graph 前提怎么写；jj 的“暂不支持”用哪条文案与退出码。
+
+## collect（2026-10-28，第二轮）：别人怎么“逐条读 git”，怎么“逐条写给下游”
+
+> 第一轮收的是本仓现状；这一轮收同类工具的既有做法，作为 hypothesize 的参考系。仍是事实，不是选择。
+> 证据分三类：**实测**（本机跑出来的，命令与结果都写在正文）、**文档**（`rg --help` / `go help testflag` / git 官方手册）、**二进制字符串**（从已安装的可执行文件里读出的常量）。
+
+### 1. 样本一览
+
+| 工具 | 怎么读 git | 怎么写给下游 | 证据 |
+| --- | --- | --- | --- |
+| lazygit 0.65.0（本机安装） | `git log --pretty=format:+%H%x00%at%x00%aN%x00%ae%x00%P%x00%m%x00%D%x00%s`：**一条提交一行**，字段用 NUL 隔开，行首 `+` 当记录标记；列表的 format 只取 `%s`（正文另取） | TUI，不是机器格式 | 二进制里的 format 常量 |
+| git 自己 | `-z` / `%x00` 是官方机器分隔符；`cat-file --batch` 是长度前缀的请求/响应；`rev-list --stdin` 从 stdin 收版本号 | `git log -z`：每条提交一个 NUL 终止 | 实测 |
+| ripgrep（本机） | 不读 git | `--json` 是 **JSON Lines**：一条一个对象，`type`/`data` 信封，末尾 `summary` 记录 | `rg --help` 原文 + 本机输出 |
+| `go test` | 不读 git | `-json`：每个事件一行（`Time`/`Action`/`Package`/`Test`/`Output`），最后一条是包级 `pass`/`fail` | `go help testflag` + 本机输出 |
+| jj 0.45.1（本机） | `jj log -T 'json(self)'`：**一条提交一行紧凑 JSON** | 同一行即记录 | 实测 |
+| tig（本机） | 装上但跑不起来（`couldn't create signal pipe, Win32 error 5`） | — | 实测失败，不作证据 |
+
+结论先说：**样本里没有“先把整段 git log 读进内存”还被称为先进做法的**；差别只在“用哪种记录框架”和“是否逐条 flush”。lazygit 能一行一条，是因为它只取 subject；kiln 要 `%B`（正文），正文里有换行，行框架不够用。
+
+### 2. 读 git：记录框架比接口更要紧
+
+1. **`-z` 的实测语义**：`git log --format="%H%x00%aI%x00%s"` 不加 `-z`，2 条提交得到 4 个 NUL、末字节是 `0a`（换行）；加 `-z` 得到 6 个 NUL、末字节是 `00`。即 **`-z` 给每条记录补一个 NUL 终止符，最后一条也有**。所以解析是“`ReadBytes(0)` 循环”，没有“最后一条没有终止符”的特例。
+2. **NUL 比 `\x1e` / `\x1f` 硬**：现有 [logFormat](../internal/vcs/git/git.go#L27) 用 RS/US，理由是“提交信息里不会出现”；但 git 不禁止正文含这两个字节。NUL 是 git 官方 `-z` / `%x00` 的机器分隔符，也是 `cat-file --batch` 之外的通用约定。换成 NUL 不影响 `Log()`，只需要给流式路径一个自己的格式串。
+3. **两种官方“逐条”接口，选记录框架而不是自造协议**：
+   - `git log -z --format=…`：单向、按提交顺序、天然支持早停（实测 `git log --format=%H | 读一行` 首行 52ms 就返回）。
+   - `git cat-file --batch`：**请求/响应**——stdin 写对象名，stdout 出 `<sha> <type> <size>\n` 再跟原文（实测 `HEAD` / `HEAD^{tree}` / `nope` 三条请求都得到响应）。适合“先拿 id 再取详情”，一次进程吃很多请求。
+   - `git rev-list --stdin`：版本号从 stdin 进（实测可用），适合“候选集由调用方决定”。
+   kiln 的场景是“按提交顺序单遍过滤”，`git log -z` 是三者里最薄的。
+4. **分页不会误伤**：子进程 stdout 是管道时 git 不分页——把 `GIT_PAGER` 设成不存在的命令，piped `git log` 仍 exit 0、正常输出（实测）。只有 `--paginate` 或 tty 才触发。现有 [runIn](../internal/vcs/git/git.go#L447-L464) 不设 `GIT_PAGER` 也没问题，但值得写进注释，免得以后有人加 `--paginate`。
+5. **首行延迟**：本仓 350 提交，`git log --format=%H` 读到首行 52ms（含 PowerShell 开销）；100k 的 64ms（有 commit-graph）/ 359ms（无）见 [timeline-stream.md](timeline-stream.md)。说明 git 是逐条 flush 的，逐条读能立刻拿到。
+6. **`bufio.Scanner` 的 64KB 上限**：默认 token 上限 64KB，提交正文可以更大（一条几千字的 collect 就接近）。流式解析要用 `bufio.Reader` + `ReadBytes(0)`（任意长度），不要用 `Scanner`。
+7. **早停必须杀子进程**：不读就走，git 会阻塞在写满的管道上；`Kill` 之后 `Wait` 会返回“被信号杀死”的错误，要吞掉，不能当失败上报。
+
+### 3. 写下游：四种形态，代价不同
+
+| 形态 | 代表 | 记录边界 | 消费者怎么判断“被截断” |
+| --- | --- | --- | --- |
+| NDJSON / JSON Lines | `rg --json`、`go test -json`、`jj -T json(self)` | 换行（JSON 字符串里的换行会被转义，所以一条记录永远一行） | rg 有末尾 `summary`；go test 有包级 `pass`/`fail`；jj 没有 |
+| NUL 分隔 | `git log -z`、`find -print0` | NUL | 只能靠退出码 |
+| 单文档 + 流式生成 | kiln `pathBatchWriter` | 文档结构（`]}`） | JSON 解析失败即截断 |
+| 长度前缀 | `git cat-file --batch` | 头部声明的字节数 | 读不满即截断 |
+
+### 4. 写下游：四条被反复验证的细节
+
+1. **每条 flush**：rg / `go test -json` / jj 都是“事件发生就出现在 stdout”；kiln 的 [pathBatchWriter](../internal/cli/cli.go#L1747-L1841) 只在 `finish()` flush——对完整文档正确，对流式首行是灾难（64KB 缓冲要先填满）。逐条流式 = 每条 `Flush`（或 1KB 级缓冲）。
+2. **stdout 只放记录，提示/错误走 stderr**：rg、git、kiln 都是这个分工。唯一的“反例”是 `go test -json` 把测试输出也包进 JSON 事件——那是为了不让消费者丢上下文，代价是记录变胖。
+3. **早停时“静默成功”是常见选择，但不是唯一选择**：实测“消费者读一行就关管道”时，**git 与 rg 都退出 0、都静默无 stderr**（rg 用有命中的输入复测，避免把“无命中 = 1”误读成破管道）；kiln 的 `path --all --json` 则是打印 `输出 JSON 失败: … The pipe has been ended.` 并退出 1。也就是说“截断算不算失败”是产品决定：主流工具选 0，kiln 现在选 1。
+4. **终止记录是有意的**：rg 的 `summary`、go test 的包级 `pass`/`fail` 让消费者能分辨“正常读完”和“被截断”。kiln 的字段集（`issue/action/commit/date/title/domain/tags`）没有终止记录——**截断只能靠退出码与行数判断**；要不要加是一条待裁决项（加就超出 ask 已定的字段）。
+5. **信封 vs 扁平**：rg 用 `{"type","data"}`，因为它有五种记录类型；`go test -json` 和 jj 是扁平对象，因为只有一种记录。`action log` 只有一种记录 → 扁平即可，不必学 rg 的信封。
+6. **非 UTF-8 是真实风险**：rg 用 `text` / `bytes` 两态处理“路径/内容不保证是 UTF-8”；Go 的 `encoding/json` 遇到非法 UTF-8 不会报错，而是**静默替换成 U+FFFD**。git 不校验提交信息编码，`issue`/`title` 里理论上可以有坏字节——要么 sanitize（`strings.ToValidUTF8`），要么接受“改了数据但仍是合法 JSON”。
+
+### 5. 和 kiln 现状的差距（只列缺口）
+
+| 需要 | 现状 | 参考 |
+| --- | --- | --- |
+| 逐条读 git | 只有 `Log()` 全量 | `git log -z` + `ReadBytes(0)` |
+| 记录框架抗正文 | `\x1e`/`\x1f`（非保证） | NUL（git 官方分隔符） |
+| 早停 | 无 | `Kill` + `Wait` 吞错 |
+| 每条 flush | 只有 `finish()` flush | rg / go test / jj |
+| broken pipe 静默 | Windows 打印错误、exit 1 | git 与 rg 均 exit 0、静默 |
+| 空仓 exit 0 | `git log` 128 → 现在 exit 1 | 需自己映射空流 |
+| NDJSON 先例 | 无 | rg / go test / jj |
+
+### 6. 给 hypothesize 的选项（不是结论）
+
+1. 接口：`LogEach(fn func(Commit) bool) error`，`false` 表示停；git 用 `-z` 流式实现，jj 不实现并显式报错。要不要另外给 `vcs` 一个“该后端不支持流式”的能力查询，还是直接类型断言失败即报错？
+2. 分帧：沿用 `\x1e/\x1f`，还是给流式路径单独一个 `-z` + `%x00` 的格式串？后者更硬，代价是两套解析。
+3. flush 粒度：每条 flush（最直白），还是 1–4KB 缓冲（少 syscall，首行仍可接受）？
+4. 退出码：早停/破管道统一 0；`--limit` 用完 0；jj 不支持用 1 还是 2；空仓 0。
+5. 非 UTF-8：sanitize 还是像 rg 那样两态（后者超出字段集，且改变消费方形状）。
+6. 终止记录：不加（守 ask 的字段集），还是加一条 `type:"summary"`（就与“一行一条动作”的承诺冲突，需要重新定义）。
