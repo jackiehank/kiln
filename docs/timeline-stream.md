@@ -401,3 +401,86 @@ test 的实测（100k）：
 2. 验收是否按 commit-graph 分档（≤250ms / ≤400ms）？
 3. NDJSON 如何写进既有“一份文档”规则；`--limit`/jj/broken pipe 的最终语义；
 4. 是否现在做，还是等 webui/tui 真正开工再做（YAGNI 的裁决）。
+
+## hypothesize（修订，2026-10-28）：缺的是 action 索引，不是“git log 皮肤”——timeline 按综合视图成立
+
+> 结论先行：上一节（`5c84242`）说“timeline 过不了严格必要性线”，那只适用于**“git log 的格式化包装”**。把 timeline 放回模型的主语——**全局 action 索引**——它通过 `cli-necessity` 的“综合视图”这一关。test 证明的是**交付可行**，不是“视图已经存在”；多客户端（`d8447a2`）是第二条理由，不是必要性的第一来源。流式 / NDJSON / `--limit` 仍是交付层，按 test 的分档验收。
+
+### 1. 触发点：action 是模型原子，但命令面只有 issue 索引
+
+| 问题 | 现有命令 | 状态 |
+| --- | --- | --- |
+| 有哪些 issue？ | `list` | 有 |
+| 一个 issue 的完整路径？ | `path <issue>` | 有 |
+| 一个动作的详情？ | `show <issue> n` | 有 |
+| 全部 issue 按 domain / 关系？ | `status` / `graph` | 有 |
+| **全部 action 按全局时间？** | **没有** | **缺** |
+
+`list` 是 issue 的索引，`path` 是 issue 的详情，`show` 是动作的详情——唯独没有**动作的索引**。如果 action 是模型的最小单位，这个缺口不是“少一个排序”，而是少了一个与 `list` 对称的视图。
+
+准确说：所有 kiln 动作都是一个提交，但不是所有提交都是动作（还有 chore / merge / 普通提交）。timeline 的价值之一就是把非动作提交过滤掉，只留模型里的 action。
+
+### 2. 三个相邻结论各自的边界
+
+| 结论 | 它证明了什么 | 它没证明什么 |
+| --- | --- | --- |
+| `5c84242`：“严格必要性不过” | 若 timeline 只是 `git log` 的格式化包装，确实可被 git + 约定替代 | 不能推出“全局 action 视图不必要”；它用“数据已在 `path --all`”否定了视图，标准用错了 |
+| `58f13b3` test：“git log 原型可行，无需新命令” | 单消费者可以在约 60 行内实现交付；首行/limit 可行 | 不证明视图已经存在；也不证明每个消费者都该自己实现 |
+| `d8447a2`：“多客户端使共享契约必要” | N 个前端会重复识别/归一化/词表/jj/契约，D 更划算 | 必要性不只来自客户端数量；单客户端时视图缺口仍在 |
+
+`5c84242` 的推理错在把**数据可得性**当成**视图必要性**。这个标准如果成立，会连坐：
+
+- `status` 可以从 `path --all` 按 `domain` 分组算出来；
+- `graph` 可以从关系声明自己折；
+- `path` 可以从 `git log` 加 trailer 解析重建。
+
+如果“消费方能自己算”就判定不必要，那 `status` / `graph` / `path` 都不必要。它们之所以必要，是因为**组织原则本身是产品**：按 domain 看、按关系看、按 issue 路径看，各自回答不同问题。
+
+timeline 的组织原则是“**按时间看模型的原子**”，这是现有视图都没有的：
+
+- `path`：单 issue 内的时间序，没有跨 issue 的全局序；
+- `list`：有 issue，但只有末条动作，中间动作不出现；
+- `status` / `graph`：根本没有时间轴；
+- `git log`：有全局序，但单位是 commit，不是 action，也没有 issue/action/domain/tags 语义。
+
+### 3. 裁决：view 必要，delivery 是包装
+
+| 主张 | 判定 |
+| --- | --- |
+| timeline 作为“全局 action 索引 / 模型日志” | **通过** `cli-necessity` 的“综合”关 |
+| timeline 作为“git log 的格式化包装” | 不通过；那只是 UX |
+| 流式 / NDJSON / `--limit` | 交付层；不构成必要性，按 test 分档验收 |
+| timeline 作为模型 / 校验 / 规范化写 | 不新增；本就不靠这三项 |
+
+关键区分：**view 是必要的，delivery 是包装。** 即使完全不流式，一个“平铺 action 列表”的 JSON 视图仍然是缺失的；流式只是让这个视图满足插件首屏。反过来说，只做流式而不输出模型字段，那才是真正的 `git log` 包装。
+
+### 4. 入口含义
+
+- **独立 `timeline` 命令**：它是 **action 级的 `list`**，补的是模型视图的对称性，不是给 `path` 加排序开关。入口不带 `--all`（timeline 天生全局），`--jsonl` / `--limit` 属交付层。
+- **`path --timeline`**：仍不合适。`path` 是 issue 级视图，把全局 action 流塞进去，等于让“issue 路径”兼职“模型日志”。
+- **B（`path --all --jsonl`）**：仍排除。`--jsonl` 同时改形状与编码，语义最隐蔽。
+- **C（`path --timeline` 隐含 NDJSON）**：不优先；视图和编码分开更清楚。
+- 名字：`timeline` 可以；若叫 `log`，必须一开始就定义成“模型日志”，否则会继续和 `git log` / 已否的 `log --rewrites` 混。
+
+### 5. 和 test / 多客户端的关系
+
+- **test 的交付结论接受**：有 commit-graph 首行 64 ms、无 graph 359 ms；`--limit 50` 70/366 ms；不要把“≤250 ms”写成无条件验收。这些数字说明**交付可行**，正好把“必要但不值得做”的问题变成“视图已经缺、交付也不难”的问题。
+- **多客户端是加强项**：它把“一份实现 vs N 份实现”的成本摆出来，进一步支持 D；但即使只有 dsh-kiln，action 索引缺口仍在。不要把必要性全押在 webui/tui 一定会做上。
+- **YAGNI 仍然有效**：视图缺口不等于“现在必须做命令”。若 webui/tui 还没开工，可以只记录结论、等触发条件；但那是**时机**判断，不是“视图不必要”。
+
+### 6. 证伪条件
+
+1. **不是视图，只是换排法**：如果“全局时间序的 action”不是用户/插件真正要问的问题，`path --all` 的 issue 分组已够用，那它只是投影，退回包装判断。
+2. **git log 足够**：如果目标消费者用 `git log --author-date-order` + trailer 过滤就能在可接受代码量内得到同样答案，且不需要稳定字段/契约，timeline 的模型价值不成立。
+3. **与 `list` 不对称是伪需求**：如果真实需求是“最近 issue”，正确落点是 `list --recent`（按末条动作日期），不是 action 流；这种情况下 timeline 解决的是伪问题。
+4. **输出不是模型**：如果实现只透传 `commit/date/message`，没有 `issue/action/domain/tags` 与动作过滤，那它确实是 git log 包装，应否决。
+5. **交付承诺不成立**：若流式首行 / `--limit` / 内存达不到 test 的分档目标，视图可以保留，但“对插件明显更好”的交付理由不成立，需重新评估是否值得做命令。
+
+### 7. 留给上游 conclude 的问题（在 `d8447a2` 四问上补两条）
+
+1. 是否接受分类修正：**timeline 按“全局 action 索引”通过综合视图关；只有“git log 包装”版本不通过**？
+2. 是否接受 **D（`timeline --jsonl [--limit N]`）** 作为入口，且不带 `--all`？
+3. 是否接受 test 的 commit-graph 分档验收（有 graph ≤250ms / 无 graph ≤400ms），而不是无条件 250ms？
+4. NDJSON 与“一份文档”规则、`--limit`/jj/broken pipe、字段（`title` 取 subject；`domain` 的 per-commit 语义）如何定？
+5. 现在做，还是等 webui/tui 真正开工再做（YAGNI 的时机裁决）？
+6. 若不做命令：是接受“各客户端直读 git + 各自的 trailer 解析”，还是接受“消费方自己展平 `path --all --json`”？这两条都要明确写，不能留空。
