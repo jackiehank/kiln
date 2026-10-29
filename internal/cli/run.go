@@ -198,3 +198,7 @@ func stripNoCache(args []string) ([]string, bool) {
 	}
 	return out, found
 }
+
+// retiredCommands maps a name kiln no longer answers to its current spelling, so
+// a hard cut still tells the caller where the command went.
+var retiredCommands = map[string]string{"workspace": "worktree"}
