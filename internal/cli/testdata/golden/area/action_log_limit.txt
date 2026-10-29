@@ -1,8 +1,8 @@
 argv: kiln action log --limit 2
 exit: 0
 stdout[181]:
-2026-10-05 17:00  late-idea                 collect       c004861  没有起点的问题
-2026-10-04 18:00  doc-search                collect       48efd3f  找到三条可选路径
+2026-10-05 09:00  late-idea                 collect       c004861  没有起点的问题
+2026-10-04 10:00  doc-search                collect       48efd3f  找到三条可选路径
 
 stderr[0]:
 

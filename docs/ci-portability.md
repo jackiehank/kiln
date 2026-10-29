@@ -41,3 +41,19 @@
 - 本地用「无全局 git 身份 + UTC」复跑全绿（`go test -count=1 ./...`）；
 - golden 时间列为 UTC，`config_path` 不再有平台分隔符差异；
 - `ci.yml` 在 push / PR 上跑测试，`release.yml` 不变。
+
+## apply（2026-10-30）：四类问题修掉，补 master CI
+
+- `internal/cli/cli_test.go`：`TestMain` 在设 `TZ=UTC` 之后直接 `time.Local = time.UTC`——testing
+  框架启动时已读过时钟，环境变量改不动已解析的 Local。
+- `internal/cli/golden_test.go`：`normalizeGolden` 把 `<ROOT>\` 统一成 `<ROOT>/`（只处理 `<ROOT>`
+  后的那个分隔符，JSON 正文里的 `\n` 不受影响）。
+- `internal/cli/enum_test.go`：`git commit --amend` 带上 `GIT_AUTHOR_*` / `GIT_COMMITTER_*`。
+- `internal/cli/cache_test.go`：worktree 的 `.git` 是文件，`stat` 任何错误都算「没写」
+  （Linux ENOTDIR / Windows ENOENT）。
+- 重录 golden：`basic/area` 的 `action_log`、`action_log_limit`、`config_path` 六个夹具，
+  时间列改为 UTC；`config_path` 记为 `<ROOT>/.kilnconfig.jsonc`。
+- 新增 `.github/workflows/ci.yml`：master push / PR 跑 `go test ./...`；`release.yml` 不变。
+- 验证：本地 `go test -count=1 ./...` 全绿；再用「空 `GIT_CONFIG_GLOBAL` +
+  `GIT_CONFIG_NOSYSTEM=1`」模拟没有全局身份的 runner，仍全绿（`internal/cli` 24.7s）。
+- v0.4.0 的 tag 会移动到包含本修复的提交（原 run 失败，release 从未创建）。

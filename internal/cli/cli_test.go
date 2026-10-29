@@ -27,8 +27,11 @@ import (
 func TestMain(m *testing.M) {
 	os.Setenv("KILN_LANG", "zh")
 	// timestamps are rendered in time.Local (action log and every date column), so
-	// pin the zone: a golden recorded on a UTC+8 machine must match on CI.
+	// pin the zone: a golden recorded on a UTC+8 machine must match on CI. Setting
+	// TZ alone is not enough — the testing framework has already read the clock, so
+	// time.Local is resolved; assign the zone itself.
 	os.Setenv("TZ", "UTC")
+	time.Local = time.UTC
 	os.Exit(m.Run())
 }
 

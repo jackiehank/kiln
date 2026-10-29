@@ -173,7 +173,12 @@ func TestSnapshotFollowsHead(t *testing.T) {
 	check("warm")
 	commitAction(t, dir, "s1", "collect", "新提交", "2026-10-09T10:00:00+08:00")
 	check("after a new commit")
-	cacheGit(t, dir, nil, "", "commit", "--amend", "--allow-empty", "-q", "-m", "改写\n\nissue: s1\naction: test\n")
+	// A runner without a global user.name/user.email must still be able to amend,
+	// so the identity travels with the command.
+	cacheGit(t, dir, []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+	}, "", "commit", "--amend", "--allow-empty", "-q", "-m", "改写\n\nissue: s1\naction: test\n")
 	check("after amend")
 	cacheGit(t, dir, nil, "", "reset", "-q", "--hard", "HEAD~1")
 	check("after reset")

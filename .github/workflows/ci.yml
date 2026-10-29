@@ -1,0 +1,25 @@
+name: ci
+
+# 每次 master 推送 / PR 都跑测试：release workflow 只在 tag 上跑，日常改动曾经
+# 带着只在 Windows 通过的测试一路走到发版（run 40940538450）。构建与发布仍只在
+# tag 上由 release.yml 负责。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...

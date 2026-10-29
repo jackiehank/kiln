@@ -168,6 +168,8 @@ func (g goldenRun) render(root string, args []string) string {
 
 // normalizeGolden removes the one thing that cannot be reproduced across runs:
 // the temporary directory the fixture lives in, which several commands print.
+// A separator directly after <ROOT> is rendered as `/`, so a golden recorded on
+// Windows (where `config path` prints `\`) also matches on a Linux runner.
 func normalizeGolden(root, s string) string {
 	slash := filepath.ToSlash(root)
 	escaped := strings.ReplaceAll(root, `\`, `\\`)
@@ -176,7 +178,7 @@ func normalizeGolden(root, s string) string {
 			s = strings.ReplaceAll(s, form, "<ROOT>")
 		}
 	}
-	return s
+	return strings.ReplaceAll(s, "<ROOT>"+`\`, "<ROOT>/")
 }
 
 // firstDiff reports the first differing line, with one line of context each side.

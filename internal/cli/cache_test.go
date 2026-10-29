@@ -552,9 +552,10 @@ func TestCacheIsSharedAcrossWorktrees(t *testing.T) {
 		t.Fatal("worktree action log differs from a full scan")
 	}
 	// One cache for the whole clone: nothing is written under the worktree's own
-	// git dir (a file in a linked worktree, so a directory there would be wrong).
-	if _, err := os.Stat(filepath.Join(wt, ".git", "kiln")); !os.IsNotExist(err) {
-		t.Fatalf("a linked worktree must share the main cache: %v", err)
+	// git dir. That `.git` is a file, so os.Stat on a path below it fails with
+	// ENOTDIR on Linux and ENOENT on Windows; any error means nothing was created.
+	if _, err := os.Stat(filepath.Join(wt, ".git", "kiln")); err == nil {
+		t.Fatal("a linked worktree must share the main cache, not write its own")
 	}
 	_ = want
 }
