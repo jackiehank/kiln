@@ -845,3 +845,43 @@ export function tailActions(repoDir, limit, onAction, onDone) {
 - 空结果时 stdout 为空、exit 0、提示只在 stderr；
 - `--limit 0` exit 2；
 - jj 仓同样可用（顺序为拓扑序，首行等 jj 扫完）。
+
+## apply（2026-10-29）：`--jsonl` 补齐 T1 字段（关系等），文本视图不动
+
+按 `action-log-relations` 的 hypothesize（`00f4ec5`）落了第一批：**只加 T1**，即"提交里已经写着、不需要任何计算"的字段。文本模式一行没改。
+
+### 新增字段（追加在 `tags` 之后，已有键位置不动）
+
+| key | 类型 | 来源 |
+| --- | --- | --- |
+| `refs` | `[]string` | `refs:` trailer，按逗号拆 |
+| `target` | `[]string` | `target:` trailer，按逗号拆（与 `refs`/`tags` 同规则） |
+| `scope` | `string` | `scope:` trailer，原样 |
+| `relations` | `[{name,target}]` | 关系 trailer 的**声明**，规范名 |
+| `unrelate` | `[]string` | `unrelate:` trailer 的靶 |
+
+### 三个实现细节
+
+1. **声明，不是折叠**。`has-part: X` 输出 `{name:"has-part", target:"X"}`，不会翻成 `from=X, to=me, name=part-of`。翻转、取强、合并都是 `graph` / `path` 的事；在流里做等于把派生逻辑塞进"这条动作说了什么"。
+2. **顺序确定**：`relations` 按词表声明序输出（`blocks` 在 `caused-by` 前），同一 name 下按书写序，重复的 `(name,target)` 去重。`refs` / `target` / `unrelate` 同样去重保序。同一份仓永远同样的字节。
+3. **词表外的键不出现**：`trailer.Parse` 只认词表与别名，未知名归 `check` 的 `unknown-trailer`。别名会解析成规范名（`derived-from` → `caused-by`）。
+
+### 改动面
+
+| 文件 | 改动 |
+| --- | --- |
+| `internal/trailer/trailer.go` | `splitList` 导出为 `SplitList`（`target` 是 `Fields` 里唯一保持标量的列表类 trailer，读侧复用同一条拆分规则） |
+| `internal/cli/cli.go` | `actionLogDoc` 加 5 个键；`actionLogRelations` 负责词表序 + 去重；`emit` 里填字段 |
+| `internal/cli/cli_test.go` | `TestActionLogJSONLCarriesEveryStoredTrailer`：全字段、别名解析、去重、词表序、未知键不泄漏、空记录不出现新键 |
+| `docs/machine-readable-output.md` | 字段表与 `relations` 语义 |
+
+### 验收
+
+- `gofmt -l` 无输出；`go vet` / `go test ./...` 全过；
+- `action log --jsonl` 只多键，已有键的值不变；文本模式字节不变；
+- 本仓冒烟：99 行关系 / 147 条声明 / 87 行带关系；把全部声明按 `FoldEdges` 规则重算，覆盖 `graph --json` 的 120 条边（每条边都能在某条动作的声明里找到对侧或本侧的原文）；
+- 空记录（只声明了 `issue`/`action`/`title`）不出现 `refs`/`target`/`scope`/`relations`/`unrelate` 任何一个键。
+
+### 还没做（`action-log-relations` 的 apply B）
+
+`files`（T2，改动文件 + 增删行数）：需要 `-z --numstat` 的分帧状态机（带 tab 的算 numstat 行、40 位 hex 的算下一条 header，rename 另测），且 v1 只 git、jj 明确拒绝。

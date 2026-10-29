@@ -1382,13 +1382,18 @@ func (e *env) actionLog(f flags) int {
 		if jsonl {
 			scratch.Reset()
 			if err := enc.Encode(actionLogDoc{
-				Issue:  fields.Issue,
-				Action: fields.Action,
-				Commit: c.ID,
-				Date:   c.Date.Format(time.RFC3339),
-				Title:  label,
-				Domain: fields.Domain,
-				Tags:   fields.Tags,
+				Issue:     fields.Issue,
+				Action:    fields.Action,
+				Commit:    c.ID,
+				Date:      c.Date.Format(time.RFC3339),
+				Title:     label,
+				Domain:    fields.Domain,
+				Tags:      fields.Tags,
+				Refs:      dedupeStrings(fields.Refs),
+				Target:    dedupeStrings(trailer.SplitList(fields.Target)),
+				Scope:     fields.Scope,
+				Relations: actionLogRelations(e.rel(), fields.Relations),
+				Unrelate:  dedupeStrings(fields.Unrelate),
 			}); err != nil {
 				writeErr = err
 				return true
@@ -1430,6 +1435,44 @@ func (e *env) actionLog(f flags) int {
 		fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
 	}
 	return 0
+}
+
+// actionLogRelations lays an action's declarations out in a fixed order: the
+// vocabulary's own order first (so the same repository always prints the same
+// bytes), then each name's targets in the order the action wrote them, with
+// exact repeats dropped. Parse has already canonicalized aliases, and names
+// outside the vocabulary never reach Fields, but the sorted fallback keeps the
+// output total (and therefore deterministic) if that ever changes.
+func actionLogRelations(rel *model.RelationSet, decls []model.Rel) []actionLogRelation {
+	if len(decls) == 0 {
+		return nil
+	}
+	byName := make(map[string][]string, len(decls))
+	for _, d := range decls {
+		byName[d.Name] = append(byName[d.Name], d.Target)
+	}
+	for name, targets := range byName {
+		byName[name] = dedupeStrings(targets)
+	}
+	out := make([]actionLogRelation, 0, len(decls))
+	emit := func(name string) {
+		for _, t := range byName[name] {
+			out = append(out, actionLogRelation{Name: name, Target: t})
+		}
+		delete(byName, name)
+	}
+	for _, name := range rel.Names() {
+		emit(name)
+	}
+	extra := make([]string, 0, len(byName))
+	for name := range byName {
+		extra = append(extra, name)
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		emit(name)
+	}
+	return out
 }
 
 // terminalNames lists the terminal actions in declaration order. ActionSet has
@@ -3213,17 +3256,36 @@ type actionSetDoc struct {
 
 // actionLogDoc is one NDJSON record of `kiln action log --jsonl`. There is no
 // envelope because every line is the same kind of record; the four identity keys
-// are always written, and the three descriptive ones are omitted when absent —
-// an absent key means "none", never an empty string. date keeps the commit's own
+// are always written, and the descriptive ones are omitted when absent — an
+// absent key means "none", never an empty string. date keeps the commit's own
 // offset so a consumer never has to guess the timezone.
+//
+// Relations are the action's own declarations, not the folded graph: `has-part:
+// X` stays {name: has-part, target: X} instead of being flipped into an edge.
+// Folding is `graph` / `path`'s job, and doing it here would need the vocabulary
+// at emit time and would silently drop the "this action said so" half. Names are
+// canonical (aliases resolved at parse time) and unknown keys never reach this
+// field — they are `check`'s unknown-trailer finding.
 type actionLogDoc struct {
-	Issue  string   `json:"issue"`
-	Action string   `json:"action"`
-	Commit string   `json:"commit"`
-	Date   string   `json:"date"`
-	Title  string   `json:"title,omitempty"`
-	Domain string   `json:"domain,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
+	Issue     string              `json:"issue"`
+	Action    string              `json:"action"`
+	Commit    string              `json:"commit"`
+	Date      string              `json:"date"`
+	Title     string              `json:"title,omitempty"`
+	Domain    string              `json:"domain,omitempty"`
+	Tags      []string            `json:"tags,omitempty"`
+	Refs      []string            `json:"refs,omitempty"`
+	Target    []string            `json:"target,omitempty"`
+	Scope     string              `json:"scope,omitempty"`
+	Relations []actionLogRelation `json:"relations,omitempty"`
+	Unrelate  []string            `json:"unrelate,omitempty"`
+}
+
+// actionLogRelation is one declared relation: the canonical name and its target
+// issue, exactly as this action wrote them.
+type actionLogRelation struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
 }
 
 // checkDoc is the `kiln check --json` document. passed mirrors the exit code —

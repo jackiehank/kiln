@@ -407,7 +407,9 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 
 - 这是本文件“stdout 只放一份文档”规则的**显式例外**。理由不是内存（`path --all --json` 已经证明文档可以流式生成），而是交付形态：逐条可消费、可截断、`jq -c .` / `awk` 直接吃；空流（0 行）是合法结果；
 - `--json` 与 `--jsonl` 的区别就是名字本身：`--json` 给一份文档，`--jsonl` 给一条一条。`action log --json` 被明确拒绝并指向 `--jsonl`，不会静默降级；
-- 字段固定为 `issue / action / commit / date / title / domain / tags`，顺序固定；`issue` `action` `commit` `date` 恒显，其余为空时**省略键**（缺省即没有）；
+- 字段固定为 `issue / action / commit / date / title / domain / tags / refs / target / scope / relations / unrelate`，顺序固定（新键追加在末尾，已有键位置不动）；`issue` `action` `commit` `date` 恒显，其余为空时**省略键**（缺省即没有）；
+- `relations` 是**这条动作声明的**关系，不是折叠后的边：`has-part: X` 原样是 `{name: has-part, target: X}`，不会翻成 `from=X, to=me, name=part-of`。要当前关系图用 `graph --json` / `path --json`。简写别名在解析时已解析成规范名（`derived-from` → `caused-by`）；**词表外的键不会出现在这里**，它们是 `check` 的 `unknown-trailer`；
+- `relations` 的顺序固定在词表序（同一 name 下按书写序），重复的 `(name, target)` 只留一条；`unrelate` 是独立的字符串数组——它撤销的是"关于某个 issue 的全部声明"，不是一条关系，所以不参与 `name`；`target` 与 `refs` / `tags` 同规则按逗号拆成数组；
 - `commit` 是全长 hash；`date` 用 `time.RFC3339` 并保留提交自己的 offset，与 `path --json` / `show --json` 一致；
 - `title` 取 `title:` trailer，缺省时用提交首行——与 `list --json` 的 `title` 同一条兜底规则；`path --json` 的 `actions[].title` 仍是严格 trailer；
 - `domain` / `tags` 是**本条提交自己的声明**，不是 issue 级：历史只从新到旧读一遍，读第一行时还看不到更老的声明。要当前分类请用 `list --json` / `status --json`；

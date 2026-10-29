@@ -112,7 +112,7 @@ func Parse(message string, rel *model.RelationSet) (Fields, bool) {
 		}
 		if !scalarKeys[key] {
 			if n, ok := rel.Resolve(key); ok {
-				for _, t := range splitList(val) {
+				for _, t := range SplitList(val) {
 					f.Relations = append(f.Relations, model.Rel{Name: n.Name, Target: t})
 				}
 			}
@@ -132,19 +132,23 @@ func Parse(message string, rel *model.RelationSet) (Fields, bool) {
 		case "domain":
 			f.Domain = val
 		case "refs":
-			f.Refs = append(f.Refs, splitList(val)...)
+			f.Refs = append(f.Refs, SplitList(val)...)
 		case "tags":
-			f.Tags = append(f.Tags, splitList(val)...)
+			f.Tags = append(f.Tags, SplitList(val)...)
 		case "unrelate":
-			f.Unrelate = append(f.Unrelate, splitList(val)...)
+			f.Unrelate = append(f.Unrelate, SplitList(val)...)
 		}
 	}
 	f.Action = strings.ToLower(f.Action)
 	return f, f.Issue != "" && f.Action != ""
 }
 
-// splitList accepts `[a, b]` or `a, b` and returns the trimmed items.
-func splitList(v string) []string {
+// SplitList accepts `[a, b]` or `a, b` and returns the trimmed items. It is
+// exported because `target` is the one trailer kept verbatim in Fields (a
+// scalar, since the flag is optional and repeated lines are rare); readers that
+// want the list shape apply the same rule here instead of inventing a second
+// one.
+func SplitList(v string) []string {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "[")
 	v = strings.TrimSuffix(v, "]")

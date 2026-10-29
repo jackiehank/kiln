@@ -2103,6 +2103,65 @@ func TestActionLogJSONLIsOneObjectPerLine(t *testing.T) {
 	}
 }
 
+// The stream carries every stored trailer, not just the identity ones. Relations
+// stay declarations (canonical names, no flipping into edges), aliases resolve,
+// repeats collapse, an unknown key never leaks into relations, and a record that
+// declared nothing carries none of the new keys.
+func TestActionLogJSONLCarriesEveryStoredTrailer(t *testing.T) {
+	var out, errb bytes.Buffer
+	base := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	rich := "采集：全字段\n\nissue: alpha\naction: collect\ntitle: 采集：全字段\n" +
+		"refs: q1, h1\ntarget: a.go, b.go\nscope: cli\ntags: docs\n" +
+		"derived-from: beta\nblocks: gamma\nblocks: gamma\nunrelate: delta\nunrelate: delta\n" +
+		"bogus: nope"
+	r := &streamRunner{fakeRunner: fakeRunner{commits: []vcs.Commit{
+		{ID: "aaa1111a", Date: base.Add(time.Hour), Message: rich},
+		{ID: "bbb2222b", Date: base, Message: "第二条\n\nissue: beta\naction: ask\ntitle: 第二条"},
+	}}}
+	e := newActionLogEnv(&out, &errb, r)
+	if code := e.action([]string{"log", "--jsonl"}); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errb.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("printed %d lines, want 2:\n%s", len(lines), out.String())
+	}
+	var doc actionLogDoc
+	if err := json.Unmarshal([]byte(lines[0]), &doc); err != nil {
+		t.Fatalf("line 1: %v", err)
+	}
+	if want := []string{"q1", "h1"}; strings.Join(doc.Refs, ",") != strings.Join(want, ",") {
+		t.Fatalf("refs = %v, want %v", doc.Refs, want)
+	}
+	if want := []string{"a.go", "b.go"}; strings.Join(doc.Target, ",") != strings.Join(want, ",") {
+		t.Fatalf("target = %v, want %v (the list shape refs/tags already use)", doc.Target, want)
+	}
+	if doc.Scope != "cli" {
+		t.Fatalf("scope = %q, want cli", doc.Scope)
+	}
+	if len(doc.Unrelate) != 1 || doc.Unrelate[0] != "delta" {
+		t.Fatalf("unrelate = %v, want [delta] once", doc.Unrelate)
+	}
+	// Vocabulary order (blocks before caused-by), alias resolved, repeats dropped.
+	want := []actionLogRelation{{Name: "blocks", Target: "gamma"}, {Name: "caused-by", Target: "beta"}}
+	if len(doc.Relations) != len(want) {
+		t.Fatalf("relations = %+v, want %+v", doc.Relations, want)
+	}
+	for i := range want {
+		if doc.Relations[i] != want[i] {
+			t.Fatalf("relations[%d] = %+v, want %+v", i, doc.Relations[i], want[i])
+		}
+	}
+	if strings.Contains(lines[0], "bogus") {
+		t.Fatalf("an unknown trailer key must not reach relations: %s", lines[0])
+	}
+	for _, key := range []string{`"refs"`, `"target"`, `"scope"`, `"relations"`, `"unrelate"`} {
+		if strings.Contains(lines[1], key) {
+			t.Fatalf("a record that declared nothing must omit %s: %s", key, lines[1])
+		}
+	}
+}
+
 // --limit stops the scan: the backend is asked for one record, not for all of
 // them followed by a slice.
 func TestActionLogLimitStopsTheScan(t *testing.T) {
