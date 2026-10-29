@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackiehank/kiln/internal/i18n"
@@ -42,11 +44,65 @@ func (e *env) cacheDir(backend vcs.Repo) (vcs.CacheBackend, string, [20]byte, bo
 	if !ok {
 		return nil, "", [20]byte{}, false
 	}
+	fp := cache.Fingerprint(e.rel())
+	// Resolving the shared git dir from the filesystem costs nothing; asking git
+	// costs a process (~45 ms on Windows) on every read, which is the whole
+	// budget of a small repository. Fall back to git for the shapes the walk
+	// cannot read (bare repository, GIT_DIR pointing elsewhere).
+	if dir, ok := commonDirFromFS(e.dir); ok {
+		return cb, filepath.Join(dir, "kiln", recordsDir), fp, true
+	}
 	dir, err := cb.CommonDir()
 	if err != nil {
 		return nil, "", [20]byte{}, false
 	}
-	return cb, filepath.Join(dir, "kiln", recordsDir), cache.Fingerprint(e.rel()), true
+	return cb, filepath.Join(dir, "kiln", recordsDir), fp, true
+}
+
+// commonDirFromFS finds the shared git directory by walking up from dir, without
+// spawning git. A plain checkout has `.git/`; a linked worktree has a `.git` file
+// naming its gitdir, which holds a `commondir` file pointing back at the shared
+// directory. Anything else is left to git.
+func commonDirFromFS(dir string) (string, bool) {
+	start, err := filepath.Abs(dir)
+	if err != nil {
+		start = filepath.Clean(dir)
+	}
+	for d := start; ; {
+		gitPath := filepath.Join(d, ".git")
+		info, err := os.Stat(gitPath)
+		if err == nil {
+			if info.IsDir() {
+				return gitPath, true
+			}
+			data, rerr := os.ReadFile(gitPath)
+			if rerr != nil {
+				return "", false
+			}
+			line := strings.TrimSpace(string(data))
+			const prefix = "gitdir:"
+			if !strings.HasPrefix(line, prefix) {
+				return "", false
+			}
+			gitDir := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(d, gitDir)
+			}
+			if data, rerr := os.ReadFile(filepath.Join(gitDir, "commondir")); rerr == nil {
+				common := strings.TrimSpace(string(data))
+				if !filepath.IsAbs(common) {
+					common = filepath.Join(gitDir, common)
+				}
+				return filepath.Clean(common), true
+			}
+			return "", false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
 }
 
 // usable keeps the layers this vocabulary can read: intact and fingerprint-matched.
@@ -260,7 +316,6 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	if len(layers) == 0 {
 		return 0, false, nil
 	}
-	head, _ := cb.HeadOID()
 	index := make(map[[20]byte]cache.Record, 0)
 	for _, l := range layers {
 		for _, r := range l.Records {
@@ -268,9 +323,13 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 		}
 	}
 	emitted := 0
+	first := ""
 	var fresh []cache.Record
 	var writeErr error
 	err = cb.EachOIDAuthorDate(func(id string) bool {
+		if first == "" {
+			first = id
+		}
 		oid, ok := decodeOID(id)
 		if !ok {
 			return false
@@ -301,7 +360,9 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	if err != nil {
 		return 0, false, nil
 	}
-	e.persist(dir, fp, fresh, head)
+	// The first enumerated commit is the newest tip of HEAD's history; claiming it
+	// covers a subset of what HEAD covers, which is all the records prove.
+	e.persist(dir, fp, fresh, first)
 	e.maybeMerge(cb, dir, fp, emitted)
 	return emitted, true, nil
 }
@@ -336,19 +397,6 @@ func (e *env) cacheCmd(args []string) int {
 		return 1
 	}
 	return e.cacheGC(backend)
-}
-
-// covered reports whether some layer already claims this exact tip: if it does,
-// everything reachable from it has a record.
-func covered(layers []cache.Layer, tip [20]byte) bool {
-	for _, l := range layers {
-		for _, t := range l.Tips {
-			if t == tip {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (e *env) cacheGC(backend vcs.Repo) int {

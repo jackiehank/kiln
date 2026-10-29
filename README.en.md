@@ -210,7 +210,7 @@ Every read command walks the whole history; past a few thousand commits that wal
 - `--no-cache` (or `KILN_NO_CACHE=1`) bypasses it per command; output is unchanged.
 - `kiln cache gc` reclaims by reachability (old records, broken layers, old versions). You should not need it: reads write and merge the cache themselves.
 - Read-only checkouts / CI mounts: a failed write is skipped silently; reads keep working.
-- Cost (100k commits measured): `graph --json` 1,266 → 631 ms, `action log --jsonl` 1,413 → 1,001 ms; about 130 B per commit on disk.
+- Measured (100k commits): `graph --json` 1,258 → 548 ms (−56%), `list` 1,131 → 439 ms (−61%), `action log --jsonl` 1,375 → 867 ms (−37%); already a win at 1k commits (−24%). The first read pays ~100 ms once; about 73 B per commit on disk (the synthetic corpus repeats titles; a real repository is closer to 130 B).
 
 Design notes: [docs/commit-cache.md](docs/commit-cache.md).
 

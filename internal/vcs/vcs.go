@@ -65,8 +65,6 @@ type CacheBackend interface {
 	// CommonDir is the shared git directory (` --git-common-dir `), the place
 	// one cache serves every worktree from.
 	CommonDir() (string, error)
-	// HeadOID is the commit the next Log would start from.
-	HeadOID() (string, error)
 	// LogOIDs lists commit ids newest first, in the same order as Log.
 	LogOIDs() ([]string, error)
 	// EachOIDAuthorDate streams commit ids in author-date order, the order action

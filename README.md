@@ -210,7 +210,7 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 - 单个命令可以 `--no-cache`（或 `KILN_NO_CACHE=1`）绕过，输出不变。
 - `kiln cache gc`：按可达集强制清理（旧记录、坏层、旧版本）。日常不需要——读路径会自己写、自己合并。
 - 只读仓 / CI 挂载：写失败静默跳过，读照常。
-- 代价（100k 提交实测）：`graph --json` 1,266 → 631 ms、`action log --jsonl` 1,413 → 1,001 ms；磁盘约 130 B/提交。
+- 实测（100k 提交）：`graph --json` 1,258 → 548 ms（−56%）、`list` 1,131 → 439 ms（−61%）、`action log --jsonl` 1,375 → 867 ms（−37%）；1k 提交也已开始省（−24%）。首次读一次性多花约 100 ms；磁盘约 73 B/提交（合成仓语料标题重复，真实仓约 130 B）。
 
 设计细节见 [docs/commit-cache.md](docs/commit-cache.md)。
 

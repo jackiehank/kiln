@@ -606,15 +606,6 @@ func (r ExecRunner) CommonDir() (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// HeadOID is the commit Log would report first.
-func (r ExecRunner) HeadOID() (string, error) {
-	out, err := r.run("rev-parse", "--verify", "--quiet", "HEAD")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
-}
-
 // LogOIDs lists commits newest first without their messages, in exactly the order
 // Log reports them: the ordering comes from git, never from Go.
 func (r ExecRunner) LogOIDs() ([]string, error) {
