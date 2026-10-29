@@ -507,7 +507,7 @@ action log --limit N：不查缓存，直接流式（有图 46 ms）
 - **分块**：一次读按 **8192 条/层** 落盘（100k ≈ 13 块，约 1 MB/块）；写满一块就 `cache.Write`（原子 rename），所以读者不必等整条流结束，早停也能留下读到的前缀。
 - **枚举完整**（`Log` 路径、无 `--limit` 的 `LogEach`）→ **最后一块**声明 `covered = {HEAD}`；
 - **部分枚举**（`action log --limit N`）→ 只留半块，**不声明覆盖、不写枚举快照**；重复 peek 同一个前缀时内容寻址让文件名相同，不会无限涨层。
-- **两种顺序各一份快照**：模型/起点检查种默认序，`action log` 种作者日序；换一种顺序首次仍付一次枚举（100k 166 ms / 真仓 52 ms）。
+- **两种顺序，一份或两份快照**：walk 顺带读到每个提交的父母（`%P`）；**走过的历史里没有任何提交有 ≥2 个父母**时，两种顺序的 git 输出必然相同（每一步候选只有一个），于是只写一份 **kind=3 共享快照**，两侧直接服用；历史里有 merge 才各写一份（默认序 / 作者日序），换顺序首次仍付一次枚举（100k 默认序 164 ms、作者日序 477 ms；真仓 52/54 ms）。读侧先找自己的 kind，再找共享。
 
 写失败（只读仓、磁盘满、沙箱）**静默跳过**：不改 stdout、不改退出码。
 
@@ -692,7 +692,7 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 **落地了什么**（git 后端，**默认开启**；缓存出问题用 `kiln cache clear` 重建）：
 
 - `internal/cache`：层格式（`KILNREC1`、词表指纹、字典序字符串表、按 OID 排序、SHA-1 trailer、文件名即内容哈希）、扫描/校验/原子写/按 OID 合并/Sweep；确定性编码 → 同输入同名 → 并发幂等。
-- 读路径：`Log` 路径（`graph` / `list` / `check` / `path` / `status` / `show`）枚举 + 查层 + `cat-file --batch` 补缺 + 顺手写；`action log` 全量走**流式枚举**（`EachOIDAuthorDate`）边枚举边查表边输出；`--limit` 有作者日序快照时走缓存（不 spawn git），没有快照才流式直读。
+- 读路径：`Log` 路径（`graph` / `list` / `check` / `path` / `status` / `show`）枚举 + 查层 + `cat-file --batch` 补缺 + 顺手写；`action log` 全量走**流式枚举**（`EachOIDAuthorDate`）边枚举边查表边输出；`--limit` 有作者日序（或共享）快照时走缓存（不 spawn git），没有快照才流式直读。枚举快照有三种 kind：默认序、作者日序、以及“线性历史下两种顺序通用”的共享快照；线性判定来自 walk 里顺带读到的 `%P`。
 - 写路径：读命令顺手写；`kiln cache gc` 是唯一的强制回收入口（按 `rev-list --all` 清理），与读路径共用同一个写层函数。
 - 自动 GC：扫描时删坏层；合并（层数 ≥64）时按"记录数 vs 枚举数"判定，有候选才跑可达性剪枝；**重写信号**（完整枚举全未命中且已有层）立刻合并 + 剪枝。
 - 开关：**默认开启**（后台行为），没有关断开关；恢复入口是 `kiln cache clear`，强制回收是 `kiln cache gc`。
@@ -762,3 +762,4 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 - 2026-10-30（cache-perf）：性能复核 + 四处优化。解码器改成字节游标 + 原地填记录（100k 层 45.5 → 15.4 ms，分配 2.10M → 0.20M），`Scan` 复用解码时算过的 SHA-1 校验文件名；`gaps` 索引改存 `{层, 位置}`，记录不再被拷进 `map`/`[]Record`；`engine.Builder` 把建模并成一趟，去掉 `[]Action` 与 `[]Record` 两次中转；`action log --limit` 有作者日序快照时走缓存、不 spawn git（无快照仍流式），部分枚举层不声明覆盖。100k warm 读 250 → 185 ms（进程内 146 → 89 ms），1k/10k 只降 2–7 ms（本来就在 20 ms 进程地板附近）。三个仓 × 10 条命令输出与旧二进制逐字节一致；`--limit` 无 git 可用性测试先对旧代码验证失败。详见 `docs/cache-perf.md`。
 
 - 2026-10-30（perf-profile）：读路径收成一个组件并“边读边种”。新增 `reader`（层扫描 + OID 索引 + 缺口批量补读 + 正/反向遍历）与 `layerSink`（8192 条/块写层，写完即丢记录）；`loadCached` 与 `actionLogCached` 不再各写一套 scan/index/lookup，`findIssue` / `loadRepo` 共用 `loadUncached` 的冷路径。流式 `action log` 现在逐提交构造 record 落盘，完整走完才写作者日序快照；早停只留半块。100k：`action log --jsonl` 冷 1026 → 1166 ms（写盘 +140），第二次 174 → 167；`do ask` 冷 864 → 983，第二次 864 → 122；`list` 在 action log 之后首次 1084 → 385。真仓：冷 105 → 111，第二次 105 → 29；`do ask` 冷 106 → 113，第二次 106 → 29。热读 git 进程数 0（trace2）。代价：冷流式峰值工作集 15 → 30 MB（分块 2048/4096/8192/16384 实测 21/26/30/49 MB，取 8192）。21 条命令 × 2 个仓、冷路径 3 条命令 × 2 个仓输出逐字节一致；4 条新测试先对旧代码验证失败。详见 `docs/perf-profile.md`。
+- 2026-10-30（perf-profile，apply）：枚举快照加 **kind=3 共享**。walk 顺带读每个提交的父母（`%P`），走过的历史里没有 ≥2 个父母的提交时，两种顺序的 git 输出必然相同（每一步候选只有一个），于是只写一份、两侧直接服用；有 merge 才各写一份。`vcs.Commit` 增 `Parents`/`ParentsKnown`，`CacheBackend.LogOIDs`/`EachOIDAuthorDate` 改带 parents（`vcs.Line`）。100k：`list` 之后 `action log` 821 → 172、`action log` 之后 `list` 379 → 158；真仓 89/83 → 30。冷 walk 带 parents 的代价：100k 默认序 +8 ms、作者日序 +22 ms。21 条命令 × 2 个仓逐字节一致；4 条测试（含 git 行为断言与 merge 守卫），其中两条先在旧代码上失败。详见 `docs/perf-profile.md`。

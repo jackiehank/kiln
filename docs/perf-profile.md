@@ -753,3 +753,55 @@ V2（本轮不做）：给 `LogEach` 加 order 参数，让模型冷读也流式
 
 原型证明了原理可行：一次 walk 的快照被两种顺序直接服用，输出逐字节不变，非线性仓不会误共享。接下来的 apply 只需要做“收敛”而不是再验证：决定 kind=3 的命名与注释、把 `--limit` 与合并路径过一遍、清理原型里为验证加的东西（如果有多余的）。
 
+## apply（2026-10-30）：共享快照落地
+
+### 改了什么
+
+原型原样收敛，没有新增机制：
+
+- `vcs.Commit` 增 `Parents` / `ParentsKnown`；git 的 `Log`、`LogEach` format 各加 `%P`，空字段（根提交）也算“报告过”。
+- `CacheBackend.LogOIDs` / `EachOIDAuthorDate` 改带 parents（`vcs.Line` 同样有 `ParentsKnown`），两条纯枚举路径也能判定线性。
+- `enumBoth = 3`：一份列表，两种顺序通用。`loadEnum` 先找自己的 kind，再找共享；四条 walk（模型 `Log`、流式 `LogEach`、两条枚举）在“线性”时写共享。
+- 判据收成一个函数：`unlinear(parents, known)` —— 有 ≥2 个父母，或后端没说父母，都不许共享。只有一处定义，四处调用。
+- `docs/commit-cache.md` 的“现状”与“读顺手写”两节同步了 kind 与判定；changelog 补了条目。
+
+### 等价性
+
+- 21 条命令 × 2 个仓（真仓、1k）与上一版二进制（`0ffcd48`）**逐字节相同**；kind 3/1/2 并存的混合状态也一致。
+- 4 条测试：
+
+| 测试 | 作用 | 旧代码 |
+| --- | --- | --- |
+| `TestLogOrdersDifferOnlyWithMerges` | 把“线性 ⇒ 同序、merge ⇒ 可能异序”钉在 git 上 | 通过（不变量） |
+| `TestSharedSnapshotServesBothOrders` | 模型种一次，作者日序在 `PATH` 空时可答 | **失败**（kinds `[1]`） |
+| `TestSharedSnapshotSeededByTheStream` | 流式种一次，模型在 `PATH` 空时可答 | **失败**（kinds `[2]`） |
+| `TestMergeRepoDoesNotShareSnapshots` | merge 仓不许假装共享，另一序仍需 git | 通过（守卫） |
+
+- 全量 `go test ./...` 绿；`gofmt` / `go vet` 干净。
+
+### 性能（中位数，`nulrun` 口径）
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| 真仓：`action log` 后 `list --json` | 83 | **30** |
+| 真仓：`list` 后 `action log --jsonl` | 89 | **30** |
+| 100k：`action log` 后 `list --json` | 379 | **158** |
+| 100k：`list` 后 `action log --jsonl` | 821 | **172** |
+| 100k 冷 `list --json`（种下去程） | 1011 | 1024（+13） |
+| 100k 冷 `action log --jsonl`（种下去程） | 1166 | 1174（+8） |
+
+### 边界与代价
+
+- 枚举文本 100k 从 4.0 MB 到 8.1 MB；walk 本身 +8 ms（默认序）/ +22 ms（作者日序），≤10k 仓 ≤1 ms。
+- **非线性的两种顺序仍各走一次**；方案不给它们新进程，也不改任何输出。
+- 父母不可知（`ParentsKnown=false`）、浅克隆边界、替换 refs、octopus merge：一律判非线性——保守方向，最多多走一次 walk。
+- 早停（`--limit`）不写快照、旧二进制不认 kind=3（miss 一次重建自己那份）：都与上一版一致。
+
+### 验收
+
+- [x] 42 组命令逐字节一致（含混合 kind 状态）；
+- [x] 线性仓一次 walk 服务两种顺序（`PATH` 空可答，两条测试先对旧代码失败）；
+- [x] merge 仓不共享（守卫测试）；
+- [x] 全量测试绿、`gofmt` / `go vet` 干净；
+- [x] 100k 换序 379→158、821→172；真仓 83/89→30。
+

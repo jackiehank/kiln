@@ -339,7 +339,7 @@ func readEnum(dir string, kind enumKind, key enumKey) ([][20]byte, bool) {
 	return oids, ok
 }
 
-// storeEnum writes a snapshot and prunes older ones of the same kind. Every
+// storeEnum writes a snapshot (own order or shared) and prunes the old window.
 // failure is silent: a cache that cannot be written must not change what the
 // command prints or what it exits with.
 func storeEnum(dir string, kind enumKind, key enumKey, oids [][20]byte) {
@@ -367,8 +367,8 @@ func storeEnum(dir string, kind enumKind, key enumKey, oids [][20]byte) {
 	pruneEnums(dir, path)
 }
 
-// pruneEnums keeps the newest snapshots, whatever order they cache: the two
-// kinds share one four-file window, which is enough for the worktree in use and
+// pruneEnums keeps the newest snapshots, whatever order they cache: the orders
+// share one four-file window, which is enough for the worktree in use and
 // costs one git log to refill when a snapshot is evicted. Deleting an old one is
 // always safe — a reader that loses the race falls back to git.
 func pruneEnums(dir, keep string) {
@@ -432,7 +432,7 @@ func (e *env) enumerateDefault(cb vcs.CacheBackend) ([][20]byte, bool) {
 		if !ok {
 			return nil, false
 		}
-		if len(line.Parents) > 1 {
+		if unlinear(line.Parents, line.ParentsKnown) {
 			linear = false
 		}
 		oids = append(oids, oid)
@@ -459,7 +459,7 @@ func (e *env) enumerateAuthorDate(cb vcs.CacheBackend) ([][20]byte, bool) {
 		if !ok {
 			return false
 		}
-		if len(line.Parents) > 1 {
+		if unlinear(line.Parents, line.ParentsKnown) {
 			linear = false
 		}
 		oids = append(oids, oid)
@@ -549,6 +549,14 @@ func (e *env) storeEnumFromCommits(commits []vcs.Commit) {
 	storeEnum(dir, kind, key, oids)
 }
 
+// unlinear reports whether one walked commit rules out a shared snapshot: it has
+// two parents (a merge, so the two orderings may part ways) or the backend did
+// not say what its parents are (nothing can be concluded). The rule lives in one
+// place because every walk that may file a snapshot applies it.
+func unlinear(parents []string, known bool) bool {
+	return !known || len(parents) > 1
+}
+
 // linearHistory reports whether the walked history has no merge: every commit
 // lists at most one parent. A backend that does not report parents cannot prove
 // it, so it answers "no". A linear walk means both of git's orderings have
@@ -559,7 +567,7 @@ func linearHistory(commits []vcs.Commit) bool {
 		return false
 	}
 	for _, c := range commits {
-		if !c.ParentsKnown || len(c.Parents) > 1 {
+		if unlinear(c.Parents, c.ParentsKnown) {
 			return false
 		}
 	}

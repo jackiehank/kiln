@@ -69,10 +69,13 @@ type RawCommit struct {
 
 // Line is one commit id with its parents: the shape the enumeration paths need.
 // They care about the ids and about whether the history has a merge, never about
-// messages.
+// messages. ParentsKnown carries the same distinction as on Commit: an empty
+// parent list alone cannot tell a root commit from a backend that stayed silent,
+// and only the former may be used as evidence that the history is linear.
 type Line struct {
-	ID      string
-	Parents []string
+	ID           string
+	Parents      []string
+	ParentsKnown bool
 }
 
 // CacheBackend is optional: a backend that can enumerate commit ids without

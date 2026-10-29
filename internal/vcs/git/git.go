@@ -632,7 +632,7 @@ func (r ExecRunner) LogOIDs() ([]vcs.Line, error) {
 			continue
 		}
 		id, parents, _ := strings.Cut(line, "\x1f")
-		lines = append(lines, vcs.Line{ID: id, Parents: splitParents(parents)})
+		lines = append(lines, vcs.Line{ID: id, Parents: splitParents(parents), ParentsKnown: true})
 	}
 	return lines, nil
 }
@@ -682,7 +682,7 @@ func (r ExecRunner) EachOIDAuthorDate(fn func(vcs.Line) bool) error {
 		line = strings.TrimRight(line, "\r\n")
 		if line != "" {
 			id, parents, _ := strings.Cut(line, "\x1f")
-			if !fn(vcs.Line{ID: id, Parents: splitParents(parents)}) {
+			if !fn(vcs.Line{ID: id, Parents: splitParents(parents), ParentsKnown: true}) {
 				stopped = true
 				break
 			}

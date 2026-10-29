@@ -217,7 +217,7 @@ func (e *env) actionLogStream(stream vcs.LogEach, backend vcs.Repo, jsonl bool, 
 	linear := true
 	var writeErr error
 	err := stream.LogEach(func(c vcs.Commit) bool {
-		if !c.ParentsKnown || len(c.Parents) > 1 {
+		if unlinear(c.Parents, c.ParentsKnown) {
 			linear = false
 		}
 		rec := engine.RecordFromCommit(c, e.rel())
