@@ -290,6 +290,8 @@ type env struct {
 	worktree     string
 	configPath   string
 	configSource string
+	cacheEnabled bool // the config asked for the record cache
+	noCache      bool // --no-cache / KILN_NO_CACHE overrides the config
 	repo         vcs.Repo
 	kind         vcs.Kind // the backend that was opened, recorded for backend-specific wording
 	out          io.Writer
@@ -419,6 +421,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
+	// --no-cache is global like --lang: pull it out before dispatch so every read
+	// command accepts it without adding a flag to each parser.
+	args, noCache := stripNoCache(args)
+	if os.Getenv("KILN_NO_CACHE") != "" {
+		noCache = true
+	}
 	// Load config before help so `-h` reflects the project's relation vocabulary.
 	// Help must not fail on a broken config: fall back to the built-in default.
 	cfg, cfgErr := config.Read(".")
@@ -474,6 +482,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		worktree:     cfg.Worktree,
 		configPath:   cfg.Path,
 		configSource: cfg.Source,
+		cacheEnabled: cfg.Cache && !noCache,
+		noCache:      noCache,
 		out:          stdout,
 		errw:         stderr,
 	}
@@ -3060,12 +3070,19 @@ func (e *env) loadRepo() (*model.Repo, int) {
 		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return nil, 1
 	}
+	if repo, ok := e.loadCached(backend); ok {
+		return repo, 0
+	}
 	commits, err := backend.Log()
 	if err != nil {
 		fmt.Fprint(e.errw, i18n.T("读取历史失败: %v\n", err))
 		return nil, 1
 	}
-	return engine.Build(engine.ActionsFromCommits(commits, e.rel()), e.rel()), 0
+	actions, records := engine.ActionsAndRecordsFromCommits(commits, e.rel())
+	if len(commits) > 0 {
+		e.persistRecords(backend, records, commits[0].ID)
+	}
+	return engine.Build(actions, e.rel()), 0
 }
 
 func modeName(commit bool) string {

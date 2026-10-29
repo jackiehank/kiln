@@ -50,6 +50,29 @@ func LastNonEmptyLine(out string) string {
 
 // Repo is the version-control-agnostic surface kiln needs. Implementations
 // shell out to a specific tool; the engine never touches exec.
+// RawCommit is one commit as the cache needs it: the parsed header fields plus the
+// message. It is the input of the record layer, so a backend that can serve it can
+// take part in the cache; jj does not, and simply does not implement CacheBackend.
+type RawCommit struct {
+	Date    time.Time
+	Message string
+}
+
+// CacheBackend is optional: a backend that can enumerate commit ids without
+// reading messages (so a cache hit skips the messages) and read messages for a
+// handful of ids in one process.
+type CacheBackend interface {
+	// CommonDir is the shared git directory (` --git-common-dir `), the place
+	// one cache serves every worktree from.
+	CommonDir() (string, error)
+	// HeadOID is the commit the next Log would start from.
+	HeadOID() (string, error)
+	// LogOIDs lists commit ids newest first, in the same order as Log.
+	LogOIDs() ([]string, error)
+	// Commits returns the raw commits for oids, keyed by id.
+	Commits(oids []string) (map[string]RawCommit, error)
+}
+
 type Repo interface {
 	// Log returns every commit, newest first.
 	Log() ([]Commit, error)

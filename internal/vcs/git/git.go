@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -585,6 +586,163 @@ func parseWorktrees(out string) []vcs.WorkspaceInfo {
 
 // run executes git in the runner's own directory.
 func (r ExecRunner) run(args ...string) (string, error) { return r.runIn(r.Dir, args...) }
+
+// CommonDir is the shared directory of the repository (every worktree of one
+// clone resolves to the same path), the natural home for a cache that serves them
+// all.
+func (r ExecRunner) CommonDir() (string, error) {
+	out, err := r.run("rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		// git < 2.31 has no --path-format; fall back to the relative form.
+		out, err = r.run("rev-parse", "--git-common-dir")
+		if err != nil {
+			return "", err
+		}
+		if abs, aerr := filepath.Abs(out); aerr == nil {
+			return abs, nil
+		}
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// HeadOID is the commit Log would report first.
+func (r ExecRunner) HeadOID() (string, error) {
+	out, err := r.run("rev-parse", "--verify", "--quiet", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// LogOIDs lists commits newest first without their messages, in exactly the order
+// Log reports them: the ordering comes from git, never from Go.
+func (r ExecRunner) LogOIDs() ([]string, error) {
+	out, err := r.run("log", "--format=%H")
+	if err != nil {
+		if r.noHistory() {
+			return nil, nil
+		}
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil, nil
+	}
+	return lines, nil
+}
+
+// Commits reads the raw commit objects for oids in one process, so filling a gap
+// costs one spawn rather than one per commit.
+func (r ExecRunner) Commits(oids []string) (map[string]vcs.RawCommit, error) {
+	out := make(map[string]vcs.RawCommit, len(oids))
+	if len(oids) == 0 {
+		return out, nil
+	}
+	cmd := exec.Command("git", "cat-file", "--batch")
+	cmd.Dir = r.Dir
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() {
+		w := bufio.NewWriter(stdin)
+		for _, oid := range oids {
+			w.WriteString(oid)
+			w.WriteByte('\n')
+		}
+		w.Flush()
+		stdin.Close()
+	}()
+	br := bufio.NewReaderSize(stdout, 1<<20)
+	parseErr := error(nil)
+	for range oids {
+		header, err := br.ReadString('\n')
+		if err != nil {
+			parseErr = err
+			break
+		}
+		fields := strings.Fields(header)
+		if len(fields) != 3 || fields[1] != "commit" {
+			parseErr = fmt.Errorf("cat-file: unexpected header %q", strings.TrimSpace(header))
+			break
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil {
+			parseErr = err
+			break
+		}
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(br, payload); err != nil {
+			parseErr = err
+			break
+		}
+		if _, err := br.ReadByte(); err != nil { // trailing LF
+			parseErr = err
+			break
+		}
+		when, msg, err := splitRawCommit(payload)
+		if err != nil {
+			parseErr = err
+			break
+		}
+		out[fields[0]] = vcs.RawCommit{Date: when, Message: msg}
+	}
+	waitErr := cmd.Wait()
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if waitErr != nil {
+		return nil, fmt.Errorf("git cat-file: %s", failureText(stderr.String(), waitErr))
+	}
+	return out, nil
+}
+
+// splitRawCommit pulls the author date and the message out of a raw commit
+// object, which is the field layout the record layer stores.
+func splitRawCommit(payload []byte) (time.Time, string, error) {
+	sep := bytes.Index(payload, []byte("\n\n"))
+	if sep < 0 {
+		return time.Time{}, "", errors.New("cat-file: commit without a message")
+	}
+	var when time.Time
+	for _, line := range strings.Split(string(payload[:sep]), "\n") {
+		if !strings.HasPrefix(line, "author ") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		ts, err := strconv.ParseInt(f[len(f)-2], 10, 64)
+		if err != nil {
+			return time.Time{}, "", err
+		}
+		zone := f[len(f)-1]
+		offset := 0
+		if len(zone) == 5 && (zone[0] == '+' || zone[0] == '-') {
+			hh, _ := strconv.Atoi(zone[1:3])
+			mm, _ := strconv.Atoi(zone[3:5])
+			offset = hh*3600 + mm*60
+			if zone[0] == '-' {
+				offset = -offset
+			}
+		}
+		when = time.Unix(ts, 0).In(time.FixedZone("", offset))
+	}
+	if when.IsZero() {
+		return time.Time{}, "", errors.New("cat-file: commit without an author line")
+	}
+	return when, strings.TrimRight(string(payload[sep+2:]), "\r\n"), nil
+}
 
 // runIn executes git in dir and returns stdout; on failure the error carries
 // git's own explanation: stderr when it wrote one, else the last line of stdout

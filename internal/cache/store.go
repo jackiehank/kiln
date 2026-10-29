@@ -30,6 +30,7 @@ type Layer struct {
 	Path    string
 	Records []Record
 	Tips    [][20]byte
+	FP      [20]byte
 	Err     error
 }
 
@@ -66,11 +67,11 @@ func Scan(dir string) ([]Layer, error) {
 			out = append(out, Layer{Name: name, Path: path, Err: err})
 			continue
 		}
-		recs, tips, _, err := Decode(data)
+		recs, tips, fp, err := Decode(data)
 		if err == nil && Name(data) != name {
 			err = fmt.Errorf("layer name %q does not match its contents", name)
 		}
-		out = append(out, Layer{Name: name, Path: path, Records: recs, Tips: tips, Err: err})
+		out = append(out, Layer{Name: name, Path: path, Records: recs, Tips: tips, FP: fp, Err: err})
 	}
 	return out, nil
 }

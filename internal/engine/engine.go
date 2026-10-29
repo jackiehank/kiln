@@ -4,10 +4,13 @@
 package engine
 
 import (
+	"encoding/hex"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jackiehank/kiln/internal/cache"
 	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/model"
 	"github.com/jackiehank/kiln/internal/trailer"
@@ -56,6 +59,121 @@ func Subject(message string) string {
 		}
 	}
 	return ""
+}
+
+// recordFrom turns one already-parsed commit into the record the cache stores.
+// Parsing is passed in so the cold path parses each message exactly once.
+func recordFrom(c vcs.Commit, f trailer.Fields, ok bool, rel *model.RelationSet) cache.Record {
+	var rec cache.Record
+	if oid, err := hex.DecodeString(c.ID); err == nil && len(oid) == len(rec.OID) {
+		copy(rec.OID[:], oid)
+	}
+	rec.Date = c.Date.Unix()
+	if _, offset := c.Date.Zone(); offset != 0 {
+		rec.TZ = int16(offset / 60)
+	}
+	rec.Action = ok
+	rec.Issue = f.Issue
+	rec.Kind = f.Action
+	rec.Title = f.Title
+	rec.Subject = Subject(c.Message)
+	rec.Domain = f.Domain
+	rec.Scope = f.Scope
+	rec.Target = f.Target
+	rec.Refs = f.Refs
+	rec.Tags = f.Tags
+	rec.Unrelate = f.Unrelate
+	if ok {
+		// Unknown keys are a `check` diagnostic and only actions are checked; not
+		// scanning every non-action message keeps the cold path cheaper.
+		rec.Unknown = trailer.UnknownKeys(c.Message, rel)
+	}
+	for _, r := range f.Relations {
+		rec.Relations = append(rec.Relations, cache.Rel{Name: r.Name, Target: r.Target})
+	}
+	return rec
+}
+
+// RecordFromCommit turns one commit into the record the cache stores: the fields
+// ActionsFromCommits derives plus the author date, so an Action can be rebuilt
+// without the message.
+func RecordFromCommit(c vcs.Commit, rel *model.RelationSet) cache.Record {
+	f, ok := trailer.Parse(c.Message, rel)
+	return recordFrom(c, f, ok, rel)
+}
+
+// ActionsAndRecordsFromCommits parses the history once and returns both the
+// actions and the records the cache stores, so a cold read pays one parse rather
+// than two. The Action is built from the commit itself (id and date verbatim), so
+// a full scan keeps producing exactly what it produced before the cache existed.
+func ActionsAndRecordsFromCommits(commits []vcs.Commit, rel *model.RelationSet) ([]model.Action, []cache.Record) {
+	actions := make([]model.Action, 0, len(commits))
+	records := make([]cache.Record, 0, len(commits))
+	for i := len(commits) - 1; i >= 0; i-- {
+		c := commits[i]
+		f, ok := trailer.Parse(c.Message, rel)
+		rec := recordFrom(c, f, ok, rel)
+		records = append(records, rec)
+		if ok {
+			actions = append(actions, actionFrom(c.ID, c.Date, Subject(c.Message), f, rec.Unknown))
+		}
+	}
+	return actions, records
+}
+
+// ActionsFromRecords is the cache-side twin of ActionsFromCommits: same fields,
+// same order (records are in newest-first enumeration order, actions are emitted
+// oldest first), so a cache hit and a full scan produce identical actions.
+func ActionsFromRecords(recs []cache.Record) []model.Action {
+	var out []model.Action
+	for i := len(recs) - 1; i >= 0; i-- {
+		r := recs[i]
+		if !r.Action {
+			continue
+		}
+		out = append(out, actionFrom(
+			hex.EncodeToString(r.OID[:]),
+			time.Unix(r.Date, 0).In(time.FixedZone("", int(r.TZ)*60)),
+			r.Subject,
+			fieldsFromRecord(r),
+			r.Unknown,
+		))
+	}
+	return out
+}
+
+// fieldsFromRecord rebuilds the trailer fields the action needs from a record.
+func fieldsFromRecord(r cache.Record) trailer.Fields {
+	f := trailer.Fields{
+		Issue: r.Issue, Action: r.Kind, Title: r.Title, Refs: r.Refs,
+		Target: r.Target, Scope: r.Scope, Domain: r.Domain, Tags: r.Tags,
+		Unrelate: r.Unrelate,
+	}
+	for _, rel := range r.Relations {
+		f.Relations = append(f.Relations, model.Rel{Name: rel.Name, Target: rel.Target})
+	}
+	return f
+}
+
+// actionFrom is the single place an Action is assembled, so the commit path and
+// the record path cannot drift apart.
+func actionFrom(id string, date time.Time, subject string, f trailer.Fields, unknown []string) model.Action {
+	return model.Action{
+		ID:                 id,
+		Subject:            subject,
+		Date:               date,
+		Issue:              f.Issue,
+		Kind:               f.Action,
+		Title:              f.Title,
+		Refs:               f.Refs,
+		Target:             f.Target,
+		Scope:              f.Scope,
+		Domain:             f.Domain,
+		Tags:               f.Tags,
+		Relations:          f.Relations,
+		Unrelate:           f.Unrelate,
+		UnknownTrailerKeys: unknown,
+	}
 }
 
 // Build aggregates actions into a repository of issues.
