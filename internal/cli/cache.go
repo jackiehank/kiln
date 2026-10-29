@@ -122,6 +122,17 @@ func usable(layers []cache.Layer, fp [20]byte) []cache.Layer {
 	return out
 }
 
+// cachedHistory is what the record layer and one enumeration together know: where
+// the layers live, which commits the enumeration named, and how many the layers
+// already hold. It exists so loadCached reads as the six steps it always did.
+type cachedHistory struct {
+	cb     vcs.CacheBackend
+	dir    string
+	fp     [20]byte
+	layers []cache.Layer
+	oids   [][20]byte
+}
+
 // loadCached answers a read from the record layer. It returns ok=false whenever
 // the cache cannot serve the whole answer (cold, damaged, disabled, backend
 // without records): the caller then falls back to today's full scan, which also
@@ -130,89 +141,131 @@ func usable(layers []cache.Layer, fp [20]byte) []cache.Layer {
 // Nothing here is allowed to change the command's output: records carry the same
 // fields the parser derives, and the enumeration order comes from git.
 func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
-	cb, dir, fp, ok := e.cacheSite(backend)
+	h, ok := e.openLayers(backend)
+	if !ok || !e.enumerateOIDs(&h) {
+		return nil, false
+	}
+	index, missing := h.gaps()
+	fetched, ok := h.fetch(missing)
 	if !ok {
 		return nil, false
 	}
+	records, fresh, ok := e.assemble(h, index, fetched)
+	if !ok {
+		return nil, false
+	}
+	e.settle(h, fresh)
+	return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
+}
+
+// openLayers is step 1: find the site and the layers this fingerprint can use.
+func (e *env) openLayers(backend vcs.Repo) (cachedHistory, bool) {
+	cb, dir, fp, ok := e.cacheSite(backend)
+	if !ok {
+		return cachedHistory{}, false
+	}
 	layers, err := cache.Scan(dir)
 	if err != nil {
-		return nil, false
+		return cachedHistory{}, false
 	}
 	layers = usable(layers, fp)
 	if len(layers) == 0 {
-		return nil, false // cold: full scan + persist in the caller
+		return cachedHistory{}, false // cold: full scan + persist in the caller
 	}
-	// The enumeration is the one thing the record layer cannot answer: it comes
-	// from a snapshot of git's own output, so a hit costs a file read and zero
-	// processes. A miss runs git once and stores what it printed.
-	oids, ok := e.enumerateDefault(cb)
+	return cachedHistory{cb: cb, dir: dir, fp: fp, layers: layers}, true
+}
+
+// enumerateOIDs is step 2: the one thing the record layer cannot answer. It comes
+// from a snapshot of git's own output, so a hit costs a file read and zero
+// processes; a miss runs git once and stores what it printed.
+func (e *env) enumerateOIDs(h *cachedHistory) bool {
+	oids, ok := e.enumerateDefault(h.cb)
 	if !ok || len(oids) == 0 {
-		return nil, false
+		return false
 	}
+	h.oids = oids
+	return true
+}
+
+// gaps is step 3: which commits the layers already answer, and which the
+// enumeration named but no layer holds.
+func (h cachedHistory) gaps() (map[[20]byte]cache.Record, [][20]byte) {
 	// The record count is the map's size hint: without one, 100k [20]byte keys
 	// grow the map through every power of two and copy the whole table each time.
-	index := make(map[[20]byte]cache.Record, len(oids))
-	for _, l := range layers {
+	index := make(map[[20]byte]cache.Record, len(h.oids))
+	for _, l := range h.layers {
 		for _, r := range l.Records {
 			index[r.OID] = r
 		}
 	}
 	var missing [][20]byte
-	for _, oid := range oids {
+	for _, oid := range h.oids {
 		if _, hit := index[oid]; !hit {
 			missing = append(missing, oid)
 		}
 	}
-	var fetched map[[20]byte]vcs.RawCommit
-	if len(missing) > 0 {
-		ids := make([]string, len(missing))
-		for i, oid := range missing {
-			ids[i] = hex.EncodeToString(oid[:])
-		}
-		byID, err := cb.Commits(ids)
-		if err != nil {
-			return nil, false
-		}
-		fetched = make(map[[20]byte]vcs.RawCommit, len(byID))
-		for id, raw := range byID {
-			if oid, ok := decodeOID(id); ok {
-				fetched[oid] = raw
-			}
+	return index, missing
+}
+
+// fetch is step 4: read the messages of the gaps in one process.
+func (h cachedHistory) fetch(missing [][20]byte) (map[[20]byte]vcs.RawCommit, bool) {
+	if len(missing) == 0 {
+		return nil, true
+	}
+	ids := make([]string, len(missing))
+	for i, oid := range missing {
+		ids[i] = hex.EncodeToString(oid[:])
+	}
+	byID, err := h.cb.Commits(ids)
+	if err != nil {
+		return nil, false
+	}
+	fetched := make(map[[20]byte]vcs.RawCommit, len(byID))
+	for id, raw := range byID {
+		if oid, ok := decodeOID(id); ok {
+			fetched[oid] = raw
 		}
 	}
-	records := make([]cache.Record, 0, len(oids))
-	var fresh []cache.Record
-	for _, oid := range oids {
+	return fetched, true
+}
+
+// assemble is step 5: one record per enumerated commit, in the enumeration's
+// order. `fresh` is what the layers did not hold, so it is what must be written.
+func (e *env) assemble(h cachedHistory, index map[[20]byte]cache.Record, fetched map[[20]byte]vcs.RawCommit) (records, fresh []cache.Record, ok bool) {
+	records = make([]cache.Record, 0, len(h.oids))
+	for _, oid := range h.oids {
 		if r, hit := index[oid]; hit {
 			records = append(records, r)
 			continue
 		}
-		raw, ok := fetched[oid]
-		if !ok {
-			return nil, false
+		raw, hit := fetched[oid]
+		if !hit {
+			return nil, nil, false
 		}
 		rec := engine.RecordFromCommit(vcs.Commit{ID: hex.EncodeToString(oid[:]), Date: raw.Date, Message: raw.Message}, e.rel())
 		records = append(records, rec)
 		fresh = append(fresh, rec)
 	}
-	// Persist what this read had to compute anyway; the enumeration covered the
-	// whole history, so the layer may claim HEAD. The layer just written joins the
-	// set in memory: re-reading the directory to find it is what made every read
-	// decode the same bytes twice.
-	if l := e.persist(dir, fp, fresh, oids[0]); l != nil {
-		layers = append(layers, *l)
+	return records, fresh, true
+}
+
+// settle is step 6: persist what this read had to compute anyway, then decide
+// whether the layers should merge now. The enumeration covered the whole history,
+// so the layer may claim HEAD. The layer just written joins the set in memory:
+// re-reading the directory to find it is what made every read decode the same
+// bytes twice.
+func (e *env) settle(h cachedHistory, fresh []cache.Record) {
+	if l := e.persist(h.dir, h.fp, fresh, h.oids[0]); l != nil {
+		h.layers = append(h.layers, *l)
 	}
-	if len(fresh) > 0 && len(fresh) == len(oids) {
+	if len(fresh) > 0 && len(fresh) == len(h.oids) && len(h.layers) > 1 {
 		// Every enumerated commit missed while layers exist: the history was
 		// rewritten (rebase / amend). Merge (and prune) now instead of waiting for
 		// the layer count to reach maxLayers.
-		if len(layers) > 1 {
-			e.mergeLayers(cb, layers, dir, fp, len(oids))
-			return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
-		}
+		e.mergeLayers(h.cb, h.layers, h.dir, h.fp, len(h.oids))
+		return
 	}
-	e.maybeMerge(cb, layers, dir, fp, len(oids))
-	return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
+	e.maybeMerge(h.cb, h.layers, h.dir, h.fp, len(h.oids))
 }
 
 // persistRecords writes the records of a full scan. It is the cold path: the
