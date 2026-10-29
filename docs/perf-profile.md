@@ -238,3 +238,42 @@
 - `path --all --stat` 已是 1 个 git 进程（`perf-audit` 的批量化成立），不再按动作 spawn；
 - `perf-audit` 里的绝对数字（`status` 302、`path --all --json` 223）是缓存之前的口径，已过期；
 - 上一轮 `cache-perf` 报的 100k `list --json` 185 ms 含 PowerShell 读 pipe 的成本；同一命令本口径是 158 ms，两组数不可相减。
+
+## apply（2026-10-30）：A — 起点检查走缓存
+
+这一条推翻了上节结论里的 A：收集完成后要求先修它，B / C 仍按结论保留。
+
+### 改了什么
+
+`findIssue`（`do` / `commit` 的起点重复检查的唯一调用点）先问记录层：`loadCached` 能服务就用它建出的模型回答“这条 issue 有没有起点动作”；缓存不可用（冷、损坏、测试里被关断、后端不支持）时才回退到原来的 `backend.Log()` 全量扫描。没有新接口，也没有改“best effort”的契约——读不到仍然是“没有意见”，从不报错。
+
+### 等价性
+
+- 新增 `TestDuplicateStartCheckAnswersFromTheCache`：暖好层与枚举后把 `PATH` 指向空目录（git 不可达），必须仍然拒绝重复起点、并放行没有起点动作的 issue。**旧代码上这个测试先失败**（`duplicate start: exit 0, stderr ""`）：检查绕开缓存去 spawn git，失败后静默返回“没有意见”。
+- 真仓 `do cache-perf ask`：暖缓存与 `cache clear` 之后逐字节相同（同一段拒绝文本、exit 1）。
+- 全量 `go test ./...` 绿；仓库外 `do foo ask` 仍打印“不在仓库里”的提示。
+
+### 性能（同机、同口径，中位数）
+
+| 路径 | 改前 | 改后 |
+| --- | --- | --- |
+| `do <issue> ask` 真仓 | 106 | **29** |
+| `do <issue> ask` 1k | 105 | **28** |
+| `do <issue> ask` 100k | 861 | **122** |
+| `commit <新 issue> ask` 1k | 408 | **280** |
+| `commit <新 issue> ask` 100k | 1138 | **373** |
+
+100k 的 `do ask` 现在就是一次热读的成本（地板 27 + `loadCached` 约 85 + 一行输出）；`commit ask` 剩下的是 4 个 git 进程的进程税（约 280 ms），与仓库规模无关。
+
+### 边界
+
+- **冷缓存仍走 `Log()`**：`cache clear` 之后第一次 `do ask` 与改前一样，并且不会顺手写缓存（`findIssue` 的回退不 persist）。
+- `loadCached` 自己会 `settle`（补 gap 层、按需合并），所以暖缓存下的 `do` / `commit` 也可能顺手写一层——与读命令的行为一致。
+- 拒绝语义、提示文本、退出码都没有变；变的只是答案从哪来。
+
+### 验收
+
+- [x] 暖缓存 + 无 git 仍能回答重复起点（新测试，先证伪）；
+- [x] 真仓冷 / 暖输出逐字节一致；
+- [x] 全量测试绿、`gofmt` / `go vet` 干净；
+- [x] 100k 收益 ≥ 5×（861 → 122），真仓回到地板（106 → 29）。

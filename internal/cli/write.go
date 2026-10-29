@@ -354,11 +354,19 @@ func (e *env) hasStart(p *model.Issue) bool {
 
 // findIssue reads one issue out of the history, best effort on purpose: `do` only
 // prints a message and must keep working outside a repository, so an unreadable
-// history means "no opinion", never an error.
+// history means "no opinion", never an error. It answers from the record layer
+// when the cache can serve it: the duplicate-start check used to read the whole
+// history (every message, via `git log`) on every attempt, which is exactly the
+// work the cache exists to skip. The cached answer is the same model a full scan
+// builds, and the scan is still the fallback whenever the cache cannot serve.
 func (e *env) findIssue(issue string) (*model.Issue, bool) {
 	backend, err := e.backend()
 	if err != nil {
 		return nil, false
+	}
+	if repo, ok := e.loadCached(backend); ok {
+		p, found := repo.Issues[issue]
+		return p, found
 	}
 	commits, err := backend.Log()
 	if err != nil {

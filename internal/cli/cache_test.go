@@ -265,6 +265,38 @@ func TestActionLogLimitServesTheFirstScreenWithoutGit(t *testing.T) {
 	}
 }
 
+// TestDuplicateStartCheckAnswersFromTheCache pins the other read a write command
+// used to do: `do`/`commit` with a start action asks "does this issue already
+// have one?", and that used to read the whole history (`git log`, every message)
+// even when a warm layer already held the answer. With git unreachable, only a
+// cache answer is possible — and it must refuse the duplicate while letting an
+// issue without a start action through.
+func TestDuplicateStartCheckAnswersFromTheCache(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "beta", "collect", "只收", "2026-10-01T11:00:00+08:00")
+	t.Chdir(dir)
+	_ = cacheOutput(t, "list", "--json") // warm the layer and the enumeration
+
+	t.Setenv("PATH", t.TempDir())
+	var out, errb bytes.Buffer
+	if code := Run([]string{"do", "alpha", "ask", "--title", "再来一次"}, &out, &errb); code != 1 {
+		t.Fatalf("duplicate start: exit %d, stderr %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "已经有起点动作") {
+		t.Fatalf("duplicate start must be refused: %q", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := Run([]string{"do", "beta", "ask", "--title", "开新单"}, &out, &errb); code != 0 {
+		t.Fatalf("a collect-only issue may open: exit %d, stderr %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "issue: beta") {
+		t.Fatalf("message missing: %q", out.String())
+	}
+}
+
 func TestActionLogGapFillMatchesTheStream(t *testing.T) {
 	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
