@@ -169,6 +169,8 @@ OID(20) | authorDate(8, unix 秒) | tzOffset(2, 分钟) | flags(1) | 字段块(T
 
 没有缓存时，走的就是今天这条路（`LogEach` 流式扫全史）。两条路共用同一个记录结构与同一份渲染代码，所以"命中与否字节一致"不是靠测试保证，而是**结构上不存在第二条输出路径**。
 
+> 更正 collect 里的措辞：那里写的是"枚举走 `git rev-list`"，这里改成 `git log --author-date-order --format=%H`。原因是 `rev-list` 的默认顺序不是 author-date-order，而**顺序是输出契约的一部分**（见 §3 的同秒提交）；`git log --format=%H` 与 `rev-list` 一样只吐 OID、不带 body（本仓 15,252 B / ~65 ms），成本相同而语义正确。
+
 ### 3. 顺序：不给缓存排序权
 
 本仓现有 3 对**同一秒**的提交：
