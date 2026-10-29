@@ -176,12 +176,12 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 	if !ok {
 		return nil, false
 	}
-	records, fresh, ok := e.assemble(h, index, fetched)
+	repo, fresh, ok := e.assemble(h, index, fetched)
 	if !ok {
 		return nil, false
 	}
 	e.settle(h, fresh)
-	return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
+	return repo, true
 }
 
 // openLayers is step 1: find the site and the layers this fingerprint can use.
@@ -214,15 +214,25 @@ func (e *env) enumerateOIDs(h *cachedHistory) bool {
 	return true
 }
 
+// recPos locates one record: which layer holds it, and where inside that layer.
+// Storing a position instead of the record keeps the index small and lets the
+// decoded layers stay the only copy of the records — copying them into a flat
+// slice was the largest allocation of the whole read.
+type recPos struct {
+	layer, rec int32
+}
+
 // gaps is step 3: which commits the layers already answer, and which the
 // enumeration named but no layer holds.
-func (h cachedHistory) gaps() (map[[20]byte]cache.Record, [][20]byte) {
-	// The record count is the map's size hint: without one, 100k [20]byte keys
-	// grow the map through every power of two and copy the whole table each time.
-	index := make(map[[20]byte]cache.Record, len(h.oids))
-	for _, l := range h.layers {
-		for _, r := range l.Records {
-			index[r.OID] = r
+func (h cachedHistory) gaps() (map[[20]byte]recPos, [][20]byte) {
+	index := make(map[[20]byte]recPos, len(h.oids))
+	for li := range h.layers {
+		recs := h.layers[li].Records
+		for ri := range recs {
+			if _, dup := index[recs[ri].OID]; dup {
+				continue
+			}
+			index[recs[ri].OID] = recPos{layer: int32(li), rec: int32(ri)}
 		}
 	}
 	var missing [][20]byte
@@ -256,24 +266,32 @@ func (h cachedHistory) fetch(missing [][20]byte) (map[[20]byte]vcs.RawCommit, bo
 	return fetched, true
 }
 
-// assemble is step 5: one record per enumerated commit, in the enumeration's
-// order. `fresh` is what the layers did not hold, so it is what must be written.
-func (e *env) assemble(h cachedHistory, index map[[20]byte]cache.Record, fetched map[[20]byte]vcs.RawCommit) (records, fresh []cache.Record, ok bool) {
-	records = make([]cache.Record, 0, len(h.oids))
-	for _, oid := range h.oids {
-		if r, hit := index[oid]; hit {
-			records = append(records, r)
-			continue
+// assemble is step 5: resolve every enumerated commit — from the layers or from
+// what git had to hand over — and feed the model as it goes. It walks the
+// enumeration backwards (oldest first, the order the builder wants) instead of
+// materialising a record list, an action list and a repo in three passes. `fresh`
+// is what the layers did not hold, so it is what must be written.
+func (e *env) assemble(h cachedHistory, index map[[20]byte]recPos, fetched map[[20]byte]vcs.RawCommit) (*model.Repo, []cache.Record, bool) {
+	b := engine.NewBuilder(e.rel())
+	fresh := make([]cache.Record, 0, len(fetched))
+	for i := len(h.oids) - 1; i >= 0; i-- {
+		oid := h.oids[i]
+		var rec cache.Record
+		if pos, hit := index[oid]; hit {
+			rec = h.layers[pos.layer].Records[pos.rec]
+		} else {
+			raw, hit := fetched[oid]
+			if !hit {
+				return nil, nil, false
+			}
+			rec = engine.RecordFromCommit(vcs.Commit{ID: hex.EncodeToString(oid[:]), Date: raw.Date, Message: raw.Message}, e.rel())
+			fresh = append(fresh, rec)
 		}
-		raw, hit := fetched[oid]
-		if !hit {
-			return nil, nil, false
+		if rec.Action {
+			b.Add(engine.ActionFromRecord(rec))
 		}
-		rec := engine.RecordFromCommit(vcs.Commit{ID: hex.EncodeToString(oid[:]), Date: raw.Date, Message: raw.Message}, e.rel())
-		records = append(records, rec)
-		fresh = append(fresh, rec)
 	}
-	return records, fresh, true
+	return b.Repo(), fresh, true
 }
 
 // settle is step 6: persist what this read had to compute anyway, then decide
@@ -282,7 +300,7 @@ func (e *env) assemble(h cachedHistory, index map[[20]byte]cache.Record, fetched
 // re-reading the directory to find it is what made every read decode the same
 // bytes twice.
 func (e *env) settle(h cachedHistory, fresh []cache.Record) {
-	if l := e.persist(h.dir, h.fp, fresh, h.oids[0]); l != nil {
+	if l := e.persist(h.dir, h.fp, fresh, [][20]byte{h.oids[0]}); l != nil {
 		h.layers = append(h.layers, *l)
 	}
 	if len(fresh) > 0 && len(fresh) == len(h.oids) && len(h.layers) > 1 {
@@ -308,7 +326,7 @@ func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip [20]b
 	}
 	e.pruneAged(dir, fp, layers)
 	layers = usable(layers, fp)
-	if l := e.persist(dir, fp, records, tip); l != nil {
+	if l := e.persist(dir, fp, records, [][20]byte{tip}); l != nil {
 		layers = append(layers, *l)
 	}
 	e.maybeMerge(cb, layers, dir, fp, len(records))
@@ -317,12 +335,12 @@ func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip [20]b
 // persist writes one layer and returns it, so a caller that just wrote a layer
 // can count it without re-reading the directory. Every error is swallowed: a
 // cache that cannot be written must not change what the command prints or what
-// it exits with.
-func (e *env) persist(dir string, fp [20]byte, records []cache.Record, tip [20]byte) *cache.Layer {
+// it exits with. An empty tip set means the layer claims no coverage, which is
+// what a partial (first screen) read can honestly say.
+func (e *env) persist(dir string, fp [20]byte, records []cache.Record, tips [][20]byte) *cache.Layer {
 	if len(records) == 0 {
 		return nil
 	}
-	tips := [][20]byte{tip}
 	name, err := cache.Write(dir, records, tips, fp)
 	if err != nil || name == "" {
 		return nil
@@ -387,18 +405,20 @@ func (e *env) mergeLayers(cb vcs.CacheBackend, layers []cache.Layer, dir string,
 	}
 }
 
-// actionLogCached prints the whole action stream from the record layer. It
-// returns handled=false when the cache cannot serve the request (off, cold,
-// damaged), in which case the caller streams from git as before.
+// actionLogCached prints the action stream from the record layer. It returns
+// handled=false when the cache cannot serve the request (off, cold, damaged), in
+// which case the caller streams from git as before.
 //
-// Enumeration is streamed, not materialised: git walks and we render in the same
-// pass, which is what makes the cache a win here at all. A miss (a commit newer
-// than the last layer) is fetched on the spot with one `git cat-file` process —
-// rare enough that a batch is not worth losing the overlap.
+// limit==0 prints the whole history: the enumeration comes from its snapshot or,
+// on a miss, from git as the oracle. limit>0 is the first screen: it only takes
+// a snapshot that already exists, because running git's full author-date walk to
+// print three rows is exactly what the streaming path does — and on a big
+// repository that walk costs several times a layer decode.
 //
-// --limit never comes here: a five-row first screen is cheaper straight from git
-// (46 ms) than decoding a layer for it.
-func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffer, enc *json.Encoder) (int, bool, error) {
+// A miss (a commit newer than the last layer) is fetched on the spot with one
+// `git cat-file` process — rare enough that a batch is not worth losing the
+// overlap.
+func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffer, enc *json.Encoder, limit int) (int, bool, error) {
 	cb, dir, fp, ok := e.cacheSite(backend)
 	if !ok {
 		return 0, false, nil
@@ -412,45 +432,93 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	if len(layers) == 0 {
 		return 0, false, nil
 	}
-	cached := 0
-	for _, l := range layers {
-		cached += len(l.Records)
-	}
-	index := make(map[[20]byte]cache.Record, cached)
-	for _, l := range layers {
-		for _, r := range l.Records {
-			index[r.OID] = r
+	index := make(map[[20]byte]recPos)
+	for li := range layers {
+		recs := layers[li].Records
+		for ri := range recs {
+			if _, dup := index[recs[ri].OID]; dup {
+				continue
+			}
+			index[recs[ri].OID] = recPos{layer: int32(li), rec: int32(ri)}
 		}
 	}
-	emitted := 0
-	var fresh []cache.Record
-	oids, ok := e.enumerateAuthorDate(cb)
+	var oids [][20]byte
+	if limit > 0 {
+		oids, ok = e.cachedEnum(enumAuthorDate)
+	} else {
+		oids, ok = e.enumerateAuthorDate(cb)
+	}
 	if !ok || len(oids) == 0 {
 		return 0, false, nil
 	}
-	for _, oid := range oids {
-		rec, hit := index[oid]
-		if !hit {
-			id := hex.EncodeToString(oid[:])
-			raw, ferr := cb.Commits([]string{id})
-			if ferr != nil || raw[id].Date.IsZero() {
+	emitted := 0
+	var fresh []cache.Record
+	// lookup answers one commit from the layer, falling back to git for a commit
+	// the layers do not hold yet.
+	lookup := func(oid [20]byte) (cache.Record, bool) {
+		if pos, hit := index[oid]; hit {
+			return layers[pos.layer].Records[pos.rec], true
+		}
+		id := hex.EncodeToString(oid[:])
+		raw, ferr := cb.Commits([]string{id})
+		if ferr != nil || raw[id].Date.IsZero() {
+			return cache.Record{}, false
+		}
+		rec := engine.RecordFromCommit(vcs.Commit{ID: id, Date: raw[id].Date, Message: raw[id].Message}, e.rel())
+		fresh = append(fresh, rec)
+		return rec, true
+	}
+	emit := func(rec cache.Record) error {
+		when := time.Unix(rec.Date, 0).In(time.FixedZone("", int(rec.TZ)*60))
+		return e.writeActionLogRow(hex.EncodeToString(rec.OID[:]), when, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc)
+	}
+	if limit > 0 {
+		// Resolve the rows before printing any of them: a row that cannot be
+		// resolved has to leave the caller free to fall back to git without
+		// duplicating what is already on stdout.
+		rows := make([]cache.Record, 0, limit)
+		for _, oid := range oids {
+			rec, hit := lookup(oid)
+			if !hit {
 				return 0, false, nil
 			}
-			rec = engine.RecordFromCommit(vcs.Commit{ID: id, Date: raw[id].Date, Message: raw[id].Message}, e.rel())
-			fresh = append(fresh, rec)
+			if !rec.Action {
+				continue
+			}
+			rows = append(rows, rec)
+			if len(rows) == limit {
+				break
+			}
+		}
+		for _, rec := range rows {
+			if werr := emit(rec); werr != nil {
+				return 0, true, werr
+			}
+		}
+		// The layer that gets written holds the newest records only, so it claims
+		// no tip: claiming HEAD would say it covers a history it only sampled.
+		if l := e.persist(dir, fp, fresh, nil); l != nil {
+			layers = append(layers, *l)
+		}
+		e.maybeMerge(cb, layers, dir, fp, len(oids))
+		return len(rows), true, nil
+	}
+	for _, oid := range oids {
+		rec, hit := lookup(oid)
+		if !hit {
+			return 0, false, nil
 		}
 		if !rec.Action {
 			continue
 		}
-		when := time.Unix(rec.Date, 0).In(time.FixedZone("", int(rec.TZ)*60))
-		if werr := e.writeActionLogRow(hex.EncodeToString(rec.OID[:]), when, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc); werr != nil {
+		if werr := emit(rec); werr != nil {
 			return emitted, true, werr
 		}
 		emitted++
 	}
 	// The first enumerated commit is the newest tip of HEAD's history; claiming it
 	// covers a subset of what HEAD covers, which is all the records prove.
-	if l := e.persist(dir, fp, fresh, oids[0]); l != nil {
+	if l := e.persist(dir, fp, fresh, [][20]byte{oids[0]}); l != nil {
 		layers = append(layers, *l)
 	}
 	// The merge ladder compares the layered records against the enumeration, not

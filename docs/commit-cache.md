@@ -687,13 +687,13 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 
 ## 结论（2026-10-29）
 
-**落地了什么**（git 后端，**默认开启**，`--no-cache` 可绕过）：
+**落地了什么**（git 后端，**默认开启**；缓存出问题用 `kiln cache clear` 重建）：
 
 - `internal/cache`：层格式（`KILNREC1`、词表指纹、字典序字符串表、按 OID 排序、SHA-1 trailer、文件名即内容哈希）、扫描/校验/原子写/按 OID 合并/Sweep；确定性编码 → 同输入同名 → 并发幂等。
-- 读路径：`Log` 路径（`graph` / `list` / `check` / `path` / `status` / `show`）枚举 + 查层 + `cat-file --batch` 补缺 + 顺手写；`action log` 全量走**流式枚举**（`EachOIDAuthorDate`）边枚举边查表边输出，`--limit` 保持直读。
+- 读路径：`Log` 路径（`graph` / `list` / `check` / `path` / `status` / `show`）枚举 + 查层 + `cat-file --batch` 补缺 + 顺手写；`action log` 全量走**流式枚举**（`EachOIDAuthorDate`）边枚举边查表边输出；`--limit` 有作者日序快照时走缓存（不 spawn git），没有快照才流式直读。
 - 写路径：读命令顺手写；`kiln cache gc` 是唯一的强制回收入口（按 `rev-list --all` 清理），与读路径共用同一个写层函数。
 - 自动 GC：扫描时删坏层；合并（层数 ≥64）时按"记录数 vs 枚举数"判定，有候选才跑可达性剪枝；**重写信号**（完整枚举全未命中且已有层）立刻合并 + 剪枝。
-- 开关：**默认开启**（后台行为）；`--no-cache` / `KILN_NO_CACHE` 是唯一例外；`kiln cache gc` 是唯一保留的命令。
+- 开关：**默认开启**（后台行为），没有关断开关；恢复入口是 `kiln cache clear`，强制回收是 `kiln cache gc`。
 
 **实测**（100k 合成仓，Windows，min of 5）：
 
@@ -757,3 +757,4 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 - 2026-10-29（同日，cache-recovery）：`--no-cache` / `KILN_NO_CACHE` 删除，缓存关断降为包内开关（只给测试）；用户面新增 `kiln cache clear`（删层 + 快照，下一次读用当前版本重建），`cache gc` 保留为日常回收。顺带修好配置种子的英文键漂移（`KILN_LANG=en` 写出的 `.kilnconfig.jsonc` 曾是中文）。
 - 2026-10-29（同日，cache-gc）：修自动 GC 的两处口径。`action log` 触发的合并改用 `len(oids)` 当 `visited`（此前用渲染行数，零动作仓永不剪枝）；`pruneEnums` 去掉没用到的 `kind` 参数，注释改成"总数 4 份"。回归测试先对旧代码验证失败。
 - 2026-10-29（同日，cache-gc-auto）：三档自动回收。tmp 文件超 1 小时、旧指纹层超 7 天在每次读扫描时顺手删（当前指纹的层不按年龄删）；不可达快照搭合并本来就要算的 `rev-list --all` 顺带清，成本 +0。三条测试先对旧行为验证失败。
+- 2026-10-30（cache-perf）：性能复核 + 四处优化。解码器改成字节游标 + 原地填记录（100k 层 45.5 → 15.4 ms，分配 2.10M → 0.20M），`Scan` 复用解码时算过的 SHA-1 校验文件名；`gaps` 索引改存 `{层, 位置}`，记录不再被拷进 `map`/`[]Record`；`engine.Builder` 把建模并成一趟，去掉 `[]Action` 与 `[]Record` 两次中转；`action log --limit` 有作者日序快照时走缓存、不 spawn git（无快照仍流式），部分枚举层不声明覆盖。100k warm 读 250 → 185 ms（进程内 146 → 89 ms），1k/10k 只降 2–7 ms（本来就在 20 ms 进程地板附近）。三个仓 × 10 条命令输出与旧二进制逐字节一致；`--limit` 无 git 可用性测试先对旧代码验证失败。详见 `docs/cache-perf.md`。

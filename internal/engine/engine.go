@@ -123,25 +123,17 @@ func ActionsAndRecordsFromCommits(commits []vcs.Commit, rel *model.RelationSet) 
 	return actions, records
 }
 
-// ActionsFromRecords is the cache-side twin of ActionsFromCommits: same fields,
-// same order (records are in newest-first enumeration order, actions are emitted
-// oldest first), so a cache hit and a full scan produce identical actions.
-func ActionsFromRecords(recs []cache.Record) []model.Action {
-	var out []model.Action
-	for i := len(recs) - 1; i >= 0; i-- {
-		r := recs[i]
-		if !r.Action {
-			continue
-		}
-		out = append(out, actionFrom(
-			hex.EncodeToString(r.OID[:]),
-			time.Unix(r.Date, 0).In(time.FixedZone("", int(r.TZ)*60)),
-			r.Subject,
-			FieldsFromRecord(r),
-			r.Unknown,
-		))
-	}
-	return out
+// ActionFromRecord rebuilds the action the views render from one stored record.
+// It is the record-side twin of the commit path's actionFrom, so a cache hit and
+// a full scan produce identical actions.
+func ActionFromRecord(r cache.Record) model.Action {
+	return actionFrom(
+		hex.EncodeToString(r.OID[:]),
+		time.Unix(r.Date, 0).In(time.FixedZone("", int(r.TZ)*60)),
+		r.Subject,
+		FieldsFromRecord(r),
+		r.Unknown,
+	)
 }
 
 // FieldsFromRecord rebuilds the trailer fields the action needs from a record.
@@ -178,28 +170,55 @@ func actionFrom(id string, date time.Time, subject string, f trailer.Fields, unk
 	}
 }
 
-// Build aggregates actions into a repository of issues.
-func Build(actions []model.Action, rel *model.RelationSet) *model.Repo {
-	repo := &model.Repo{Issues: map[string]*model.Issue{}}
-	for _, a := range actions {
-		p := repo.Issues[a.Issue]
-		if p == nil {
-			p = &model.Issue{ID: a.Issue}
-			repo.Issues[a.Issue] = p
-		}
-		p.Actions = append(p.Actions, a)
-		if a.Domain != "" {
-			p.Domain = a.Domain
-		}
-		p.Tags = appendUnique(p.Tags, a.Tags...)
+// Builder accumulates actions, oldest first, into the repository model. The cold
+// path and the cached path both go through it, so they cannot disagree about
+// which issue owns an action, what the issue's tags are, or how relations fold.
+type Builder struct {
+	rel    *model.RelationSet
+	issues map[string]*model.Issue
+}
+
+// NewBuilder starts an empty model.
+func NewBuilder(rel *model.RelationSet) *Builder {
+	return &Builder{rel: rel, issues: map[string]*model.Issue{}}
+}
+
+// Add files one action under its issue. Actions must arrive oldest first, which
+// is the order a reversed git log hands them over in.
+func (b *Builder) Add(a model.Action) {
+	p := b.issues[a.Issue]
+	if p == nil {
+		p = &model.Issue{ID: a.Issue}
+		b.issues[a.Issue] = p
 	}
+	p.Actions = append(p.Actions, a)
+	if a.Domain != "" {
+		p.Domain = a.Domain
+	}
+	p.Tags = appendUnique(p.Tags, a.Tags...)
+}
+
+// Repo finishes the model: chronological order inside each issue and the folded
+// relation view. Sorting lives here and only here, so every caller sees the same
+// order.
+func (b *Builder) Repo() *model.Repo {
+	repo := &model.Repo{Issues: b.issues}
 	for _, p := range repo.Issues {
 		sort.SliceStable(p.Actions, func(i, j int) bool {
 			return p.Actions[i].Date.Before(p.Actions[j].Date)
 		})
-		p.Relations = foldRelations(p, rel)
+		p.Relations = foldRelations(p, b.rel)
 	}
 	return repo
+}
+
+// Build aggregates actions into a repository of issues.
+func Build(actions []model.Action, rel *model.RelationSet) *model.Repo {
+	b := NewBuilder(rel)
+	for _, a := range actions {
+		b.Add(a)
+	}
+	return b.Repo()
 }
 
 // foldRelations computes an issue's outbound view: at most one relation per

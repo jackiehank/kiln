@@ -161,74 +161,89 @@ func Encode(records []Record, tips [][20]byte, fingerprint [20]byte) []byte {
 // magic, wrong layout, truncated body, mismatched checksum — is an error: the
 // caller ignores the layer rather than serving part of it.
 func Decode(data []byte) ([]Record, [][20]byte, [20]byte, error) {
-	var zero [20]byte
+	recs, tips, fp, _, err := DecodeWithSum(data)
+	return recs, tips, fp, err
+}
+
+// DecodeWithSum is Decode plus the body digest the trailer carried. Scan needs
+// that digest to check the file name, and hashing a multi-megabyte layer twice
+// per read is pure waste: the value is exactly what Name would hash again.
+func DecodeWithSum(data []byte) ([]Record, [][20]byte, [20]byte, [20]byte, error) {
+	var zero, sum [20]byte
 	if len(data) < headerFixed+trailerSize {
-		return nil, nil, zero, errors.New("layer too short")
+		return nil, nil, zero, zero, errors.New("layer too short")
 	}
 	body := data[:len(data)-trailerSize]
-	sum := sha1.Sum(body)
+	sum = sha1.Sum(body)
 	if !bytes.Equal(sum[:], data[len(data)-trailerSize:]) {
-		return nil, nil, zero, errors.New("layer checksum mismatch")
+		return nil, nil, zero, zero, errors.New("layer checksum mismatch")
 	}
 	if string(body[:8]) != Magic {
-		return nil, nil, zero, fmt.Errorf("layer magic %q, want %q", body[:8], Magic)
+		return nil, nil, zero, zero, fmt.Errorf("layer magic %q, want %q", body[:8], Magic)
 	}
-	r := bytes.NewReader(body[8:])
-	layout, err := readU16(r)
-	if err != nil {
-		return nil, nil, zero, err
+	r := &reader{b: body, pos: 8}
+	layout, ok := r.u16()
+	if !ok {
+		return nil, nil, zero, zero, errors.New("layer truncated in header")
 	}
 	if layout != Layout {
-		return nil, nil, zero, fmt.Errorf("layer layout %d, want %d", layout, Layout)
+		return nil, nil, zero, zero, fmt.Errorf("layer layout %d, want %d", layout, Layout)
 	}
 	var fp [20]byte
-	if _, err := r.Read(fp[:]); err != nil {
-		return nil, nil, zero, err
+	rawFP, ok := r.take(20)
+	if !ok {
+		return nil, nil, zero, zero, errors.New("layer truncated in header")
 	}
-	tipCount, err := readU16(r)
-	if err != nil {
-		return nil, nil, zero, err
+	copy(fp[:], rawFP)
+	tipCount, ok := r.u16()
+	if !ok {
+		return nil, nil, zero, zero, errors.New("layer truncated in header")
 	}
-	if tipCount > maxTips {
-		return nil, nil, zero, errors.New("layer tip count out of range")
+	if int(tipCount) > maxTips || int(tipCount) > len(body)/20 {
+		return nil, nil, zero, zero, errors.New("layer tip count out of range")
 	}
 	tips := make([][20]byte, tipCount)
 	for i := range tips {
-		if _, err := r.Read(tips[i][:]); err != nil {
-			return nil, nil, zero, err
+		b, ok := r.take(20)
+		if !ok {
+			return nil, nil, zero, zero, errors.New("layer truncated in tips")
 		}
+		copy(tips[i][:], b)
 	}
-	strCount, err := readU32(r)
-	if err != nil {
-		return nil, nil, zero, err
+	strCount, ok := r.u32()
+	if !ok {
+		return nil, nil, zero, zero, errors.New("layer truncated before string table")
 	}
-	if strCount > maxStrings {
-		return nil, nil, zero, errors.New("layer string count out of range")
+	if strCount > maxStrings || int(strCount) > len(body) {
+		return nil, nil, zero, zero, errors.New("layer string count out of range")
 	}
 	strs := make([]string, strCount)
 	for i := range strs {
-		s, err := readStr(r)
-		if err != nil {
-			return nil, nil, zero, err
+		s, ok := r.str()
+		if !ok {
+			return nil, nil, zero, zero, errors.New("layer truncated in string table")
 		}
 		strs[i] = s
 	}
-	recCount, err := readU32(r)
-	if err != nil {
-		return nil, nil, zero, err
+	recCount, ok := r.u32()
+	if !ok {
+		return nil, nil, zero, zero, errors.New("layer truncated before records")
 	}
-	recs := make([]Record, 0, recCount)
-	for i := uint32(0); i < recCount; i++ {
-		rec, err := readRecord(r, strs)
-		if err != nil {
-			return nil, nil, zero, err
+	// A record is at least its 20-byte id, so this bounds the allocation a
+	// corrupt count could ask for without rejecting any real layer.
+	if recCount > uint32(len(body)/20) {
+		return nil, nil, zero, zero, errors.New("layer record count out of range")
+	}
+	recs := make([]Record, recCount)
+	for i := range recs {
+		if !r.record(&recs[i], strs) {
+			return nil, nil, zero, zero, errors.New("layer truncated in record")
 		}
-		recs = append(recs, rec)
 	}
-	if r.Len() != 0 {
-		return nil, nil, zero, errors.New("layer has trailing bytes")
+	if r.pos != len(body) {
+		return nil, nil, zero, zero, errors.New("layer has trailing bytes")
 	}
-	return recs, tips, fp, nil
+	return recs, tips, fp, sum, nil
 }
 
 // Fingerprint identifies the vocabulary a layer was parsed with. A layer whose

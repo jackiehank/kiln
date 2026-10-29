@@ -173,22 +173,21 @@ func (e *env) actionLog(f flags) int {
 		}
 		return true
 	}
-	// No --limit means the whole history is going to be printed: on a warm cache
-	// that is an enumeration plus lookups, without printing 35 MB of messages.
-	if limit == 0 {
-		if n, handled, cerr := e.actionLogCached(backend, jsonl, &scratch, enc); handled {
-			if cerr != nil {
-				if isBrokenPipe(cerr) {
-					return 0
-				}
-				fmt.Fprint(e.errw, i18n.T("输出失败: %v\n", cerr))
-				return 1
+	// A warm cache answers both shapes: the whole stream (an enumeration plus
+	// lookups, without re-parsing 35 MB of messages) and the first screen (the
+	// rows come from the layer, when an author-date snapshot already exists).
+	if n, handled, cerr := e.actionLogCached(backend, jsonl, &scratch, enc, limit); handled {
+		if cerr != nil {
+			if isBrokenPipe(cerr) {
+				return 0
 			}
-			if n == 0 {
-				fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
-			}
-			return 0
+			fmt.Fprint(e.errw, i18n.T("输出失败: %v\n", cerr))
+			return 1
 		}
+		if n == 0 {
+			fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
+		}
+		return 0
 	}
 	err = stream.LogEach(func(c vcs.Commit) bool {
 		kept := emit(c)

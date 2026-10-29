@@ -235,9 +235,33 @@ func TestActionLogCachedMatchesTheStream(t *testing.T) {
 		t.Fatalf("cached action log jsonl differs:\n--- stream ---\n%s\n--- cache ---\n%s", coldJSON, got)
 	}
 
-	// --limit keeps streaming (a first screen is cheaper than decoding a layer).
+	// --limit takes the cached author-date enumeration, since the full walk it
+	// replaces is the expensive part on a big repository; the rows must still be
+	// the ones the stream prints.
 	if got, want := cacheOutput(t, "action", "log", "--limit", "2"), uncached(t, "action", "log", "--limit", "2"); got != want {
 		t.Fatalf("limited action log differs:\n--- cached ---\n%s\n--- cold ---\n%s", got, want)
+	}
+}
+
+// TestActionLogLimitServesTheFirstScreenWithoutGit pins what the --limit path is
+// for: once the author-date snapshot and the layer exist, the first screen comes
+// from the cache, so it works with no git process at all. Before the snapshot was
+// consulted, --limit always streamed, which needed a git child per invocation.
+func TestActionLogLimitServesTheFirstScreenWithoutGit(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "beta", "ask", "乙单", "2026-10-01T11:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+	// Warm the layer and both enumeration snapshots.
+	_ = cacheOutput(t, "list", "--json")
+	_ = cacheOutput(t, "action", "log", "--jsonl")
+	want := cacheOutput(t, "action", "log", "--limit", "2")
+
+	// With git unreachable, only a cache answer is possible.
+	t.Setenv("PATH", t.TempDir())
+	if got := cacheOutput(t, "action", "log", "--limit", "2"); got != want {
+		t.Fatalf("cached first screen differs:\n--- warm ---\n%s\n--- no git ---\n%s", want, got)
 	}
 }
 

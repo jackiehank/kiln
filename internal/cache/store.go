@@ -43,7 +43,12 @@ func Name(data []byte) string {
 	if len(data) < trailerSize {
 		return ""
 	}
-	sum := sha1.Sum(data[:len(data)-trailerSize])
+	return NameOfSum(sha1.Sum(data[:len(data)-trailerSize]))
+}
+
+// NameOfSum names a layer whose body digest is already known, so a reader that
+// verified the trailer does not hash the same bytes a second time.
+func NameOfSum(sum [20]byte) string {
 	return FilePrefix + hex.EncodeToString(sum[:]) + FileSuffix
 }
 
@@ -75,8 +80,8 @@ func Scan(dir string) ([]Layer, error) {
 			out = append(out, layer)
 			continue
 		}
-		recs, tips, fp, err := Decode(data)
-		if err == nil && Name(data) != name {
+		recs, tips, fp, sum, err := DecodeWithSum(data)
+		if err == nil && NameOfSum(sum) != name {
 			err = fmt.Errorf("layer name %q does not match its contents", name)
 		}
 		layer.Records, layer.Tips, layer.FP, layer.Err = recs, tips, fp, err
@@ -210,7 +215,7 @@ func Sweep(dir string, now time.Time) ([]string, error) {
 			if err != nil {
 				continue
 			}
-			if _, _, _, decErr := Decode(data); decErr != nil || Name(data) != name {
+			if _, _, _, sum, decErr := DecodeWithSum(data); decErr != nil || NameOfSum(sum) != name {
 				if err := os.Remove(path); err == nil {
 					removed = append(removed, name)
 				}

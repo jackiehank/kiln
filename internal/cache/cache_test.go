@@ -96,6 +96,44 @@ func TestDecodeRejectsCorruptionAndTruncation(t *testing.T) {
 	}
 }
 
+// TestDecodeRejectsEveryTruncationAndFlip walks every byte boundary. The decoder
+// gained an offset cursor and per-record in-place parsing, so this pins the one
+// property that rewrite must not weaken: there is no shortened or mutated layer
+// that decodes successfully.
+func TestDecodeRejectsEveryTruncationAndFlip(t *testing.T) {
+	fp := Fingerprint(model.DefaultRelationSet())
+	data := Encode(sampleRecords(), [][20]byte{oid(9)}, fp)
+	if _, _, _, err := Decode(data); err != nil {
+		t.Fatalf("the pristine layer must decode: %v", err)
+	}
+	for cut := 0; cut < len(data); cut++ {
+		if _, _, _, err := Decode(data[:cut]); err == nil {
+			t.Fatalf("a layer cut at byte %d must be rejected", cut)
+		}
+	}
+	for at := 0; at < len(data); at++ {
+		bad := append([]byte(nil), data...)
+		bad[at] ^= 0x01
+		if _, _, _, err := Decode(bad); err == nil {
+			t.Fatalf("a layer with byte %d flipped must be rejected", at)
+		}
+	}
+}
+
+// TestDecodeWithSumNamesTheLayer pins the shortcut Scan takes: the digest the
+// trailer already carries is the one the file name is made of.
+func TestDecodeWithSumNamesTheLayer(t *testing.T) {
+	fp := Fingerprint(model.DefaultRelationSet())
+	data := Encode(sampleRecords(), [][20]byte{oid(9)}, fp)
+	_, _, _, sum, err := DecodeWithSum(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := NameOfSum(sum), Name(data); got != want {
+		t.Fatalf("NameOfSum = %s, want %s", got, want)
+	}
+}
+
 func TestWriteIsIdempotentAndAtomic(t *testing.T) {
 	dir := t.TempDir()
 	fp := Fingerprint(model.DefaultRelationSet())

@@ -383,14 +383,22 @@ func pruneEnums(dir, keep string) {
 	}
 }
 
+// cachedEnum answers from a snapshot that already exists, without running git.
+// The first-screen path (`action log --limit`) uses it so a peek never pays for
+// the full walk it is trying to avoid.
+func (e *env) cachedEnum(kind enumKind) ([][20]byte, bool) {
+	dir, key, ok := e.enumSite()
+	if !ok {
+		return nil, false
+	}
+	return loadEnum(dir, kind, key)
+}
+
 // enumerateDefault answers "which commits, in git's default order" from the
 // snapshot, running git only on a miss — and then storing what git printed.
 func (e *env) enumerateDefault(cb vcs.CacheBackend) ([][20]byte, bool) {
-	dir, key, siteOK := e.enumSite()
-	if siteOK {
-		if oids, ok := loadEnum(dir, enumDefault, key); ok {
-			return oids, true
-		}
+	if oids, ok := e.cachedEnum(enumDefault); ok {
+		return oids, true
 	}
 	ids, err := cb.LogOIDs()
 	if err != nil || len(ids) == 0 {
@@ -404,7 +412,7 @@ func (e *env) enumerateDefault(cb vcs.CacheBackend) ([][20]byte, bool) {
 		}
 		oids = append(oids, oid)
 	}
-	if siteOK && e.enumKeyHeld(dir, key) {
+	if dir, key, siteOK := e.enumSite(); siteOK && e.enumKeyHeld(dir, key) {
 		storeEnum(dir, enumDefault, key, oids)
 	}
 	return oids, true
@@ -412,11 +420,8 @@ func (e *env) enumerateDefault(cb vcs.CacheBackend) ([][20]byte, bool) {
 
 // enumerateAuthorDate is the same for `action log`'s order.
 func (e *env) enumerateAuthorDate(cb vcs.CacheBackend) ([][20]byte, bool) {
-	dir, key, siteOK := e.enumSite()
-	if siteOK {
-		if oids, ok := loadEnum(dir, enumAuthorDate, key); ok {
-			return oids, true
-		}
+	if oids, ok := e.cachedEnum(enumAuthorDate); ok {
+		return oids, true
 	}
 	var oids [][20]byte
 	err := cb.EachOIDAuthorDate(func(id string) bool {
@@ -430,7 +435,7 @@ func (e *env) enumerateAuthorDate(cb vcs.CacheBackend) ([][20]byte, bool) {
 	if err != nil || len(oids) == 0 {
 		return nil, false
 	}
-	if siteOK && e.enumKeyHeld(dir, key) {
+	if dir, key, siteOK := e.enumSite(); siteOK && e.enumKeyHeld(dir, key) {
 		storeEnum(dir, enumAuthorDate, key, oids)
 	}
 	return oids, true

@@ -3,8 +3,6 @@ package cache
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
-	"io"
 	"sort"
 )
 
@@ -62,119 +60,136 @@ func putStringIndices(b *bytes.Buffer, ss []string, tab *table) {
 	}
 }
 
-func readU16(r *bytes.Reader) (uint16, error) {
-	var tmp [2]byte
-	if _, err := io.ReadFull(r, tmp[:]); err != nil {
-		return 0, err
-	}
-	return binary.LittleEndian.Uint16(tmp[:]), nil
+// reader walks a layer body by offset. Every read reports failure instead of
+// panicking or allocating, so a torn or truncated file is rejected at the first
+// byte that does not fit — the same contract the old bytes.Reader carried, at a
+// third of the allocations.
+type reader struct {
+	b   []byte
+	pos int
 }
 
-func readU32(r *bytes.Reader) (uint32, error) {
-	var tmp [4]byte
-	if _, err := io.ReadFull(r, tmp[:]); err != nil {
-		return 0, err
+// take returns the next n bytes, or false when the body ends first.
+func (r *reader) take(n int) ([]byte, bool) {
+	if n < 0 || r.pos+n > len(r.b) {
+		return nil, false
 	}
-	return binary.LittleEndian.Uint32(tmp[:]), nil
+	b := r.b[r.pos : r.pos+n]
+	r.pos += n
+	return b, true
 }
 
-func readStr(r *bytes.Reader) (string, error) {
-	n, err := readU16(r)
-	if err != nil {
-		return "", err
+func (r *reader) u16() (uint16, bool) {
+	b, ok := r.take(2)
+	if !ok {
+		return 0, false
 	}
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return "", err
-	}
-	return string(buf), nil
+	return binary.LittleEndian.Uint16(b), true
 }
 
-func readIndex(r *bytes.Reader, strs []string) (string, error) {
-	i, err := readU32(r)
-	if err != nil {
-		return "", err
+func (r *reader) u32() (uint32, bool) {
+	b, ok := r.take(4)
+	if !ok {
+		return 0, false
 	}
-	if int(i) >= len(strs) {
-		return "", errors.New("layer string index out of range")
-	}
-	return strs[i], nil
+	return binary.LittleEndian.Uint32(b), true
 }
 
-func readIndices(r *bytes.Reader, strs []string) ([]string, error) {
-	n, err := readU16(r)
-	if err != nil {
-		return nil, err
+// str reads a length-prefixed string with exactly one allocation.
+func (r *reader) str() (string, bool) {
+	n, ok := r.u16()
+	if !ok {
+		return "", false
+	}
+	b, ok := r.take(int(n))
+	if !ok {
+		return "", false
+	}
+	return string(b), true
+}
+
+// ref reads an index into the shared string table.
+func (r *reader) ref(strs []string) (string, bool) {
+	i, ok := r.u32()
+	if !ok || int(i) >= len(strs) {
+		return "", false
+	}
+	return strs[i], true
+}
+
+// refs reads a count followed by that many string-table indices.
+func (r *reader) refs(strs []string) ([]string, bool) {
+	n, ok := r.u16()
+	if !ok {
+		return nil, false
 	}
 	if n == 0 {
-		return nil, nil
+		return nil, true
 	}
-	out := make([]string, n)
-	for i := range out {
-		if out[i], err = readIndex(r, strs); err != nil {
-			return nil, err
+	out := make([]string, 0, n)
+	for i := 0; i < int(n); i++ {
+		s, ok := r.ref(strs)
+		if !ok {
+			return nil, false
 		}
+		out = append(out, s)
 	}
-	return out, nil
+	return out, true
 }
 
-func readRecord(r *bytes.Reader, strs []string) (Record, error) {
-	var rec Record
-	if _, err := io.ReadFull(r, rec.OID[:]); err != nil {
-		return rec, err
+// record decodes one record into dst, in place: the caller hands out a slot of
+// the output slice, so a record never has to escape to the heap on its own.
+func (r *reader) record(dst *Record, strs []string) bool {
+	head, ok := r.take(20 + 8 + 2 + 1)
+	if !ok {
+		return false
 	}
-	var tmp8 [8]byte
-	if _, err := io.ReadFull(r, tmp8[:]); err != nil {
-		return rec, err
-	}
-	rec.Date = int64(binary.LittleEndian.Uint64(tmp8[:]))
-	var tmp2 [2]byte
-	if _, err := io.ReadFull(r, tmp2[:]); err != nil {
-		return rec, err
-	}
-	rec.TZ = int16(binary.LittleEndian.Uint16(tmp2[:]))
-	flags, err := r.ReadByte()
-	if err != nil {
-		return rec, err
-	}
-	rec.Action = flags&1 != 0
+	copy(dst.OID[:], head)
+	dst.Date = int64(binary.LittleEndian.Uint64(head[20:]))
+	dst.TZ = int16(binary.LittleEndian.Uint16(head[28:]))
+	flags := head[30]
+	dst.Action = flags&1 != 0
 	sameSubject := flags&2 != 0
-
-	fields := []*string{&rec.Issue, &rec.Kind, &rec.Title, &rec.Subject, &rec.Domain, &rec.Scope, &rec.Target}
+	fields := []*string{&dst.Issue, &dst.Kind, &dst.Title, &dst.Subject, &dst.Domain, &dst.Scope, &dst.Target}
 	for _, f := range fields {
-		if *f, err = readIndex(r, strs); err != nil {
-			return rec, err
+		s, ok := r.ref(strs)
+		if !ok {
+			return false
 		}
+		*f = s
 	}
 	if sameSubject {
-		rec.Subject = rec.Title
+		dst.Subject = dst.Title
 	}
-	if rec.Refs, err = readIndices(r, strs); err != nil {
-		return rec, err
+	if dst.Refs, ok = r.refs(strs); !ok {
+		return false
 	}
-	if rec.Tags, err = readIndices(r, strs); err != nil {
-		return rec, err
+	if dst.Tags, ok = r.refs(strs); !ok {
+		return false
 	}
-	n, err := readU16(r)
-	if err != nil {
-		return rec, err
+	n, ok := r.u16()
+	if !ok {
+		return false
 	}
-	for i := uint16(0); i < n; i++ {
-		name, err := readIndex(r, strs)
-		if err != nil {
-			return rec, err
+	if n > 0 {
+		dst.Relations = make([]Rel, 0, n)
+		for i := 0; i < int(n); i++ {
+			name, ok := r.ref(strs)
+			if !ok {
+				return false
+			}
+			target, ok := r.ref(strs)
+			if !ok {
+				return false
+			}
+			dst.Relations = append(dst.Relations, Rel{Name: name, Target: target})
 		}
-		target, err := readIndex(r, strs)
-		if err != nil {
-			return rec, err
-		}
-		rec.Relations = append(rec.Relations, Rel{Name: name, Target: target})
 	}
-	if rec.Unrelate, err = readIndices(r, strs); err != nil {
-		return rec, err
+	if dst.Unrelate, ok = r.refs(strs); !ok {
+		return false
 	}
-	if rec.Unknown, err = readIndices(r, strs); err != nil {
-		return rec, err
+	if dst.Unknown, ok = r.refs(strs); !ok {
+		return false
 	}
-	return rec, nil
+	return true
 }

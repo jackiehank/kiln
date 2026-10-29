@@ -1,105 +1,110 @@
-# issue: cache-perf — 缓存性能复核：warm 读的钱花在哪，还值不值得再优化
+# issue: cache-perf — 缓存性能复核：warm 读的钱花在哪，优化到哪
 
 - **domain**：tooling
 - **关联**：relates-to `commit-cache`、`cache-gc`、`cache-gc-auto`
 
 ## 结论
 
-**小仓（≤10k 提交）已经到底了，没有优化空间；大仓（100k）还有一倍左右，但只在 100k 这种尺寸上才看得见。**
+**≤10k 提交的仓本来就在进程地板附近（20 ms 启动 + 十几毫秒读），没有可优化的空间；100k 提交的仓 warm 读从 250 ms 降到 185 ms（−26%），进程内工作从 146 ms 降到 89 ms（−39%），分配从 313 MB / 254 万次降到 114 MB / 54 万次。**
 
-- 1k：warm 读 **33 ms**，其中 **20 ms 是进程启动地板**、~8 ms 是 kiln 自身启动（配置/vocab），读本身只占 5 ms。
-- 10k：warm **50 ms**，读本身 ~22 ms。
-- 100k：warm **250 ms**，进程内工作 **146 ms**。三处可再压缩：解码 45.5→15.4 ms（**已用原型验证，等价 + 抗损坏**）、`gaps`/`assemble` 索引 30→24 ms（已用微基准验证）、「按枚举顺序直接建 issue」预计再省 20–25 ms（未验证）。
-- 缓存相对无缓存仍是 3.8–4.6×；100k 时 warm 读（250 ms）≈ 单次 `git log --format=%H`（234 ms）——缓存把「全量解析提交信息」换成了「全量解码记录」。
+四处改动（都已落地）：
 
-**建议先落地解码重写**（收益 30 ms@100k，零语义变化，验证成本低），索引与引擎合并作为第二档，等确实有 100k 级仓库的诉求再做。
-
-## 测量方法
-
-- 合成仓用 `git fast-import` 生成 1k / 10k / 100k 提交，每 4 个提交 1 个无 trailer，每个 issue 4 个动作；每提交只有一个单行改动。
-- 端到端用 `Process.Start` 计时（含进程地板），每项 6–10 次取中位数；机器上另有 qemu 常驻，单次波动 ±10%，所以只看中位数。
-- 进程内用 Go 基准与 `pprof`，按 `loadCached` 的六个步骤分别计时。
-- 100k 层 12.0 MB（120 B/条）；kiln 自己的 438 条是 101 KB（**231 B/条**）——真实仓的记录更胖，所以下面 100k 的数字对真实仓是**偏乐观**的下界。
-
-## 端到端（中位数，ms）
-
-| 提交数 | 冷（clear 后首次） | warm | 单次 `git log --format=%H` | 冷/热 |
-| --- | --- | --- | --- | --- |
-| 1k | 124 | 33 | 56 | 3.8× |
-| 10k | 211 | 50 | 96 | 4.2× |
-| 100k | 1141 | 250 | 234 | 4.6× |
-
-冷跑含写层；`git log` 一列是「完全没有缓存」时的枚举下界，真实无缓存路径还要加解析与建模型（100k 约 1.1 s）。
-
-进程地板（同一台机器，`Process.Start` 计时）：空 Go 程序 **20.4 ms**，`kiln help` **28.1 ms**，`kiln list`@1k **33 ms**。所以 1k 仓的 33 ms 里只有 5 ms 是读。
-
-## 100k warm 读的 146 ms 花在哪（进程内）
-
-| 阶段 | ms | 说明 |
+| 改动 | 位置 | 收益（100k） |
 | --- | --- | --- |
-| `cache.Scan` | 53 | 读 12 MB（4.2）+ SHA-1 校验（5.2）+ 解码（45.5） |
-| 枚举快照 | 1 | 读 2 MB 快照 + CRC |
-| `gaps` | 19 | 建 `map[[20]byte]Record` + 查缺口 |
-| `assemble` | 31 | 按枚举顺序把记录取出来 |
-| `engine` | 42 | `ActionsFromRecords` 25.8 + `Build` 29.3 |
-| 合计 | 146 | |
+| 解码器改成字节游标 + 原地填记录 | `internal/cache` | 45.5 → 15.4 ms |
+| 索引存「层 + 位置」而不是记录本身 | `internal/cli/cache.go` | 省掉一次 28 MB 的记录拷贝 |
+| 建模并成一趟（`engine.Builder`），去掉 `[]Action` 中转 | `internal/engine` | `assemble + Build` 73 → ~40 ms |
+| `action log --limit` 有快照时走缓存 | `internal/cli` | 1k/10k 约 −50%，100k −18%（少一个 git 进程） |
 
-端到端 250 − 进程内 146 − 地板 20 ≈ **84 ms** 落在全新进程的堆增长/内存触碰与 5.3 MB JSON 输出上。证据是 **`GOGC=400` 与默认无差别**（252.7 vs 256.0 ms）：瓶颈是分配**总量**（100k 一次读分配 **312 MB / 254 万次**），不是 GC 频率。
+`kiln cache gc` / `cache clear` / 冷路径 / 层格式都没动；30 个命令 × 3 个仓的输出与旧二进制逐字节一致。
 
-分配大户（每次 warm 读）：`ActionsFromRecords` 103 MB、`cache.Decode` 81 MB、`engine.Build` 40 MB、`gaps` 35 MB、`assemble` 28 MB。
+## 端到端（中位数，ms；同一台机器交替测量旧/新二进制）
 
-## 三处可优化
+| 场景 | 旧 | 新 | 变化 |
+| --- | --- | --- | --- |
+| 100k `list` | 262.8 | 185.2 | −30% |
+| 100k `list --json` | 251.3 | 185.1 | −26% |
+| 100k `status` | 253.9 | 183.4 | −28% |
+| 100k `show ISS-00001` | 264.0 | 192.4 | −27% |
+| 100k `action log --jsonl` | 305.6 | 263.9 | −14% |
+| 100k `action log --limit 3` | 101.5 | 83.2 | −18% |
+| 10k `list --json` | 51.5 | 43.8 | −15% |
+| 10k `action log --limit 3` | 131.6 | 54.1 | −59% |
+| 1k `action log --limit 3` | 98.7 | 49.2 | −50% |
+| 本仓（438 提交）`action log --limit 3` | 98.9 | 49.1 | −50% |
 
-### 1. 解码重写（已原型验证）
+冷路径（`cache clear` 后第一次读，含全量 `git log`、解析与写层）：100k **1095 ms**、10k 221 ms、1k 124 ms——与改前持平，因为它走的是解析器不是解码器。
 
-现状 `cache.Decode` 走 `bytes.Reader` + `io.ReadFull`：每个 u16/u32 都把栈上数组逃逸成一次分配（每次读 210 万次分配里有 33 万来自 `readU16`/`readU32`），每条记录再从 `readRecord` 里逃逸一次。
+## 钱原来花在哪（100k warm，进程内）
 
-改成「字节游标 + 原地填 `recs[i]` + 字符串一次分配」后，同一份数据的实测：
+改前 146 ms，改后 89 ms：
 
-| 层 | 现状 | 重写后 |
+| 阶段 | 改前 | 改后 | 说明 |
+| --- | --- | --- | --- |
+| `cache.Scan` | 53 | ~26 | 读 12 MB（4.2）+ SHA-1 校验（5.2）+ 解码 |
+| 枚举快照 | 1 | 1 | 读 2 MB 快照 + CRC |
+| `gaps` | 19 | ~6 | 建索引 + 查缺口（改成位置索引后不再拷记录） |
+| 取记录 + 建模 | 31 + 42 | ~55 | 合成一趟，直接喂 `engine.Builder` |
+| 合计 | 146 | 89 | |
+
+端到端 185 − 进程内 89 − 地板 20 ≈ 76 ms 仍在「全新进程的堆增长 / 内存触碰」上：`GOGC=400` 与默认无差别（252.7 vs 256.0），说明瓶颈是分配**总量**；改完 GC 次数从 10 次降到 5 次、峰值堆从 174 MB 降到 120 MB。
+
+## 改了什么
+
+### 1. 解码器（`internal/cache`）
+
+旧的 `Decode` 用 `bytes.Reader` + `io.ReadFull`：每个 u16/u32 都把栈上数组逃逸成一次分配（每次读 210 万次分配里 33 万来自这两个函数），每条记录再从 `readRecord` 里逃逸一次。
+
+新的 `reader` 是纯偏移游标：`take(n)` 越界返回 false 而不是 panic，`str()` 用 `string(body[pos:pos+n])` 一次分配，`record()` 直接把字段写进 `recs[i]`。同一份 12 MB / 10 万条的层：
+
+| | 旧 | 新 |
 | --- | --- | --- |
-| 100k 合成层 12 MB | 45.5 ms · 2.10M 分配 · 76.6 MB | **15.4 ms · 0.20M · 36.1 MB** |
-| 真仓 438 条 101 KB | 312 µs | **170 µs** |
+| 耗时 | 45.5 ms | **15.4 ms** |
+| 分配 | 2.10M 次 / 76.6 MB | **0.20M 次 / 36.1 MB** |
 
-正确性验证：与旧解码器逐字段 `DeepEqual`（12 MB 层 + 真仓三个层）、7 处截断、5 处位翻转，两边**同时拒绝/同时接受**，结果一致。
+`Scan` 原先在 `Decode` 之后又调 `Name(data)` 重算一遍 SHA-1（12 MB 再 5 ms），现在 `DecodeWithSum` 把已经算过的摘要返回，`NameOfSum` 直接用它校验文件名。
 
-另外 `cache.Scan` 在 `Decode` 之后又调 `Name(data)` 算了一遍 SHA-1 来校验文件名——同一份 12 MB 算了两次（每次 ~5 ms）。让 `Decode` 把它已算的和返回出来即可省掉一次。
+### 2. 位置索引（`internal/cli/cache.go`）
 
-### 2. `gaps` / `assemble` 换成 int32 索引（已用微基准验证）
+`gaps` 原来返回 `map[[20]byte]cache.Record`：每次查找拷出整个 280 B 的记录，`assemble` 再把它们拷进 `[]Record`。现在索引是 `map[[20]byte]recPos{layer, rec}`，记录只有解码层里那一份，取用时按下标读。
 
-`map[[20]byte]Record` 每次查找都要拷出整个 `Record`（280 B）。换成 `map[[20]byte]int32` + 平铺 `[]Record`，同样的建索引 + 取记录：**30.4 → 23.7 ms**。
+### 3. 建模并成一趟（`internal/engine`）
 
-### 3. 按枚举顺序直接建 issue（未验证，预计 20–25 ms）
+原来记录要走三遍：`assemble` 造 `[]Record`（28 MB）→ `ActionsFromRecords` 造 `[]Action`（23 MB）→ `Build` 再拷进每个 issue 的动作切片。
 
-现在记录要走两遍中转：`assemble` 造 `[]Record`（28 MB）→ `ActionsFromRecords` 造 `[]Action`（23 MB）→ `Build` 再拷进每个 issue 的动作切片。合并成一趟（先数一遍每条 issue 多少动作，再精确分配、边查索引边填）可以去掉前两个中转，估计 `assemble + engine` 从 73 ms 降到 45–50 ms。
+`engine.Builder`（`NewBuilder` / `Add` / `Repo`）把「哪个 issue、什么顺序、怎么折叠关系」收在一处；`assemble` 从枚举末尾往前走（最旧在前，正是 `Builder` 要的顺序），查一条喂一条。`Build(actions, rel)` 变成 `Builder` 的薄封装，冷路径与缓存路径仍然只有一套语义。`ActionFromRecord` 顶替了 `ActionsFromRecords`。
 
-代价：要改 `loadCached` 的「六步」结构，并且需要新的等价性测试（动作顺序、`Build` 的稳定排序语义都不能变）。收益与风险都集中在 100k 这一档，**建议先不做**。
+### 4. `action log --limit` 走缓存
 
-## 顺带发现：`action log --limit` 的「首屏更便宜」前提已经过期
+旧注释的理由是「5 行首屏走 git 更便宜（46 ms）」。实测首屏的流式路径在 1k 就要 ~99 ms、10k ~132 ms，且**必须 spawn 一个 git**；作者日序枚举本身在 100k 要 630–680 ms，流式读靠 kill 提前停，kill/回收仍要 ~50 ms。
 
-`action.go` 的注释说「5 行首屏直接从 git 走更便宜（46 ms），不走缓存」。实测：
+现在的规则：`--limit N` 先找**已经存在的**作者日序快照，有就解码层、按枚举顺序取前 N 条动作（不跑 git）；没有就退回流式。行先解析完再打印，这样任何中途失败都能干净地回落，不会打一半又重打一遍。这类部分枚举层**不声明覆盖**（`tips` 为空），与设计文档里「部分枚举只贡献记录」的约定一致。
 
-| 场景 | `action log --limit 3` | warm 全量 `action log --jsonl` |
-| --- | --- | --- |
-| kiln 本仓（438 提交） | 107 ms | 32 ms |
-| 10k | 134 ms | 57 ms |
-| 100k | 441 ms | 310 ms |
+验证：`TestActionLogLimitServesTheFirstScreenWithoutGit` 在 PATH 里去掉 git 后仍能输出首屏——旧代码在同一条测试里报 `exec: "git": executable file not found`。
 
-原因是 `--limit` 用的是 `git log --author-date-order` 流式读，读到 N 行就 kill；作者日序枚举本身在 100k 要 630–680 ms，而 Windows 上 kill 只杀到 shim，孙进程还要跑完（`WaitDelay` 兜底），等于付掉大半成本。缓存里如果有作者日序快照，`--limit` 只需 1 ms 枚举 + 解码，比 git 快得多；没有快照时仍走 git。这是 UI 体验问题，与缓存正确性无关，可以单独做。
+## 验证
 
-## 不建议
+1. **逐字节一致**：用 HEAD 构建的旧二进制与新二进制，在 100k 合成仓、1k 合成仓、本仓三个仓库上跑 `list`、`list --json`、`status`、`check`、`graph --json`、`action log`、`action log --jsonl`、`action log --limit 5`、`path --all --json`、`show`，共 30 组，全部相同。
+2. **解码器的拒绝面**：`TestDecodeRejectsEveryTruncationAndFlip` 穷举每一个截断点和每一个位翻转，全部必须被拒绝（旧实现只有两处抽查）。
+3. **全测试 + 黄金网**：`go test ./...` 绿，golden 未重录。
+4. **新测试先证伪**：`TestActionLogLimitServesTheFirstScreenWithoutGit` 对旧代码跑过、确认失败；解码器与索引改动由既有的「缓存/非缓存逐字节对照」测试兜底。
+5. 真仓复查：`kiln list`、`kiln action log --limit 3`、`kiln cache gc` 均正常。
 
-| 方向 | 为什么不做 |
+## 还不做（重估后仍不划算）
+
+| 方向 | 为什么 |
 | --- | --- |
-| 调 `GOGC` | 实测无差别，瓶颈是分配量不是 GC 频率 |
-| 层格式 v2（OID 偏移表） | 省下的只是 4.2 ms 的读文件；换来格式版本、迁移与两套解析 |
-| mmap 层文件 | 省 ~4 ms，Go 标准库无 mmap，要平台代码 |
+| 预分配每个 issue 的动作切片 | 要多扫一遍 10 万条（~4 ms）换掉 ~15 MB 的增长拷贝；全新进程里可能值 5–10 ms，但收益不稳，留作后手 |
+| 层格式 v2（OID 偏移表） | 只有「只要几条记录」的命令需要，省的是解码；换格式版本与迁移，现在解码已降到 15 ms |
+| mmap 层文件 | 省 ~4 ms 读文件；Go 标准库无 mmap，要平台代码 |
 | 并行解码 | 记录变长、无偏移表，等价于格式 v2 |
-| 回到纯 git 路径 | warm 读已经比单次 `git log --format=%H` 快（33 vs 56、50 vs 96） |
+| `git rev-list` 代替 `git log` 做枚举 | 两轮测量互相矛盾（221/277 vs 234/310），差异在噪声内，不碰 |
 
-## 若落地，验收口径
+## 剩余观察
 
-1. 解码重写：`go test ./...` 与全部 golden 不变；100k warm 从 250 → ~215 ms。
-2. 索引：100k → ~208 ms。
-3. 引擎合并（若做）：100k → ~185 ms；1k/10k 数字不变（本来就在地板）。
-4. 每一步都在 100k 上实测端到端，不以微基准相加代替。
+- 100k 时 warm 读 185 ms 里仍有 ~76 ms 是全新进程的堆成本（分配量决定），继续要压就得动「模型本身占多大」，不是缓存格式的问题。
+- 提交后第一次读仍要付一次 `git log --format=%H`（100k 约 230 ms）；快照按 HEAD 寻址，这是设计上的取舍，没动。
+
+## 复现方法
+
+合成仓用 `git fast-import` 生成 1k / 10k / 100k 提交（每 4 个提交 1 个无 trailer，每 4 个动作一个 issue）；端到端用 `Process.Start` 计时、每项 8–10 次取中位数；进程内用 `go test -bench` + `pprof`。
