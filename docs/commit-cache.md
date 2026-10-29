@@ -55,6 +55,61 @@
 
   所以它只能当"快路径 + 回退"，不能直接换掉 `%B`。反过来看，这个洞恰好支持本 issue 的立场：**解析语义应该留在 kiln 里**，缓存存的应该是 kiln 的解析结果，而不是把解析外包给 git 的 `%(trailers)`。
 
+## collect（2026-10-29）：git 怎么区分"存储"与"计算"
+
+> 依据：[git-commit-graph](https://git-scm.com/docs/git-commit-graph)、[commit-graph 格式](https://git-scm.com/docs/commit-graph-format)、[racy-git](https://git-scm.com/docs/racy-git)、[bitmap-format](https://git-scm.com/docs/bitmap-format)。本机 git 2.55.0。
+
+### 1. 两个平面
+
+| 平面 | git 里的东西 | 特点 |
+| --- | --- | --- |
+| 真相 | object db（commit = tree + parents + author/committer + message）、refs、index 里的 path→OID | 内容寻址、不可变；只被新建覆盖，不被"更新" |
+| 加速 | commit-graph、reachability bitmap、multi-pack-index、`.rev`、index 的 stat 缓存、untracked cache、fsmonitor | 全可删可重建；删掉只变慢，不改变任何答案 |
+
+index 是两栖的：`path→OID` 是真相（暂存区），`stat` 信息是加速。
+
+### 2. commit-graph：把"提交自带的事实"和"算出来的事实"放进同一个文件
+
+每条提交存：OID、父提交（positional 下标）、root tree OID、提交时间、generation number（拓扑层级），可选再加 corrected commit date（GDA2）、**changed-paths Bloom filter**（BIDX/BDAT）、以及分层用的 BASE。也就是说：
+
+- **父提交 / 树 / 时间**是"提交里本来就有的"，复制过来只为加速遍历；
+- **generation number / corrected commit date / Bloom filter** 是**算出来的**，git 照样缓存——这正是"计算的那部分也可以缓存"的先例。
+
+关键在**键**：这些派生数据以 commit OID 为键，而 OID 不可变 → **永远不会过期**。bitmap 同理，以 tip 提交为键：给某个 tip 算的可达性集合对该 tip 恒真，tip 一变就不用它。
+
+### 3. 失效机制（可以直接抄的五条）
+
+1. **内容寻址**：键不可变 → 不需要失效逻辑，只需要 GC。
+2. **缺失即正常**：commit-graph 不记录"覆盖到哪"，它就是"没有更新的提交"。实测：写完 graph 再提交，`git rev-list --count HEAD` 仍 4、`git log` 仍 4 行、`git commit-graph verify` 仍 exit 0——**陈旧只变慢，不变错**，缺的提交回落到对象库按需读。
+3. **自校验文件名**：split 层的文件名 = 去掉尾部 trailer 的 SHA-1 = 它自己的 trailer。实测本仓三层全部成立（`8a169f2…` / `8cc7b5f…` / `eaf71be…`），所以内容被截断或篡改可以靠名字发现。
+4. **结构版本靠换 id，不迁移**：GDA2 / GDO2 之所以带 "2"，是因为老版本写过错的 GDAT / GDOV；新 git 直接忽略旧 chunk 重写。对 kiln 的含义：格式一变就换 magic / version，旧文件当没有。
+5. **元数据 + 可疑才验**（index / racy-git）：先比 stat（mode、mtime、ctime、uid、gid、ino、size），不一致才看内容；写入时若条目"racy"（mtime 不早于 index 自身）就把 size 截成 0，强制下次重验。经典的"便宜判断 + 贵兜底"。
+
+还有一条**边界**：replace object / graft 一出现，git 直接关掉 commit-graph 的读写——语义被外部改写时缓存自动退场。kiln 的类比是**改关系词表**：槽位与强度变了，折叠就不再是同一个函数，所以缓存必须带词表指纹。
+
+### 4. 分层的工程策略（本仓正在用）
+
+`--split` 把 commit-graph 写成**不可变的一层层**：新提交进新的 tip 层，`commit-graph-chain` 列出层哈希；tip 超过前一层 2 倍（`--size-multiple=2` 默认）或超过 `--max-commits` 就合并；`--expire-time` 删旧层；`--split=no-merge` / `replace` 是极端档。本仓现在正好三层（7,164 / 27,392 / 14,104 字节）。
+
+### 5. jj 是同一形态
+
+jj 也把索引存成内容寻址的不可变片段：`.jj/repo/index/segments/<hash>`（本机 jj 0.45.1 实测），外加 `op_links/`。名字不同、语义相同：**追加不可变片段，由读取方归并**。jj 明说内部格式会变，所以只能学形态，不能读它的文件。
+
+### 6. 对 kiln 的直接推论
+
+1. **枚举与取属性分开**。枚举只要 OID 列表——`git rev-list HEAD` 只走拓扑、不解消息；属性靠 `OID → record` 查缓存，缺的才去读 body。实测本仓：`rev-list` 15,211 B / 66.2 ms，`--format=%H%x00%aI` 24,857 B，带 body 157,633 B（**10×**）。这样"新鲜度"问题自然消失：**枚举永远来自 rev-list，缓存只回答属性**，rebase / amend 留下的不可达记录根本不会被枚举到，最多占地方等 GC。
+2. **缓存文件自校验**：文件名或头部存内容 hash，对不上就当没有（照抄 commit-graph 的 trailer 约定）。
+3. **派生结果可以缓存，但键要装下全部输入**。某 issue 的折叠路径 = f(它的动作 OID 序列, 词表指纹)；键一变就是新条目，旧条目自然作废——不需要"失效逻辑"，只需要 GC。generation number / bitmap 就是这么活的。
+4. **但默认先不缓存派生结果**。折叠只要 ~10 ms（本仓），而派生缓存会把"命中与否字节一致"从天然成立变成需要证明。等派生本身变贵（100k 上的 `check` 规则之类）再说。
+5. **合并策略直接借 `size-multiple=2`**：记录层按"新增超过已有 2 倍就合并"来管，比"最多留 N 个文件"好推理。
+
+### 7. 由此新增的问题
+
+10. **枚举也交给 git 吗**：`rev-list` 在"有缓存"和"没缓存"两条路径上都要跑（它便宜但非零）。这会不会让"一个提取层两个数据源"变成三处？还是把它当成提取层的第一步，所有路径共用？
+11. **派生缓存做不做**：做的话键 = (动作 OID 序列, 词表指纹)；不做的话，100k 上折叠的真实耗时得先量出来，别凭"本仓 10 ms"外推。
+12. **层合并策略**：照抄 `size-multiple=2` + expire，还是简化成"最多 N 层、超过就全量重写"？
+13. **还没量到的**：`git rev-list` 在 100k 的耗时（本仓 66 ms 里 ~60 ms 是进程启动，比例不可外推）；逐条 `git log -1 --format=%B <oid>` 补缺口 vs 一次 `git cat-file --batch`；jj 侧没有 `rev-list` 等价物（枚举要靠 `jj log --no-graph -r 'all()'`，而它本来就不增量）。
+
 ## 要回答的问题
 
 1. **触发条件**：照 `perf-audit` 的（1k+ issue 或 `path --all` >10 MB），还是提前到"有人抱怨慢"？谁来认领这个判断？
@@ -78,3 +133,4 @@
 ## 记录
 
 - 2026-10-29：由"总流扫的时候顺手落缓存"的想法开的条目。**现在不建**——今天缓存是净亏（进程启动 46–62 ms，log 边际约 20 ms），触发条件沿用 `perf-audit`（1k+ issue 或 `path --all` >10 MB）。先记下设计前提（hash 键、只增不改、损坏退化为全扫）与两个更便宜的先行项（commit-graph、`%(trailers)` 快路径）。
+- 2026-10-29（同日）：收集 git 自己的做法（§collect）。要点：git 用"内容寻址 + 缺失即正常 + 自校验文件名 + 换 chunk id 不迁移 + stat 可疑才验"这五条做到**陈旧只变慢不变错**；它确实缓存计算出来的东西（generation number、corrected commit date、changed-paths Bloom filter、bitmap），前提是键装下全部输入且缺失就回退。对 kiln 的直接结论：**枚举走 `rev-list`、缓存只回答属性**，于是不需要"新鲜度"判断；缓存文件自校验；派生结果可缓存但默认先不缓存。
