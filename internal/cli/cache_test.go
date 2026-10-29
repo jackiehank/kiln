@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackiehank/kiln/internal/cache"
 )
@@ -291,6 +292,35 @@ func TestCacheGCDropsUnreachableRecords(t *testing.T) {
 	}
 	if got := cacheOutput(t, "list", "--json"); got != afterAmend {
 		t.Fatalf("gc changed the output:\n--- before ---\n%s\n--- after ---\n%s", afterAmend, got)
+	}
+}
+
+func TestCacheGCSweepsTornTempFiles(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	_ = cacheOutput(t, "list", "--json")
+
+	torn := filepath.Join(recordsPath(dir), "layer-"+strings.Repeat("0", 40)+".rec.tmp-4242")
+	if err := os.WriteFile(torn, []byte("half a layer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(torn, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// A temp file a writer might still be using must survive the sweep.
+	live := filepath.Join(recordsPath(dir), "layer-"+strings.Repeat("1", 40)+".rec.tmp-4243")
+	if err := os.WriteFile(live, []byte("in flight"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheOutput(t, "cache", "gc")
+	if _, err := os.Stat(torn); !os.IsNotExist(err) {
+		t.Fatalf("gc must sweep a stale temp file: %v", err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("gc must not touch a fresh temp file: %v", err)
 	}
 }
 

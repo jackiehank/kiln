@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
@@ -178,7 +179,7 @@ func enumInvariant(common string) ([20]byte, bool) {
 	if _, err := os.Stat(filepath.Join(common, "info", "grafts")); err == nil {
 		return [20]byte{}, false
 	}
-	if entries, err := os.ReadDir(filepath.Join(common, "refs", "replace")); err == nil && len(entries) > 0 {
+	if found, ok := replaceRefs(common); !ok || found {
 		return [20]byte{}, false
 	}
 	h := sha1.New()
@@ -192,6 +193,29 @@ func enumInvariant(common string) ([20]byte, bool) {
 	var sum [20]byte
 	copy(sum[:], h.Sum(nil))
 	return sum, true
+}
+
+// replaceRefs reports whether the repository has any replace ref, loose or
+// packed. git applies them while walking history, so a snapshot taken without
+// one is wrong the moment one appears — and pack-refs moves the loose file into
+// packed-refs, where a directory listing cannot see it. ok=false means the state
+// could not be read.
+func replaceRefs(common string) (found, ok bool) {
+	entries, err := os.ReadDir(filepath.Join(common, "refs", "replace"))
+	switch {
+	case err == nil && len(entries) > 0:
+		return true, true
+	case err == nil, os.IsNotExist(err):
+	default:
+		return false, false
+	}
+	data, err := os.ReadFile(filepath.Join(common, "packed-refs"))
+	if err != nil {
+		return false, os.IsNotExist(err)
+	}
+	// A ref name cannot contain a space, so the bare substring is precise enough
+	// and avoids splitting a file that can hold every tag in the repository.
+	return bytes.Contains(data, []byte("refs/replace/")), true
 }
 
 // enumSite resolves where snapshots live and what one for this worktree must be
@@ -278,11 +302,19 @@ func enumDecode(data []byte, kind enumKind, key enumKey) ([][20]byte, bool) {
 
 // loadEnum reads the snapshot for this key, if there is a sound one.
 func loadEnum(dir string, kind enumKind, key enumKey) ([][20]byte, bool) {
-	data, err := os.ReadFile(enumPath(dir, kind, key))
+	path := enumPath(dir, kind, key)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
 	}
-	return enumDecode(data, kind, key)
+	oids, ok := enumDecode(data, kind, key)
+	if !ok {
+		// A torn or bit-rotted snapshot can never be used again. Dropping it lets
+		// this miss rebuild it, instead of every later read paying a git process
+		// for a file that will never decode.
+		_ = os.Remove(path)
+	}
+	return oids, ok
 }
 
 // storeEnum writes a snapshot and prunes older ones of the same kind. Every
@@ -293,7 +325,9 @@ func storeEnum(dir string, kind enumKind, key enumKey, oids [][20]byte) {
 		return
 	}
 	path := enumPath(dir, kind, key)
-	if st, err := os.Stat(path); err == nil && st.Size() == int64(52+len(oids)*20+4) {
+	// Compare the bytes, not just the size: a file of the right size with a
+	// broken checksum would otherwise be left in place and miss forever.
+	if data, err := os.ReadFile(path); err == nil && bytes.Equal(data, enumEncode(kind, key, oids)) {
 		return // identical content is already there
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

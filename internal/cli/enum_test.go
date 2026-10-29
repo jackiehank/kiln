@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -194,6 +195,72 @@ func TestSnapshotFallsBackOnReplaceRefs(t *testing.T) {
 	if code := Run([]string{"graph", "--json"}, &out, &errb); code == 0 {
 		t.Fatal("with replace refs present the read must ask git, so it must fail without it")
 	}
+}
+
+func TestSnapshotFallsBackOnPackedReplaceRefs(t *testing.T) {
+	dir := snapshotTestRepo(t, 3)
+	t.Chdir(dir)
+	// Warm both orders: pack-refs alone does not change HEAD, so only the
+	// invalidation digest can tell that a replace ref appeared.
+	_ = cacheOutput(t, "list", "--json")
+	_ = cacheOutput(t, "action", "log")
+	cacheGit(t, dir, nil, "", "replace", "--graft", "HEAD")
+	cacheGit(t, dir, nil, "", "pack-refs", "--all")
+	want := cacheOutput(t, "action", "log", "--no-cache")
+	if got := cacheOutput(t, "action", "log"); got != want {
+		t.Fatalf("a packed replace ref must invalidate the snapshot:\n--- cached ---\n%s\n--- git ---\n%s", got, want)
+	}
+}
+
+func TestCorruptSnapshotIsRebuilt(t *testing.T) {
+	dir := snapshotTestRepo(t, 3)
+	t.Chdir(dir)
+	want := cacheOutput(t, "list", "--json")
+	enums := enumFiles(t, dir)
+	if len(enums) != 1 {
+		t.Fatalf("a warm read must store one snapshot, got %d", len(enums))
+	}
+	data, err := os.ReadFile(enums[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)/2] ^= 0xff // same size, broken checksum
+	if err := os.WriteFile(enums[0], data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := cacheOutput(t, "list", "--json"); got != want {
+		t.Fatalf("a corrupt snapshot must fall back to git, output changed:\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+	fixed, err := os.ReadFile(enums[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key enumKey
+	copy(key.head[:], fixed[8:28])
+	copy(key.inv[:], fixed[28:48])
+	if _, ok := enumDecode(fixed, enumKind(fixed[7]), key); !ok {
+		t.Fatal("the snapshot must be rewritten, not left undecodable forever")
+	}
+}
+
+// enumFiles lists the snapshots a repository has stored.
+func enumFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, ".git", "kiln", "enums"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "enum-") && strings.HasSuffix(e.Name(), ".oid") {
+			out = append(out, filepath.Join(dir, ".git", "kiln", "enums", e.Name()))
+		}
+	}
+	return out
 }
 
 func TestSnapshotSilentWithoutWritableCache(t *testing.T) {

@@ -508,6 +508,9 @@ func (e *env) cacheGC(backend vcs.Repo) int {
 			}
 		}
 	}
+	// The layer set is settled now; Sweep takes what no read would ever touch
+	// again: a torn temp file a crashed writer left behind.
+	_, _ = cache.Sweep(dir, time.Now())
 	fmt.Fprintln(e.out, i18n.T("已清理：保留 %d 条记录，丢弃 %d 条，层 %d → %d",
 		len(kept), len(records)-len(kept), len(layers), len(layers)-removed))
 	return 0
