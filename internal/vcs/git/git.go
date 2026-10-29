@@ -27,8 +27,10 @@ type ExecRunner struct {
 }
 
 // logFormat uses unit (0x1f) and record (0x1e) separators so that commit
-// messages containing newlines survive the round trip.
-const logFormat = "%H%x1f%aI%x1f%B%x1e"
+// messages containing newlines survive the round trip. %P (parents) rides along
+// so a reader can tell a linear history from one with merges without another
+// process; see vcs.Commit.
+const logFormat = "%H%x1f%P%x1f%aI%x1f%B%x1e"
 
 // Log returns every commit, newest first.
 func (r ExecRunner) Log() ([]vcs.Commit, error) {
@@ -39,13 +41,13 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 	return parseLog(out), nil
 }
 
-// streamLogFormat is the streaming form of logFormat: three NUL-separated fields,
-// with -z adding one more NUL after each record. A reader that has seen three
+// streamLogFormat is the streaming form of logFormat: four NUL-separated fields,
+// with -z adding one more NUL after each record. A reader that has seen four
 // terminators therefore owns exactly one complete commit — no guessing where a
 // record ends, and no "the last one has no terminator" special case. NUL is git's
 // own machine separator; unlike the unit/record separators logFormat uses, a
 // commit body can never make it ambiguous.
-const streamLogFormat = "%H%x00%aI%x00%B"
+const streamLogFormat = "%H%x00%P%x00%aI%x00%B"
 
 // LogEach streams commits newest-first to fn, stopping as soon as fn returns
 // false. See vcs.LogEach.
@@ -83,6 +85,11 @@ func (r ExecRunner) LogEach(fn func(vcs.Commit) bool) error {
 			readErr = err
 			break
 		}
+		parents, err := readNULField(br)
+		if err != nil {
+			readErr = truncated(err)
+			break
+		}
 		date, err := readNULField(br)
 		if err != nil {
 			readErr = truncated(err)
@@ -95,9 +102,11 @@ func (r ExecRunner) LogEach(fn func(vcs.Commit) bool) error {
 		}
 		when, _ := time.Parse(time.RFC3339, strings.TrimSpace(date))
 		c := vcs.Commit{
-			ID:      strings.TrimSpace(id),
-			Date:    when,
-			Message: strings.TrimRight(msg, "\r\n"),
+			ID:           strings.TrimSpace(id),
+			Date:         when,
+			Message:      strings.TrimRight(msg, "\r\n"),
+			Parents:      splitParents(parents),
+			ParentsKnown: true,
 		}
 		if !fn(c) {
 			stopped = true
@@ -607,18 +616,23 @@ func (r ExecRunner) CommonDir() (string, error) {
 }
 
 // LogOIDs lists commits newest first without their messages, in exactly the order
-// Log reports them: the ordering comes from git, never from Go.
-func (r ExecRunner) LogOIDs() ([]string, error) {
-	out, err := r.run("log", "--format=%H")
+// Log reports them: the ordering comes from git, never from Go. Parents come along
+// so the cache can tell a linear history from one with merges.
+func (r ExecRunner) LogOIDs() ([]vcs.Line, error) {
+	out, err := r.run("log", "--format=%H%x1f%P")
 	if err != nil {
 		if r.noHistory() {
 			return nil, nil
 		}
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		return nil, nil
+	var lines []vcs.Line
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		id, parents, _ := strings.Cut(line, "\x1f")
+		lines = append(lines, vcs.Line{ID: id, Parents: splitParents(parents)})
 	}
 	return lines, nil
 }
@@ -648,8 +662,8 @@ func (r ExecRunner) Reachable() (map[[20]byte]bool, error) {
 // EachOIDAuthorDate streams commit ids newest first by author date. A caller
 // that renders per id keeps git's walk and its own output overlapped, which is
 // exactly what `action log` does on the streaming path.
-func (r ExecRunner) EachOIDAuthorDate(fn func(id string) bool) error {
-	cmd := exec.Command("git", "log", "--author-date-order", "--format=%H")
+func (r ExecRunner) EachOIDAuthorDate(fn func(vcs.Line) bool) error {
+	cmd := exec.Command("git", "log", "--author-date-order", "--format=%H%x1f%P")
 	cmd.Dir = r.Dir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -665,8 +679,10 @@ func (r ExecRunner) EachOIDAuthorDate(fn func(id string) bool) error {
 	stopped := false
 	for {
 		line, readErr := br.ReadString('\n')
-		if id := strings.TrimRight(line, "\r\n"); id != "" {
-			if !fn(id) {
+		line = strings.TrimRight(line, "\r\n")
+		if line != "" {
+			id, parents, _ := strings.Cut(line, "\x1f")
+			if !fn(vcs.Line{ID: id, Parents: splitParents(parents)}) {
 				stopped = true
 				break
 			}
@@ -834,21 +850,34 @@ func parseLog(out string) []vcs.Commit {
 		if strings.TrimSpace(rec) == "" {
 			continue
 		}
-		parts := strings.SplitN(rec, "\x1f", 3)
-		if len(parts) < 3 {
+		parts := strings.SplitN(rec, "\x1f", 4)
+		if len(parts) < 4 {
 			continue
 		}
 		var date time.Time
-		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(parts[1])); err == nil {
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(parts[2])); err == nil {
 			date = t
 		}
 		commits = append(commits, vcs.Commit{
-			ID:      strings.TrimSpace(parts[0]),
-			Date:    date,
-			Message: strings.TrimRight(parts[2], "\r\n"),
+			ID:           strings.TrimSpace(parts[0]),
+			Date:         date,
+			Message:      strings.TrimRight(parts[3], "\r\n"),
+			Parents:      splitParents(parts[1]),
+			ParentsKnown: true,
 		})
 	}
 	return commits
+}
+
+// splitParents turns git's space-separated parent list into ids. A root commit
+// has an empty field; the field is always printed, which is what ParentsKnown
+// records.
+func splitParents(field string) []string {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return nil
+	}
+	return strings.Fields(field)
 }
 
 // Compile-time contract checks: a backend that drifts from an interface it claims

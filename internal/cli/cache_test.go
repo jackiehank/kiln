@@ -834,3 +834,139 @@ func TestMergeDropsUnreachableSnapshots(t *testing.T) {
 		t.Fatalf("the surviving snapshot must belong to HEAD, got %s", head)
 	}
 }
+
+// The shared snapshot is the scheme under test: a linear history prints both of
+// git's orders identically, so one snapshot is honest for both. These tests pin
+// the proof, the mechanism and its limit.
+
+// commitAt writes one action with an author date and a committer date that may
+// differ: the two git orderings look at different fields, so a history where the
+// two dates disagree is where the orders could part ways.
+func commitAt(t *testing.T, dir, issue, kind, title, author, committer string) {
+	t.Helper()
+	msg := fmt.Sprintf("%s\n\nissue: %s\naction: %s\n", title, issue, kind)
+	env := []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=" + author, "GIT_COMMITTER_DATE=" + committer,
+	}
+	cacheGit(t, dir, env, msg, "commit", "--allow-empty", "-q", "-F", "-")
+}
+
+// mergeRepo builds the shape the shared snapshot must refuse: one merge, with the
+// dates arranged so the two orders genuinely disagree.
+func mergeRepo(t *testing.T) string {
+	t.Helper()
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	branch := strings.TrimSpace(cacheGitOut(t, dir, "rev-parse", "--abbrev-ref", "HEAD"))
+	// Main's tip is committed late (10-11) but authored early (10-02).
+	commitAt(t, dir, "alpha", "collect", "主线", "2026-10-02T10:00:00+08:00", "2026-10-11T10:00:00+08:00")
+	cacheGit(t, dir, nil, "", "checkout", "-q", "-b", "feature", "HEAD~1")
+	commitAt(t, dir, "alpha", "test", "分支", "2026-10-09T10:00:00+08:00", "2026-10-09T10:00:00+08:00")
+	cacheGit(t, dir, nil, "", "checkout", "-q", branch)
+	cacheGit(t, dir, []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=2026-10-12T10:00:00+08:00", "GIT_COMMITTER_DATE=2026-10-12T10:00:00+08:00",
+	}, "", "merge", "-q", "--no-ff", "feature", "-m", "merge")
+	return dir
+}
+
+// snapshotKinds is the kind byte of every stored snapshot.
+func snapshotKinds(t *testing.T, dir string) []byte {
+	t.Helper()
+	var kinds []byte
+	for _, p := range enumFiles(t, dir) {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) < 8 {
+			t.Fatalf("snapshot %s is too short", p)
+		}
+		kinds = append(kinds, data[7])
+	}
+	return kinds
+}
+
+// TestLogOrdersDifferOnlyWithMerges pins the git behaviour the scheme rests on:
+// the two orderings are the same sequence exactly while the history is linear.
+// A different git would fail here rather than let a shared snapshot lie.
+func TestLogOrdersDifferOnlyWithMerges(t *testing.T) {
+	lin := cacheTestRepo(t)
+	commitAction(t, lin, "alpha", "ask", "开单", "2026-10-03T10:00:00+08:00")
+	commitAction(t, lin, "alpha", "collect", "调研", "2026-10-02T10:00:00+08:00")
+	commitAction(t, lin, "alpha", "apply", "落地", "2026-10-01T10:00:00+08:00")
+	if a, b := cacheGitOut(t, lin, "log", "--format=%H"), cacheGitOut(t, lin, "log", "--author-date-order", "--format=%H"); a != b {
+		t.Fatal("a linear history must print both orders identically")
+	}
+
+	mer := mergeRepo(t)
+	a := cacheGitOut(t, mer, "log", "--format=%H")
+	b := cacheGitOut(t, mer, "log", "--author-date-order", "--format=%H")
+	if a == b {
+		t.Fatal("this merge history is built so the two orders differ; git printed one sequence")
+	}
+}
+
+// TestSharedSnapshotServesBothOrders starts from the model path: one cold List
+// files a single shared snapshot, and the author-date command is then answerable
+// with no git process at all.
+func TestSharedSnapshotServesBothOrders(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-03T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "collect", "调研", "2026-10-02T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	wantLog := uncached(t, "action", "log", "--jsonl")
+
+	_ = cacheOutput(t, "list", "--json")
+	if kinds := snapshotKinds(t, dir); len(kinds) != 1 || kinds[0] != byte(enumBoth) {
+		t.Fatalf("a linear history must file one shared snapshot, got kinds %v", kinds)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != wantLog {
+		t.Fatalf("the shared snapshot must serve the author-date order:\n--- git ---\n%s\n--- cache ---\n%s", wantLog, got)
+	}
+}
+
+// TestSharedSnapshotSeededByTheStream is the other direction: a cold action log
+// files the shared snapshot, and the model read is then answerable without git.
+func TestSharedSnapshotSeededByTheStream(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-03T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "collect", "调研", "2026-10-02T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	wantList := uncached(t, "list", "--json")
+
+	_ = cacheOutput(t, "action", "log", "--jsonl")
+	if kinds := snapshotKinds(t, dir); len(kinds) != 1 || kinds[0] != byte(enumBoth) {
+		t.Fatalf("a linear history must file one shared snapshot, got kinds %v", kinds)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	if got := cacheOutput(t, "list", "--json"); got != wantList {
+		t.Fatalf("the shared snapshot must serve the model order:\n--- git ---\n%s\n--- cache ---\n%s", wantList, got)
+	}
+}
+
+// TestMergeRepoDoesNotShareSnapshots is the limit: with a merge in the walked
+// history the two orders may differ, so the reader must still go to git.
+func TestMergeRepoDoesNotShareSnapshots(t *testing.T) {
+	dir := mergeRepo(t)
+	t.Chdir(dir)
+
+	_ = cacheOutput(t, "list", "--json")
+	if kinds := snapshotKinds(t, dir); len(kinds) != 1 || kinds[0] != byte(enumDefault) {
+		t.Fatalf("a merge history must keep its own default-order snapshot, got kinds %v", kinds)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	var out, errb bytes.Buffer
+	if code := Run([]string{"action", "log", "--jsonl"}, &out, &errb); code == 0 {
+		t.Fatal("without a shared snapshot the author-date order must need git")
+	}
+}

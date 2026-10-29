@@ -47,6 +47,12 @@ const (
 	// enumAuthorDate is `git log --author-date-order --format=%H`, the order
 	// `action log` prints in.
 	enumAuthorDate enumKind = 2
+	// enumBoth marks one list that both orders produce byte for byte. It is only
+	// written when the walked history is linear (no commit with two parents):
+	// every step then has exactly one candidate, so the ordering comparator never
+	// gets a choice and both git commands print the same sequence. Readers look
+	// for their own kind first and fall back to this one.
+	enumBoth enumKind = 3
 )
 
 // enumKey is everything a snapshot depends on. head is the tip whose ancestors
@@ -301,8 +307,23 @@ func enumDecode(data []byte, kind enumKind, key enumKey) ([][20]byte, bool) {
 	return oids, true
 }
 
-// loadEnum reads the snapshot for this key, if there is a sound one.
+// loadEnum reads the snapshot for this key, if there is a sound one: the order's
+// own file first, then the shared one (a linear history prints both orders
+// identically, so one file is honest for both).
 func loadEnum(dir string, kind enumKind, key enumKey) ([][20]byte, bool) {
+	if oids, ok := readEnum(dir, kind, key); ok {
+		return oids, true
+	}
+	if kind != enumBoth {
+		if oids, ok := readEnum(dir, enumBoth, key); ok {
+			return oids, true
+		}
+	}
+	return nil, false
+}
+
+// readEnum reads and verifies one snapshot file.
+func readEnum(dir string, kind enumKind, key enumKey) ([][20]byte, bool) {
 	path := enumPath(dir, kind, key)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -400,20 +421,28 @@ func (e *env) enumerateDefault(cb vcs.CacheBackend) ([][20]byte, bool) {
 	if oids, ok := e.cachedEnum(enumDefault); ok {
 		return oids, true
 	}
-	ids, err := cb.LogOIDs()
-	if err != nil || len(ids) == 0 {
+	lines, err := cb.LogOIDs()
+	if err != nil || len(lines) == 0 {
 		return nil, false
 	}
-	oids := make([][20]byte, 0, len(ids))
-	for _, id := range ids {
-		oid, ok := decodeOID(id)
+	oids := make([][20]byte, 0, len(lines))
+	linear := true
+	for _, line := range lines {
+		oid, ok := decodeOID(line.ID)
 		if !ok {
 			return nil, false
+		}
+		if len(line.Parents) > 1 {
+			linear = false
 		}
 		oids = append(oids, oid)
 	}
 	if dir, key, siteOK := e.enumSite(); siteOK && e.enumKeyHeld(dir, key) {
-		storeEnum(dir, enumDefault, key, oids)
+		kind := enumDefault
+		if linear {
+			kind = enumBoth
+		}
+		storeEnum(dir, kind, key, oids)
 	}
 	return oids, true
 }
@@ -424,10 +453,14 @@ func (e *env) enumerateAuthorDate(cb vcs.CacheBackend) ([][20]byte, bool) {
 		return oids, true
 	}
 	var oids [][20]byte
-	err := cb.EachOIDAuthorDate(func(id string) bool {
-		oid, ok := decodeOID(id)
+	linear := true
+	err := cb.EachOIDAuthorDate(func(line vcs.Line) bool {
+		oid, ok := decodeOID(line.ID)
 		if !ok {
 			return false
+		}
+		if len(line.Parents) > 1 {
+			linear = false
 		}
 		oids = append(oids, oid)
 		return true
@@ -436,7 +469,11 @@ func (e *env) enumerateAuthorDate(cb vcs.CacheBackend) ([][20]byte, bool) {
 		return nil, false
 	}
 	if dir, key, siteOK := e.enumSite(); siteOK && e.enumKeyHeld(dir, key) {
-		storeEnum(dir, enumAuthorDate, key, oids)
+		kind := enumAuthorDate
+		if linear {
+			kind = enumBoth
+		}
+		storeEnum(dir, kind, key, oids)
 	}
 	return oids, true
 }
@@ -505,5 +542,26 @@ func (e *env) storeEnumFromCommits(commits []vcs.Commit) {
 		}
 		oids = append(oids, oid)
 	}
-	storeEnum(dir, enumDefault, key, oids)
+	kind := enumDefault
+	if linearHistory(commits) {
+		kind = enumBoth
+	}
+	storeEnum(dir, kind, key, oids)
+}
+
+// linearHistory reports whether the walked history has no merge: every commit
+// lists at most one parent. A backend that does not report parents cannot prove
+// it, so it answers "no". A linear walk means both of git's orderings have
+// exactly one candidate at every step, so their output is the same sequence and
+// one snapshot can honestly serve both.
+func linearHistory(commits []vcs.Commit) bool {
+	if len(commits) == 0 {
+		return false
+	}
+	for _, c := range commits {
+		if !c.ParentsKnown || len(c.Parents) > 1 {
+			return false
+		}
+	}
+	return true
 }

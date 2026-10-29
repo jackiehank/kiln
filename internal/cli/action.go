@@ -214,8 +214,12 @@ func (e *env) actionLogStream(stream vcs.LogEach, backend vcs.Repo, jsonl bool, 
 	}
 	emitted := 0
 	stopped := false
+	linear := true
 	var writeErr error
 	err := stream.LogEach(func(c vcs.Commit) bool {
+		if !c.ParentsKnown || len(c.Parents) > 1 {
+			linear = false
+		}
 		rec := engine.RecordFromCommit(c, e.rel())
 		if sink != nil {
 			sink.add(rec)
@@ -243,8 +247,14 @@ func (e *env) actionLogStream(stream vcs.LogEach, backend vcs.Repo, jsonl bool, 
 		// enumeration completed and stopped for no reason.
 		sink.flush(nil)
 		if err == nil && writeErr == nil && !stopped && limit == 0 && len(oids) > 0 {
+			kind := enumAuthorDate
+			if linear {
+				// A linear history prints both orders identically, so this list
+				// is also the default-order snapshot: file it as shared.
+				kind = enumBoth
+			}
 			if edir, key, ok := e.enumSite(); ok && e.enumKeyHeld(edir, key) {
-				storeEnum(edir, enumAuthorDate, key, oids)
+				storeEnum(edir, kind, key, oids)
 			}
 		}
 		e.maybeMergeDir(cb, dir, fp, len(oids))

@@ -24,10 +24,19 @@ const (
 
 // Commit is one commit as read from a backend. ID is opaque to kiln: both
 // backends currently use commit hashes, but nothing here depends on that.
+//
+// Parents is the commit's parent ids as the backend reported them, and
+// ParentsKnown says whether the backend actually reported them: an empty slice
+// alone cannot distinguish "a root commit" from "this backend does not say". The
+// cache uses the pair to decide whether both of git's log orders must be the
+// same list for this history (no commit with two parents means every step of the
+// walk has exactly one candidate, so the ordering cannot differ).
 type Commit struct {
-	ID      string
-	Date    time.Time
-	Message string
+	ID           string
+	Date         time.Time
+	Message      string
+	Parents      []string
+	ParentsKnown bool
 }
 
 // LastNonEmptyLine returns the last line of out that is not blank.
@@ -58,6 +67,14 @@ type RawCommit struct {
 	Message string
 }
 
+// Line is one commit id with its parents: the shape the enumeration paths need.
+// They care about the ids and about whether the history has a merge, never about
+// messages.
+type Line struct {
+	ID      string
+	Parents []string
+}
+
 // CacheBackend is optional: a backend that can enumerate commit ids without
 // reading messages (so a cache hit skips the messages) and read messages for a
 // handful of ids in one process.
@@ -65,12 +82,14 @@ type CacheBackend interface {
 	// CommonDir is the shared git directory (` --git-common-dir `), the place
 	// one cache serves every worktree from.
 	CommonDir() (string, error)
-	// LogOIDs lists commit ids newest first, in the same order as Log.
-	LogOIDs() ([]string, error)
+	// LogOIDs lists commit ids newest first, in the same order as Log, together
+	// with their parents (so a reader can tell a linear history from one with
+	// merges without another process).
+	LogOIDs() ([]Line, error)
 	// EachOIDAuthorDate streams commit ids in author-date order, the order action
 	// log promises (git's two rules: children before parents, then author date).
 	// Streaming lets a caller emit rows while git is still walking.
-	EachOIDAuthorDate(fn func(id string) bool) error
+	EachOIDAuthorDate(fn func(Line) bool) error
 	// Commits returns the raw commits for oids, keyed by id.
 	Commits(oids []string) (map[string]RawCommit, error)
 	// Reachable is every commit reachable from any ref (`` rev-list --all ``),

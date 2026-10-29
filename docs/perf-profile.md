@@ -705,3 +705,51 @@ V2（本轮不做）：给 `LogEach` 加 order 参数，让模型冷读也流式
 - 拆分集合/顺序省磁盘不省时间；
 - 线性判据让“一份快照服务两种顺序”成立，而四个仓的 merge 数都是 0；
 - 所以选 A：共享快照（kind=3），非线性时退回两份。
+
+## test（2026-10-30）：共享快照的原型验证
+
+### 改了什么（原型）
+
+- `vcs.Commit` 增 `Parents []string` + `ParentsKnown bool`；git 的 `Log` / `LogEach` 的 format 各加 `%P` 并解析（根提交的空字段也算“报告过”）。
+- `CacheBackend.LogOIDs` / `EachOIDAuthorDate` 改成携带 parents（新类型 `vcs.Line`），这样两条纯枚举路径也能判定线性。
+- `enumKind` 加 `shared = 3`；`loadEnum` 先找自己的 kind 再找 shared；走完一次 walk 后，四条路径（模型 `Log`、流式 `LogEach`、两条枚举）都在“线性”时写 shared。
+- 判据集中在一处：`linearHistory` / 流式里的 `linear` —— **每个提交都报告了 parents，且没有一个有 ≥2 个父母**。
+
+### 等价性
+
+- 21 条命令 × 2 个仓（真仓、1k）与上一版二进制（`0ffcd48`）**逐字节相同**；旧二进制读不到 kind=3，会 miss 一次再重建自己那份，混合状态的输出也一致（兼容方向已验证）。
+- 新增 4 条测试，其中两条**先在旧代码上失败过**：
+
+| 测试 | 作用 | 旧代码 |
+| --- | --- | --- |
+| `TestLogOrdersDifferOnlyWithMerges` | 把“线性 ⇒ 同序、merge ⇒ 可能异序”钉在 git 上 | 通过（不变量） |
+| `TestSharedSnapshotServesBothOrders` | 模型种一次，作者日序在 `PATH` 空时可答 | **失败** `kinds [1]` |
+| `TestSharedSnapshotSeededByTheStream` | 流式种一次，模型在 `PATH` 空时可答 | **失败** `kinds [2]` |
+| `TestMergeRepoDoesNotShareSnapshots` | merge 仓不许假装共享，另一序仍需 git | 通过（守卫） |
+
+- 全量 `go test ./...` 绿；`gofmt` / `go vet` 干净。
+
+### 效果（中位数，`nulrun` 口径）
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| 真仓：`action log` 种下后 `list --json` | 83 | **30** |
+| 真仓：`list` 种下后 `action log --jsonl` | 89 | **30** |
+| 100k：`action log` 种下后 `list --json` | 379 | **158** |
+| 100k：`list` 种下后 `action log --jsonl` | 821 | **172** |
+| 100k 冷 `list --json`（种下去程） | 1011 | 1024（+13，带 parents） |
+| 100k 冷 `action log --jsonl` | 1166 | 1174（+8） |
+
+种子写入之后枚举目录里只有**一个** kind=3 文件（真仓与 100k 都一样）。
+
+### 边界与代价
+
+- 枚举文本变长：`git log --format=%H%x1f%P` 在 100k 从 4.0 MB 到 8.1 MB；walk 本身 +8 ms（默认序）/+22 ms（作者日序），≤10k 仓 ≤1 ms。
+- 浅克隆 / 替换 refs：`%P` 报的是提交对象里的真实父母，边界上的 merge 会判成非线性——只会更保守，不会误共享。
+- **非线性的两种顺序仍各走一次**，本方案不改变这一情形。
+- 旧二进制看不到 kind=3：miss 一次、重建自己那份 kind=1/2，之后照旧——降级安全，只多付一次 walk。
+
+### 判定（留给 conclude / apply）
+
+原型证明了原理可行：一次 walk 的快照被两种顺序直接服用，输出逐字节不变，非线性仓不会误共享。接下来的 apply 只需要做“收敛”而不是再验证：决定 kind=3 的命名与注释、把 `--limit` 与合并路径过一遍、清理原型里为验证加的东西（如果有多余的）。
+
