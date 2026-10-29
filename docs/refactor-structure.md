@@ -351,3 +351,34 @@ collect 把 `loadCached` 排在最后，是"先易后难"的直觉。但 `cache.
 **更正**：hypothesize 里写"分支总数不变（21 → 21）"。实际是 **21 → 25**：六步各自带一个失败返回（`||` 也算一个分支），多出来的 4 个正是"每一步可以单独失败"的代价。行数降了、复杂度没有降——这一点当时的判断是对的，只有数字要改。
 
 顺带：`cache.go` 461 → 514 行（多了一个类型与六段文档注释），函数体行 376 → 398。
+
+## 落地（阶段 3，2026-10-29）：`cli.go` 删除，包变成 21 个文件
+
+| 提交 | 搬了什么 | 新文件 | `cli.go` |
+| --- | --- | --- | --- |
+| `4913131` | `show` / `config` / `check` / `graph` | 4 个（150 / 36 / 141 / 252 行） | 2,743 → 2,204 |
+| `a749e42` | `action` / `status` / `area` | 3 个（356 / 178 / 360 行） | 2,204 → 1,347 |
+| `6087358` | `write` / `path` / `list` / `load` + `env.go` | 5 个（369 / 471 / 335 / 178 / 33 行） | 1,347 → **删除** |
+
+收尾：`retiredCommands` 归 `run.go`，包注释与 `env` 类型归 `env.go`，`pipe_windows.go`/`pipe_other.go` 原样不动。
+
+现在（21 个非测试文件，合计 4,681 行）：
+
+| 文件 | 行 | 内容 |
+| --- | --- | --- |
+| `cache.go` | 514 | 六步缓存装配 + 落盘/合并 |
+| `path.go` | 471 | `path` 命令 + 批量写出器 + stat 渲染 |
+| `enum.go` | 467 | 枚举快照（未动） |
+| `write.go` | 369 | `do`/`commit` 与写前守卫 |
+| `area.go` | 360 | `worktree` 命令 + 区状态 |
+| `action.go` | 356 | `action list`/`log` |
+| `list.go` | 335 | `list` + 检索 |
+| `help.go` | 256 | 用法与帮助 |
+| `graph.go` | 252 | `graph` |
+| 其余 12 个 | 18–204 | `run`/`args`/`load`/`status`/`show`/`check`/`render`/`ordinals`/`config`/`env`/`pipe_*` |
+
+验证：三批都做了行多重集比对（纯移动），`go test ./...` 全绿（`internal/cli` 21.2 s，含 60 份 golden），`gofmt -l` / `go vet` 干净。
+
+**没达成的目标**：hypothesize 写"最大新文件 ≤ 330 行"，实际 `path.go` 471、`write.go` 369、`area.go` 360、`action.go` 356、`list.go` 335 都超了。原因不是分得不够细，而是这几个文件各自装着一个大函数或一批文档类型：`path` 的批量写出器约 200 行、`write` 的单个 `e.write` 152 行、`area` 17 个函数。再往下就是拆函数或拆类型，属于另一件事，本轮没做。
+
+**一次手工补洞**：切 `path` 时把 `pathBatchError` 的错误码常量块移走了，却漏了类型本身（它在常量块上方 5 行）。`go build` 立刻报错，从 `git show HEAD:internal/cli/cli.go` 取回原文补上——补的是原文，不是重写的。
