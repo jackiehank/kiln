@@ -1,4 +1,4 @@
-# issue: commit-cache — 把一次扫描的结果落成缓存文件（先记账，暂不建）
+# issue: commit-cache — 把一次扫描的结果落成缓存文件（设计定稿）
 
 - **domain**：design
 - **关联**：relates-to `perf-audit`（它把索引/缓存列为明确不做，但留了"再单独立项"的口子，并给了触发条件——本 issue 就是那个立项）；relates-to `action-log-relations`（总流是"顺手落盘"的那个进程）；relates-to `action-log`（现成的流式原语）；relates-to `issue-list-scaling`（规模论证的前置）
@@ -7,7 +7,7 @@
 
 `perf-audit` 的结论是"无索引"：每条读命令都从提交历史现算模型，换来"零状态、永远和 git 一致"。它同时留了一句："如果将来长历史上确实疼，再单独立项"，并给了触发条件（真实仓 1k+ issue，或单次 `path --all` > 10 MB）。
 
-本 issue 就是那个"单独立项"。触发还没有到——本仓现在 69 issue / 367 提交——所以**现在不建**，先把设计记下来，免得真要建时重新推一遍。
+本 issue 就是那个"单独立项"。触发还没有到——本仓现在 69 issue / 367 提交——所以**当时不建**，先把设计记下来，免得真要建时重新推一遍。（2026-10-29 test 后改判：按两条读路径重算，`Log` 路径 10k 提交起就回本，值得做。见 test 与修订后的 hypothesize。）
 
 新增的论点是这一条：**缓存不必是"额外一遍"**。`action-log-relations` 里的总流本来就要遍历每条提交、用 `trailer.Parse` 解析全部字段；把解析结果顺手落盘，缓存就是总流的副产物。这把缓存从"多付一次全史扫描"变成"零边际成本产出"——原来挡着它的成本理由消失了，剩下的是正确性和写策略。
 
@@ -123,6 +123,8 @@ jj 也把索引存成内容寻址的不可变片段：`.jj/repo/index/segments/<
 9. **只对 git 生效**可以接受吗？
 
 ## hypothesize（2026-10-29）：缓存成什么形状，怎么保证"变快不变错"
+
+> 本节是初版。第 2 条（枚举）、第 4 条（写入）、第 7 条（验收）已被下文「hypothesize（2026-10-29 修订）」替换；记录层、顺序与失效这三块的结论仍然成立。
 
 结论先行：
 
@@ -355,7 +357,17 @@ OID(20) | authorDate(8, unix 秒) | tzOffset(2, 分钟) | flags(1) | 字段块(T
 - **验收目标可以写实**（100k 合成仓）：`graph --json` ≤ 0.6 s、`list` ≤ 0.5 s、`action log --jsonl`（全量）≤ 0.9 s；本仓（382 提交）三者都应在 0.11 s 以内，即缓存对小仓不可见也不拖慢。
 - 记录层体积与解码都不是瓶颈：77 B/提交、0.34 µs/条。
 
-### 7. 没测 / 限制
+### 7. 一份层，两条序（"写一次、读多次"仍然成立）
+
+缓存层存的是 **`OID → 记录`**，不是"第 N 条是谁"。记录里只有属性、没有顺序，所以：
+
+- **一份层，两条路径共用**：`Log` 路径和 `LogEach` 路径查的是同一张表；不会存两份，层体积仍是每提交一条。
+- **`sync` 用哪条序写都一样**：记录与序无关。用便宜的默认序写（100k 973 ms）比按 author-date 扫（1,300 ms）省 1/3；记录里带 author date，所以 `action log` 读到一份"按默认序写"的层，`date` 字段也完整。
+- **读的时候各付各的枚举费**：`Log` 路径 229 + 34 ms，`LogEach` 路径 800 + 34 ms。差的 570 ms 是 author-date 的固有成本，不是分路径或缓存带来的——要免掉它只能缓存"顺序"，而那条路已被否（新提交要插到最前）。
+
+一句话：**写一次（默认序）→ N 个命令各取所需**。分路径只改变每个读者自己的枚举价，不改变"一次写"。
+
+### 8. 没测 / 限制
 
 - **没能克隆真实大仓**（本机访问 GitHub 失败：schannel `SEC_E_NO_CREDENTIALS`），全部是合成仓。正文与 trailer 组合是真实的，但**树是空的**；缓存不碰 T2（改动文件/行数），所以空树只影响"真实仓的 I/O 局部性"。
 - 只测了两种拓扑：线性、每 6 条一次 merge；无 octopus、无很长的并行分支。
@@ -364,6 +376,127 @@ OID(20) | authorDate(8, unix 秒) | tzOffset(2, 分钟) | flags(1) | 字段块(T
 - 解码原型未优化（100k 33.6 ms）：排序数组 + 二分、或一次读进大缓冲还能再降。
 - 首字节延迟差异很大（有图 42 ms、无图 530 ms），说明 git 两条路径的缓冲策略不同；本表只比总时长。
 - 探针踩过的坑（对实现有参考价值）：`bufio.Reader.Read` 会短读，按 `Read` 的返回值推进会让层解码错位——必须 `io.ReadFull`；这条同样适用于"验收第 2 条 损坏退化"。
+- **建层只测了两种形态**：全量 `git log` 一次（100k 973 ms）与增量 1 条（rev-list 52 ms + cat-file ~50 ms）；增量 10/100/1000 条没有逐点测，按每对象 ~9 µs 外推。全量若改用 `rev-list + cat-file` 实测 1,227 ms，比 log 慢（见修订后 hypothesize §3）。
+
+## hypothesize（2026-10-29 修订）：两条读路径，一份记录层
+
+> 上一版假设"所有读命令都走 author-date 枚举"，于是把收益估成 1/3、门槛推到 100k。test 更正后按两条路径重推：下面替换的是枚举（第 2 条）、写入（第 4 条）与验收（第 7 条），记录层与"顺序只认 git"这两条不变。
+
+结论先行：
+
+1. **记录层不变、与序无关**：`OID → T1 记录`（trailer 全字段 + author date + `isAction` + `subject` + `unknownKeys`）。一份层，两条路径共用。
+2. **枚举两条，都由 git 给**：`Log` 路径 `git log --format=%H`（默认序），`LogEach` 路径 `git log --author-date-order --format=%H`。缓存不存顺序、不排序。
+3. **写只有一条，而且是增量的**：`kiln cache sync` 用 `git rev-list HEAD ^<已覆盖 tip>` 找新增提交，一次 `git cat-file --batch` 取消息，解析后写一个新层；层头记下本层覆盖的 tip。首次（或版本/词表不符）才全量。
+4. **读默认用缓存（有就用），写永远显式**：读命令仍然只读；`--no-cache` / `KILN_NO_CACHE=1` 关闭。
+5. **`action log --limit` 不走缓存**：有图时枚举只要 46 ms，"枚举 800 + 解码 34"反而更慢。
+6. **成本（实测）**：首次建层 100k 973 ms（一次 `git log` 走完）；增量 1 条提交 ≈ 100 ms；命中读 `Log` 路径 262 ms、`LogEach` 路径 834 ms。
+
+### 1. 记录（比原型多两个字段）
+
+```text
+OID(20) | authorDate(8) | tzOffset(2) | flags(1) | 字段块(TLV)
+flags: bit0 = isAction
+TLV:   issue action title subject domain scope target refs tags
+       relations(name,target) unrelate unknownKeys
+```
+
+`subject` 与 `unknownKeys` 是下游还要用、但只能从消息里算出来的两个值：
+
+- `action log` 的 `title` 兜底用 `subject`（`engine.Subject`，首行非空）；
+- `check` 报 `unknown-trailer` 用 `unknownKeys`（`trailer.UnknownKeys`）。
+
+不存它们就得存原文（355 B/条）——那是缓存想省掉的东西。两项都依赖词表，所以层头的**词表指纹**仍然覆盖得住。
+
+原型（不含这两个字段）实测 77 B/提交；加上它们约 +40 B/条，**100k ≈ 11 MB**。体积仍比原文（100k × 355 B ≈ 35 MB）小一个量级。
+
+### 2. 读路径（两条）
+
+```text
+Log 路径（graph/list/check/path/status/show）
+  枚举   git log --format=%H                     100k 229 ms
+  查表   OID → record（命中直接构建 model.Action）
+  补缺   git cat-file --batch，只取缺的（通常 0 条）
+  构建   engine.Build（与全扫路径同一份代码）
+
+LogEach 路径（action log，无 --limit）
+  枚举   git log --author-date-order --format=%H 100k 800 ms
+  其余同上
+
+action log --limit N：不查缓存，直接流式（有图 46 ms）
+```
+
+两条路径与全扫共用 `engine.Build` 与渲染，所以"命中与否字节一致"仍是结构保证，不是测试保证。
+
+### 3. 写路径（增量优先）
+
+```text
+covered = 各层头里记录的 tip 集合
+新增    = git rev-list HEAD ^<covered...>          100k 加 1 条 ≈ 52 ms
+消息    = git cat-file --batch（一次进程）          100k 加 1 条 ≈ 50 ms
+记录    = trailer.Parse + engine.Subject + trailer.UnknownKeys
+新层    = layer-<sha1>.rec（不可变、自校验名），层头记 covered' = {HEAD}
+chain   = 原子 rename，新层在前；拿不到锁就跳过（exit 0 + stderr 一行）
+```
+
+**全量只在首次/版本不符/词表不符时做**，用 `git log --format=%H%x1f%aI%x1f%B%x1e`（100k 973 ms）。不用 `rev-list + cat-file` 做全量：实测 1,227 ms（cat-file 每对象约 9 µs，pretty 打印是流式批量），反而慢。
+
+### 4. 增量 sync 的边界
+
+- `rev-list` 报未知版本（covered tip 被 GC / 仓库被换）→ 回落全量。
+- HEAD 回退或切分支：只算"从 HEAD 可达但未被覆盖"的部分；覆盖不到的旧记录留在层里等 GC。
+- 覆盖语义按 **tip 的可达集**：层头存写入时的 HEAD，`rev-list HEAD ^t` 恰好给出之后的增量；多层各存各的 tip，取并集。
+
+### 5. 收益与门槛（重算）
+
+| 命令 | 100k 无缓存 | 100k 命中 | 省 |
+| --- | --- | --- | --- |
+| `graph --json` | 1,228 | 518 | 58% |
+| `list` | 1,114 | 404 | 64% |
+| `action log --jsonl`（全量） | 1,335 | 869 | 35% |
+| `action log --limit 5` | 46 | 46（不走缓存） | — |
+
+| 提交数 | `Log` 路径每次读省 | 增量 sync | 回本读 |
+| --- | --- | --- | --- |
+| 3,000 | 21 ms | ~100 ms | 5 |
+| 10,000 | 72 ms | ~100 ms | 2 |
+| 30,000 | 216 ms | ~100 ms | 1 |
+| 100,000 | 710 ms | ~100 ms | 1 |
+
+结论：**≥10k 提交时，每次提交后 sync 一次也能回本**；3k–10k 建议批量 sync。
+
+### 6. 默认值与开关
+
+- **读**：有合法 `chain` 就用；缺层、损坏、版本不符一律当没有，回落到今天。
+- **写**：只有 `kiln cache sync`。读命令不写盘——只读仓、CI、worktree、并发都靠这一条简化。
+- `--no-cache` / `KILN_NO_CACHE=1`：连读都不查。
+- 位置仍是 `$(git rev-parse --git-common-dir)/kiln/records/`。
+
+### 7. 与"总流"的关系
+
+`kiln cache sync` 就是"扫一次"——它比 `action log` 的那次扫描更便宜（默认序、不渲染、不折叠）。原始流程"一次读、多次取"成立，而且这次读比 `action log` 本身便宜 1/3。
+
+### 8. 验收（替换上一版第 7 条）
+
+1. **字节一致**：本仓 + 100k；`graph` / `list` / `check` / `path` / `status` / `show` 与 `action log`（含 `--limit`）在 `--no-cache` / 命中 / 缺层 三态下 stdout 与退出码一致。
+2. **损坏退化**：截断、翻转、改名、`chain` 指向不存在的层 → 忽略该层，输出不变，不报错。
+3. **版本/词表不符** → 整层忽略，回落全扫。
+4. **只读仓**：读命令照常；`sync` exit 1 且信息明确。
+5. **并发**：两个 `sync` 同时跑，`chain` 不损坏，至少一个成功。
+6. **性能**（100k，有 commit-graph）：`graph --json` ≤ 0.6 s、`list` ≤ 0.5 s、`action log --jsonl` 全量 ≤ 0.9 s、`action log --limit 5` ≤ 60 ms（无图时它与今天一样是 ~544 ms，缓存不掺和）。
+7. **增量**：100k 仓加 1 个提交后 `sync` ≤ 200 ms，新层只含 1 条记录，之后读命中率 100%。
+8. **jj**：行为与今天完全一致（不支持缓存）。
+
+### 9. 与上一版的差异
+
+| 项 | 上一版 | 本版 | 原因 |
+| --- | --- | --- | --- |
+| 枚举 | 单条 author-date | 两条，按命令选 | test 更正 |
+| 收益 | 1/3 | `Log` 73%、`action log` 36% | 实测 |
+| 门槛 | 100k | 10k（增量 sync） | 实测 |
+| sync | 全史 `LogEach` 扫描 | 增量 rev-list + cat-file；首次 log 全扫 | 实测 1,227 vs 973 |
+| 记录字段 | T1 + `isAction` + date | 再加 `subject` / `unknownKeys` | 否则要存原文 |
+| `--limit` | 未特判 | 不查缓存 | 46 ms 对 800+34 |
+| 默认 | 关闭 | 读开、写显式 | 输出不变，风险只在写 |
 
 ## 非目标
 
@@ -382,3 +515,4 @@ OID(20) | authorDate(8, unix 秒) | tzOffset(2, 分钟) | flags(1) | 字段块(T
 - 2026-10-29（同日晚）：`action-log-relations` 已 concluded（`876b898`），记录格式定稿为"T1 字段 + `isAction` 标志 + author date"。本 issue 的那条 `blocked-by action-log-relations` 据此解除（`--unrelate`）；现在缓存只等 `perf-audit` 的规模触发条件（1k+ issue 或 `path --all` >10 MB）。
 - 2026-10-29（同日，test）：合成仓 1k–100k 实测。缓存只省消息层（100k −36%、30k −34%、10k −29%、1k −9%）；根因是 `--author-date-order` 让 git 重新逐个解析提交对象，枚举本身已占扫描的 60–90%。顺手测出带图仓库关掉 commit-graph 快 25–35% 且输出逐字节一致，缓存增量因此降到 12–16%。旧触发条件（issue 数 / 输出体量）不成立，改为 ≥100k 提交且每次 sync ≥8 次读；下一步先落"关图"这一刀（另开 apply 或 issue，待定）。
 - 2026-10-29（同日，test 更正）：第一次测量只覆盖了 `LogEach` 的形状，误当成所有读命令的走法。实际上 `graph` / `list` / `check` / `path` / `status` / `show` 走 `Log()` 的**默认序**（commit date），今天 100k 972 ms，枚举只要 229 ms——缓存把常用命令压到 262 ms（−73%），且 ≥3k 提交、每次 sync ≥3 次读就回本；`action log`（author-date）单独一条，100k 全量 1,300 → 834 ms（−36%），首屏靠 `--limit` 已是 46 ms。"关图"因此降级为"只对 `action log` 全量扫描有意义"。结论改为**上缓存**，先做 `Log` 路径。
+- 2026-10-29（同日，hypothesize 修订）：按两条读路径重推设计。记录层与序无关（一份层、两条枚举共用），写改成增量（rev-list + cat-file，100k 加 1 条约 100 ms；全量仍用一次 `git log`，因为 cat-file 全量 1,227 ms 比 log 973 ms 慢）；记录补 `subject` / `unknownKeys`（否则要存原文），`action log --limit` 不查缓存。门槛从 100k 降到 10k（增量 sync 下 2 次读回本）。验收改为 8 条，含增量 sync ≤ 200 ms 与 `--limit` ≤ 60 ms。
