@@ -398,3 +398,124 @@ F 的 48 MB 需要对照现在的峰值：100k `list --json` 一次调用分配 
 - `do` / `commit` 是写命令，突然开始写缓存文件（100k 12 MB），把“预览”变重了。回应：`do` 本来就要读全史做起点检查，读命令也早就这么做了；写失败静默。
 - 第一次冷跑变慢 200 ms，可能让超大仓上的“开单”更慢。回应：`commit ask` 冷态本来 1138 ms，200 ms 在噪声下；而第二次省 742 ms。
 - E / F 的取舍不该由实现者替用户决定：先做 D，再看真实会话里 `action log` 是不是主路径，再决定 E 还是 F。
+
+## hypothesize（2026-10-30，续）：一个“边读边种”的读取组件
+
+本节细化“共用读取组件、边读边缓存”的方案，取代上一节的 D / E / F：D 变成第 3 步，E / F 变成同一个组件里“什么时候落盘”的参数，不再是对立选项。
+
+### 主张
+
+1. **读历史的消费方式只有四种**（建模型、查一条 issue、逐行渲染、存枚举），但“读完就种缓存”只需要一处实现；
+2. **分块写**让“首行早出”与“顺手种缓存”不再冲突——每块是一份合法的不可变层，读者不必等整条流结束；
+3. 冷读时**写缓存的墙钟成本≈0**：git 在另一个进程里继续产出，消费者的 parse + encode 总量小于 git 的产出时间。
+
+### 证据
+
+- 100k 冷路径分解（上一节）：`git log` 756、解析 57、写层+快照 206、建模 60。
+- 写一个 12 MB 层：`cache.Encode` **121 ms / 92 MB 分配**；`cache.Write`（含 SHA-1 与落盘）**124 ms**。
+- 消费者一侧总量 ≈ 57（parse）+ 124（分块 encode/写）+ 60（建模）≈ 240 ms < 756 ms（git）。所以即使**同步**分块写，墙钟也主要被 git 的产出时间盖住；分块还把那次 92 MB 的编码峰值拆成每块约 10 MB。
+- 反过来说：现在的 1026 ms 冷 `action log` 里，git 已经占了 756，加 124 的写盘只可能被“pipe 背压”放大——这是本方案第一个要实测的量（见检验）。
+
+当前与目标（100k，中位数）：
+
+| 场景 | 现在 | 目标 |
+| --- | --- | --- |
+| `action log --jsonl` 冷 | 1026 | ≤ 1100（写盘被 git 盖住） |
+| 同上，第二次 | 174 | 174 |
+| `list --json` 在 action log 之后首次 | 1084 | 约 300（补一次 166 的默认枚举 + 热读 122） |
+| `do ask` 第二次 | 122 | 122 |
+| 冷读峰值堆 | 约 174 MB/次调用 | 不高于现在（分块后编码峰值下降） |
+
+### 约束：顺序与折叠（这决定组件能“统一”到什么程度）
+
+- git 的**流**只有一种顺序：`LogEach` 固定 `--author-date-order`（新→旧）；默认序（commit-date）只有批量 `Log()` / `LogOIDs()`。
+- `Builder` 要**旧→新**：`Domain`/`Tags` 折叠取最后一条，`Repo()` 的稳定排序在日期相同时保留插入序。冷路径正是把 batch 反转后再喂（`ActionsAndRecordsFromCommits` 倒序遍历）。
+- 所以模型读取必须缓冲（它本来就要反转），**流式只能服务“新→旧”的 `action log`**。硬把模型路径塞进流式，要么多一次 166 ms 的默认枚举，要么丢掉折叠顺序——两者都不划算。
+
+这条约束把“一个 walk 包打天下”修正为更诚实的版本：**一个缓存 walk + 一个分块 sink + 流式明确分叉**。
+
+### 组件形状
+
+```
+// internal/cli/reader.go
+type reader struct {
+    cb     vcs.CacheBackend
+    dir    string
+    fp     [20]byte
+    kind   enumKind
+    layers []cache.Layer
+    index  map[[20]byte]recPos
+}
+
+// openReader：扫描层、剪掉过期的，返回 nil 表示这条读只能走 git。
+func (e *env) openReader(backend vcs.Repo, kind enumKind) (*reader, bool)
+
+// walk：按枚举顺序逐条给 record；缺口用一次 Commits() 补齐；
+// 新 record 交给 sink。complete 表示“走完了整个枚举”。
+func (r *reader) walk(fn func(cache.Record) bool) (complete bool, err error)
+
+// layerSink：把 record 攒成块，满了就 cache.Write（原子 rename）。
+type layerSink struct{ dir string; fp [20]byte; chunk int; buf []cache.Record; wrote []cache.Layer }
+func (s *layerSink) add(rec cache.Record)
+func (s *layerSink) flush()
+```
+
+使用者：
+
+| 调用方 | 顺序 | 缓存能答 | 缓存不能答 |
+| --- | --- | --- | --- |
+| `loadRepo`（模型） | 旧→新 | reader 倒序取 | `Log()` 批量 + sink（保持现状，只换落盘） |
+| `findIssue`（D） | 旧→新 | reader 倒序取 | 同上，错误静默 |
+| `action log` | 新→旧 | reader 顺序取 | `LogEach` 流式 + sink，边渲染边落盘 |
+
+### 分块写入规则
+
+- 按**记录数**分块，初值 16384 条（100k 时约 2 MB/块）；块大小是包内常量，不进配置。
+- flush 时 `cache.Write`（内容寻址 + 原子 rename）；块**不声称覆盖**（tips=nil）——部分覆盖本来合法，合并时再并。
+- 早停（`--limit`）：把手上这块 flush 掉再返回，**不写枚举快照**。
+- 与已有层去重：流式时查 `index`，命中就跳过；写入的 OID 记进 `index`（同一流不会重复，但便宜）。
+- 合并：整条 walk 结束后调一次 `maybeMerge`，不在流中途合并（否则要重扫目录、还可能改写正在读的层）。
+- 写失败一律静默，与现在一致。
+
+### 快照规则
+
+- 只有**完整走完**（git 正常结束、`fn` 没早停）且 `enumKeyHeld`（HEAD 没在 walk 期间变）才 `storeEnum(kind, key, oids)`。
+- 早停不写；半块可以留（它只证明“这些 OID 有 record”，是 gaps 能用的事实）。
+- 模型冷路径维持现状：`Log()` 拿到默认序 + 写完 records 后存默认快照，因为反正要缓冲来反转。
+
+### 参数与实测纪律
+
+- 16384 条/块：100k 冷读约 6 块；合并线 64 层 → 约 10 次冷读触发一次合并（合并 ≈ decode 18 + encode 121 + 写 ≈ 160 ms，落在某次读命令里）。
+- 待测矩阵（100k）：块 8192 / 16384 / 32768 下的冷读墙钟、层数、峰值堆、第二次读耗时；用数据定块大小，不凭推算。
+
+### 落地顺序（V1 三步，每步可单独停）
+
+1. **抽组件，行为不变**：`reader` 承接 `loadCached`；`actionLogCached` 改成复用它。不加任何写入。验收：全量测试 + `uncached` 字节对比。
+2. **流式落盘**：`layerSink` + `action log` 流式分支种 records 与作者日序快照；模型冷路径的 `persistRecords` 也改走 sink（等价，只降峰值内存）。验收见下。
+3. **接 `findIssue`**：走 `openReader`，冷回退 `Log()` + sink —— D 在这里自然完成。
+
+V2（本轮不做）：给 `LogEach` 加 order 参数，让模型冷读也流式。收益约 57 ms 的解析重叠 + 去掉 `[]vcs.Commit` 切片；代价是改 `vcs` 接口与 jj 实现，且上面那条折叠约束仍然要求缓冲 actions，收益有限。
+
+### 检验办法
+
+新增测试：
+
+1. `TestActionLogColdSeedsTheCache`：空缓存仓（2 个动作 + 1 个普通提交）跑一次 `action log --jsonl` → 必须出现层 + 作者日序快照；随后 `PATH` 指向空目录，第二次输出逐字节相同。
+2. `TestActionLogEarlyStopWritesNoSnapshot`：空缓存仓跑 `action log --limit 1` → 可以有半块层，但枚举目录必须为空；再跑一次仍走流式。
+3. `TestChunkedLayersReadIdentical`：测试里把块常量调小（包内变量）→ 冷跑 `list --json` 产生多块；与 `uncached` 输出逐字节相同；再跑一次热读仍相同。
+4. `TestStreamedRecordsCoverTheHistory`：`action log --jsonl` 冷跑后，层里的 record 总数 == 提交数（普通提交也种了）；随后 `list --json` 不再写新层（records 被复用）。
+5. 既有字节对比与 `TestDuplicateStartCheckAnswersFromTheCache` 保持绿；`gofmt` / `go vet` 干净。
+
+### 反方
+
+- **一周内第三次读路径重构**：`loadCached` 刚在 `cache-perf` 定型。回应：这次是把 `loadCached` 与 `actionLogCached` **合并**，净删代码（约 −100 行），且第 1 步就是纯搬运，可单独回退。
+- **分块让层数涨、合并更频繁**：合并要 decode + encode 12 MB。回应：块大小与合并线都可调，先测矩阵再定。
+- **流式落盘可能通过 pipe 背压拖慢 git**：我们写盘时 git 阻塞在管道上。回应：这是要测的第一件事；若冷读墙钟变差超过 50 ms，就退回窄版本——只种作者日序快照（records 由下一次模型读补），仍能让第二次 `action log` 变暖。
+- **抽象过度**：三条路径的顺序与完整性不同，未必撑得起一个接口。回应：V1 只统一“缓存 walk + sink”，流式明确分叉；不把模型路径硬塞进流式。
+
+### 不做
+
+- 不改层格式（v2 偏移表 / 可流式格式）；
+- 不并发写、不开 goroutine（先靠 git 并行）；
+- 不缓存 `show` 的 body 与 `--stat` 的 diffstat；
+- 不为 `action log --limit` 预生成完整快照（它读完就杀，没有完整枚举）。
