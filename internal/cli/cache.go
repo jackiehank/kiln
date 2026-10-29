@@ -302,20 +302,6 @@ func (e *env) mergeLayers(cb vcs.CacheBackend, layers []cache.Layer, dir string,
 	}
 }
 
-// stripNoCache removes the global --no-cache switch from the argument list.
-func stripNoCache(args []string) ([]string, bool) {
-	out := make([]string, 0, len(args))
-	found := false
-	for _, a := range args {
-		if a == "--no-cache" {
-			found = true
-			continue
-		}
-		out = append(out, a)
-	}
-	return out, found
-}
-
 // actionLogCached prints the whole action stream from the record layer. It
 // returns handled=false when the cache cannot serve the request (off, cold,
 // damaged), in which case the caller streams from git as before.
