@@ -169,6 +169,93 @@ git log / jj log          （一遍扫描，唯一的重活）
 
 因此要守住的不变量是**"行 = 动作"**，不是名字本身。这一条把前面几个决定串成同一根线：为什么吐声明而不是当前态（行里装的是这条动作**说的话**）、为什么 `files` 要内嵌（保住一行一动作）、为什么把解析外包给 `%(trailers)` 危险（"动作"的定义在 kiln 里，不在 git 的 trailer 规则里）。
 
+## hypothesize（2026-10-29）：总流定形
+
+结论先行：
+
+1. **范围**：本 issue 分两个 apply——**A 加 T1 字段**（`relations` / `unrelate` / `refs` / `target` / `scope`），**B 加 T2**（`files`）。**文本视图完全不动。**
+2. **`relations` 是声明数组** `[{name,target}]`，不是 `graphEdge`；`unrelate` 单独一个字符串数组。
+3. **一行一动作不变**；T2 内嵌 `files`，不拆成多类型行。
+4. **T2 是 opt-in**（`--files`）：它要给每条提交算 tree diff，默认路径一行都不多花。
+5. 顺序、`--limit`、broken pipe、`--json` 拒绝、空仓提示：**一律不变**。
+6. 缓存（`commit-cache`）与本 issue 共用同一份记录结构；本 issue 不碰缓存。
+
+### 1. `--jsonl` 的字段表（新键追加在末尾）
+
+| key | 类型 | 出现条件 | 说明 |
+| --- | --- | --- | --- |
+| `issue` / `action` / `commit` / `date` | string | 永远 | 身份键，语义不变 |
+| `title` | string | 有 | trailer title，否则 commit subject |
+| `domain` / `tags` | string / []string | 有 | 不变 |
+| `refs` | []string | 有 | **新增** |
+| `target` | []string | 有 | **新增**，按逗号拆（与 `refs`/`tags` 同规则） |
+| `scope` | string | 有 | **新增** |
+| `relations` | [{name,target}] | 有 | **新增** |
+| `unrelate` | []string | 有 | **新增** |
+| `files` | [{path,add,del}] | 仅 `--files` | **新增（apply B）** |
+
+键序固定为表格顺序。新键追加在 `tags` 之后，是为了让人类 diff 行时已有字段不动。
+
+### 2. 为什么 `relations` 是声明形，不是 `graphEdge`
+
+`graphEdge` 是 `{from,to,name,directed}`，它是**折叠后**的边。拿来表示声明有两个副作用：要先查词表把 `has-part: X` 翻成 `from=X, to=me, name=part-of`（把派生逻辑塞进流里）；`directed` 是词表属性，不是"这条提交说的话"。
+
+声明形 `{name,target}` 有三个好处：**忠实**（就是 trailer 里那一行）、**便宜**（不用查词表翻方向）、**可截断可重放**。下游要画边就自己按词表翻转——那是视图的事。
+
+两条必须写进文档的边界：
+
+- **未知名不会出现在 `relations` 里**。`trailer.Parse` 只认词表与别名，未知名落在 `UnknownKeys`（由 `check` 报 `unknown-trailer`）。下游别以为"流里有全部关系"。
+- **顺序要确定**：按词表声明序（`rel.Names()`），同一 name 下靶按书写序，同一 `(name,target)` 去重。同一份仓永远输出同样的字节。
+
+### 3. `unrelate` 为什么单独一个键
+
+它是"撤销关于 X 的全部声明"，不是一条关系：没有 name、不属于任何 slot、不参与强度比较。混进 `relations` 会让 `name` 出现非法值。
+
+### 4. `files`（T2）的形状与代价
+
+```json
+{"path":"internal/cli/cli.go","add":12,"del":3}
+```
+
+- 二进制：`{"path":"x.png","binary":true}`（numstat 给 `-`）；
+- rename：`{"path":"new","from":"old"}`（`-z` 下旧路径是独立字段，要单独处理）；
+- 只在 `--files` 时出现；顺序按 git 输出序，不重排。
+
+代价（本仓实测）：加 `--numstat` 时间不变、字节 +14%；但 diff 成本随树大小走，所以做成开关，让要文件列表的人付钱。
+
+### 5. 两个后端
+
+- **T1 完全对称**：`trailer.Parse` 本来就是后端无关的。
+- **T2 v1 只 git**：jj 的 `diff.summary()` 只有 M/A/D + 路径，`diff.stat()` 只有文本，行数得解析文本。先让 `--files` 在 jj 上 exit 1 并说清楚（`--files 暂不支持 jj`），等 git 路径稳了再补。
+
+### 6. 验收
+
+1. **文本模式字节不变**（硬条件）；
+2. `--jsonl` 只多键，已有键的值一个不变；
+3. **折叠对账**：把流里全部 `relations` 声明按 `FoldEdges` 规则重算，应等于 `graph --json` 的边集合（今天本仓 120 条边；99 行关系 / 147 条声明 / 87 行带关系）；
+4. 未知名关系不落进 `relations`，`check` 仍报 `unknown-trailer`；
+5. 空仓、broken pipe、`--limit`、`--json` 拒绝：行为不变；
+6. `--files` 在 git 仓给出 add/del，在 jj 仓 exit 1 且文案明确。
+
+### 7. 不做
+
+- 不吐折叠态（T3）、diff 正文（T4）、check 诊断（T5）；
+- 不因字段变多改文本视图；
+- 不做 `--reverse`（顺序归 git，见 `commit-cache` 的同名结论）；
+- 不改 `--limit` 的"数动作"语义；
+- 不动 `graph` / `path` 的输出。
+
+### 8. apply 时动哪里
+
+| 位置 | 改动 |
+| --- | --- |
+| `internal/cli/cli.go` | `actionLogDoc` 加字段；`actionLog` 接 `--files`；文本分支不动 |
+| `internal/trailer/trailer.go` | `Fields.Target` 现为单个 string，读侧用现成的 `splitList` 拆成数组即可，不改结构 |
+| `internal/vcs/git/git.go` | 新增带文件的读取（`-z --numstat` 分帧状态机：带 tab 的算 numstat、40 位 hex 的算下一条 header；rename 另测） |
+| `internal/vcs/jj/jj.go` | `--files` 明确拒绝 |
+| `docs/machine-readable-output.md` / `docs/action-log.md` | 新字段表、声明 vs 折叠的边界、`--files` 的代价 |
+| `internal/cli/cli_test.go` | 字段断言 + 折叠对账 + `--files` 双后端 |
+
 ## 记录
 
 - 2026-10-29：从"扫一次提交、action/issue/relation 一起吐"的观察开的条目。当前决定：**只记账**（ask），等有具体消费方或第二次需求再 hypothesize。
