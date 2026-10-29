@@ -25,17 +25,18 @@ const recordsDir = "records"
 var maxLayers = 64
 
 // cacheSite resolves where the cache lives and which vocabulary it belongs to.
-// ok is false when the cache is off (config, --no-cache, KILN_NO_CACHE), the
-// backend cannot serve it (jj), or the directory cannot be resolved.
+// The cache is background behaviour: it is on unless --no-cache (or
+// KILN_NO_CACHE) turns it off, and it stays off for a backend that cannot serve
+// it (jj) or a directory that cannot be resolved.
 func (e *env) cacheSite(backend vcs.Repo) (vcs.CacheBackend, string, [20]byte, bool) {
-	if !e.cacheEnabled || e.noCache {
+	if e.noCache {
 		return nil, "", [20]byte{}, false
 	}
 	return e.cacheDir(backend)
 }
 
-// cacheDir resolves the cache directory and fingerprint without asking whether
-// the cache is enabled: gc is also the escape hatch for a directory left behind.
+// cacheDir resolves the cache directory and fingerprint without checking
+// --no-cache: gc is the explicit escape hatch and must work regardless.
 func (e *env) cacheDir(backend vcs.Repo) (vcs.CacheBackend, string, [20]byte, bool) {
 	cb, ok := backend.(vcs.CacheBackend)
 	if !ok {
@@ -316,16 +317,17 @@ func decodeOID(id string) ([20]byte, bool) {
 	return oid, true
 }
 
-// cacheCmd is `kiln cache <sync|gc>`: sync prewarms the layer, gc forces a
-// reachability clean-up. Reads populate the cache on their own, so neither is
-// part of the normal path.
+// cacheCmd is `kiln cache gc`: the explicit escape hatch. Reads write the cache,
+// merge it and prune unreachable records on their own, so the only job left for a
+// command is forcing a full reachability clean-up (old records, foreign-fingerprint
+// layers, broken files).
 func (e *env) cacheCmd(args []string) int {
 	pos, _, missing := parse(args)
 	if code := rejectMissingValues(e.errw, missing, allowedFlags()); code != 0 {
 		return code
 	}
-	if len(pos) != 1 || (pos[0] != "sync" && pos[0] != "gc") {
-		fmt.Fprint(e.errw, i18n.T("用法: kiln cache <sync|gc>\n"))
+	if len(pos) != 1 || pos[0] != "gc" {
+		fmt.Fprint(e.errw, i18n.T("用法: kiln cache gc\n"))
 		return 2
 	}
 	backend, err := e.backend()
@@ -333,75 +335,7 @@ func (e *env) cacheCmd(args []string) int {
 		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
-	if pos[0] == "sync" {
-		return e.cacheSync(backend)
-	}
 	return e.cacheGC(backend)
-}
-
-func (e *env) cacheSync(backend vcs.Repo) int {
-	cb, dir, fp, ok := e.cacheSite(backend)
-	if !ok {
-		fmt.Fprint(e.errw, i18n.T("缓存未启用：在 .kilnconfig.jsonc 里设置 \"cache\": { \"enabled\": true }\n"))
-		return 1
-	}
-	head, err := cb.HeadOID()
-	if err != nil {
-		fmt.Fprint(e.errw, i18n.T("读取 HEAD 失败: %v\n", err))
-		return 1
-	}
-	layers, err := cache.Scan(dir)
-	if err != nil {
-		fmt.Fprint(e.errw, i18n.T("读取缓存失败: %v\n", err))
-		return 1
-	}
-	layers = usable(layers, fp)
-	if headOID, ok := decodeOID(head); ok && covered(layers, headOID) {
-		fmt.Fprintln(e.out, i18n.T("已是最新（无需同步）"))
-		return 0
-	}
-	oids, err := cb.LogOIDs()
-	if err != nil {
-		fmt.Fprint(e.errw, i18n.T("读取历史失败: %v\n", err))
-		return 1
-	}
-	index := make(map[[20]byte]cache.Record)
-	for _, l := range layers {
-		for _, r := range l.Records {
-			index[r.OID] = r
-		}
-	}
-	var missing []string
-	for _, id := range oids {
-		oid, ok := decodeOID(id)
-		if !ok {
-			continue
-		}
-		if _, hit := index[oid]; !hit {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) == 0 {
-		fmt.Fprintln(e.out, i18n.T("已是最新（无需同步）"))
-		return 0
-	}
-	fetched, err := cb.Commits(missing)
-	if err != nil {
-		fmt.Fprint(e.errw, i18n.T("读取提交失败: %v\n", err))
-		return 1
-	}
-	records := make([]cache.Record, 0, len(missing))
-	for _, id := range missing {
-		raw, ok := fetched[id]
-		if !ok {
-			continue
-		}
-		records = append(records, engine.RecordFromCommit(vcs.Commit{ID: id, Date: raw.Date, Message: raw.Message}, e.rel()))
-	}
-	e.persist(dir, fp, records, head)
-	e.maybeMerge(cb, dir, fp, len(oids))
-	fmt.Fprintln(e.out, i18n.T("已同步 %d 条提交记录", len(records)))
-	return 0
 }
 
 // covered reports whether some layer already claims this exact tip: if it does,

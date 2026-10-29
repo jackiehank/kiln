@@ -202,18 +202,13 @@ The config file is `.kilnconfig.jsonc` at the **repository root** (JSONC: JSON +
 - **Strict validation**: an empty vocabulary / `start`, `terminal` not in `names` / a **misspelled key** → error at startup, never silently ignored.
 - **Minimal config**: `{"actions": {"names": ["ask", "probe", "done"]}}` → `start=ask`, `terminal=done`.
 
-## Cache (optional, off by default)
+## Cache (background behaviour, on by default)
 
-Every read command walks the whole history; past a few thousand commits that walk is the cost. Enabling the cache stores the parsed result under `.git/kiln/records/` (one per clone, shared by every worktree) and answers from it next time — **with byte-identical output**.
+Every read command walks the whole history; past a few thousand commits that walk is the cost. kiln stores the parsed result under `.git/kiln/records/` (one per clone, shared by every worktree) and answers from it next time — **with byte-identical output**, no configuration needed.
 
-```jsonc
-{ "cache": { "enabled": true } }
-```
-
-- **Off by default**: without the `cache` key nothing is created and nothing is written.
-- The first read writes the records (tens of milliseconds, once); later reads hit.
-- `kiln cache sync` prewarms; `kiln cache gc` reclaims by reachability (old records, broken layers, old versions). Layers merge at 64, and a merge drops records no ref can reach.
+- The first read writes the records (tens of milliseconds, once); later reads hit. Layers merge at 64, and a merge drops records no ref can reach.
 - `--no-cache` (or `KILN_NO_CACHE=1`) bypasses it per command; output is unchanged.
+- `kiln cache gc` reclaims by reachability (old records, broken layers, old versions). You should not need it: reads write and merge the cache themselves.
 - Read-only checkouts / CI mounts: a failed write is skipped silently; reads keep working.
 - Cost (100k commits measured): `graph --json` 1,266 → 631 ms, `action log --jsonl` 1,413 → 1,001 ms; about 130 B per commit on disk.
 

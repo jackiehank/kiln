@@ -10,14 +10,9 @@ package i18n
 // (or Errorf, for E).
 var enCatalog = map[string]string{
 	"--no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）\n": "--no-cache:  neither read nor write the commit-record cache (same as KILN_NO_CACHE=1; output is unchanged)\n",
-	"用法: kiln cache <sync|gc>\n": "usage: kiln cache <sync|gc>\n",
-	"提交记录缓存：预热（sync）或按可达集清理（gc）——读命令会自己写缓存，这两个命令只用于提前预热/强制回收":          "record cache: prewarm (sync) or clean by reachability (gc) — reads populate it on their own; these only prewarm and reclaim",
-	"缓存未启用：在 .kilnconfig.jsonc 里设置 \"cache\": { \"enabled\": true }\n": "cache is not enabled: set \"cache\": { \"enabled\": true } in .kilnconfig.jsonc\n",
-	"已是最新（无需同步）":                      "already up to date (nothing to sync)",
-	"已同步 %d 条提交记录":                    "synced %d commit records",
-	"读取 HEAD 失败: %v\n":                "cannot read HEAD: %v\n",
+	"用法: kiln cache gc\n": "usage: kiln cache gc\n",
+	"按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条）": "clean the commit-record cache by reachability (reads write and merge it themselves; only forced reclaim needs this)",
 	"读取缓存失败: %v\n":                    "cannot read the cache: %v\n",
-	"读取提交失败: %v\n":                    "cannot read commits: %v\n",
 	"读取可达集失败: %v\n":                   "cannot compute the reachable set: %v\n",
 	"写入缓存失败: %v\n":                    "cannot write the cache: %v\n",
 	"当前后端不支持缓存\n":                     "this backend does not support the cache\n",

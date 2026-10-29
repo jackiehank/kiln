@@ -16,16 +16,12 @@ import (
 // must print the same bytes whether it answers from the cache, from a full scan,
 // or with the cache disabled. They run against a real git repository.
 
-func cacheTestRepo(t *testing.T, enabled bool) string {
+// cacheTestRepo builds a repository. The cache is background behaviour now, so
+// there is nothing to switch on.
+func cacheTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	cacheGit(t, dir, nil, "", "init", "-q")
-	if enabled {
-		body := "{\n  // 缓存\n  \"cache\": { \"enabled\": true }\n}\n"
-		if err := os.WriteFile(filepath.Join(dir, ".kilnconfig.jsonc"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return dir
 }
 
@@ -85,7 +81,7 @@ func layerCount(t *testing.T, dir string) int {
 }
 
 func TestCacheReadsPrintIdenticalBytes(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "beta", "ask", "乙单", "2026-10-01T11:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
@@ -138,7 +134,7 @@ func TestCacheReadsPrintIdenticalBytes(t *testing.T) {
 }
 
 func TestCacheCoversEveryReadCommand(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
 	commitAction(t, dir, "beta", "ask", "乙单", "2026-10-02T10:00:00+08:00")
@@ -161,19 +157,8 @@ func TestCacheCoversEveryReadCommand(t *testing.T) {
 	}
 }
 
-func TestCacheStaysOffUnlessConfigured(t *testing.T) {
-	dir := cacheTestRepo(t, false)
-	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
-	t.Chdir(dir)
-
-	cacheOutput(t, "list", "--json")
-	if _, err := os.Stat(recordsPath(dir)); !os.IsNotExist(err) {
-		t.Fatalf("a file without the cache key must not create state: %v", err)
-	}
-}
-
 func TestNoCacheFlagLeavesNoState(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	t.Chdir(dir)
 
@@ -184,7 +169,7 @@ func TestNoCacheFlagLeavesNoState(t *testing.T) {
 }
 
 func TestCacheIgnoresCorruptLayer(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
 	t.Chdir(dir)
@@ -210,7 +195,7 @@ func TestCacheIgnoresCorruptLayer(t *testing.T) {
 }
 
 func TestActionLogCachedMatchesTheStream(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "beta", "ask", "乙单", "2026-10-01T11:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
@@ -245,7 +230,7 @@ func TestActionLogCachedMatchesTheStream(t *testing.T) {
 }
 
 func TestActionLogGapFillMatchesTheStream(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	t.Chdir(dir)
 	want := cacheOutput(t, "action", "log")
@@ -272,26 +257,8 @@ func totalRecords(t *testing.T, dir string) int {
 	return n
 }
 
-func TestCacheSyncFillsTheLayerAndIsIdempotent(t *testing.T) {
-	dir := cacheTestRepo(t, true)
-	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
-	t.Chdir(dir)
-
-	cacheOutput(t, "cache", "sync")
-	if n := layerCount(t, dir); n != 1 {
-		t.Fatalf("sync must write one layer, got %d", n)
-	}
-	if recs := totalRecords(t, dir); recs != 1 {
-		t.Fatalf("sync must record every commit, got %d", recs)
-	}
-	cacheOutput(t, "cache", "sync")
-	if n := layerCount(t, dir); n != 1 {
-		t.Fatalf("a second sync must be a no-op, got %d layers", n)
-	}
-}
-
 func TestCacheGCDropsUnreachableRecords(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
 	t.Chdir(dir)
@@ -332,7 +299,7 @@ func TestMergePrunesUnreachableRecords(t *testing.T) {
 	maxLayers = 2
 	defer func() { maxLayers = old }()
 
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
 	t.Chdir(dir)
@@ -363,7 +330,7 @@ func TestMergePrunesUnreachableRecords(t *testing.T) {
 }
 
 func TestCacheIsSharedAcrossWorktrees(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
 	t.Chdir(dir)
@@ -393,7 +360,7 @@ func TestCacheIsSharedAcrossWorktrees(t *testing.T) {
 }
 
 func TestCacheWriteFailureIsSilent(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	t.Chdir(dir)
 
@@ -415,7 +382,7 @@ func TestCacheWriteFailureIsSilent(t *testing.T) {
 }
 
 func TestRewriteSignalCleansWithoutWaitingForTheLayerCount(t *testing.T) {
-	dir := cacheTestRepo(t, true)
+	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	t.Chdir(dir)
 	_ = cacheOutput(t, "list", "--json")

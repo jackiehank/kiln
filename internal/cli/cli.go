@@ -74,7 +74,7 @@ var usageCommands = [][2]string{
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
-	{"kiln cache <sync|gc>", "提交记录缓存：预热（sync）或按可达集清理（gc）——读命令会自己写缓存，这两个命令只用于提前预热/强制回收"},
+	{"kiln cache gc", "按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条）"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 	{"kiln --version", "打印版本、可执行文件路径与构建时间（-V / version 同义）"},
@@ -292,8 +292,7 @@ type env struct {
 	worktree     string
 	configPath   string
 	configSource string
-	cacheEnabled bool // the config asked for the record cache
-	noCache      bool // --no-cache / KILN_NO_CACHE overrides the config
+	noCache      bool // --no-cache / KILN_NO_CACHE turns the record cache off
 	repo         vcs.Repo
 	kind         vcs.Kind // the backend that was opened, recorded for backend-specific wording
 	out          io.Writer
@@ -484,7 +483,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		worktree:     cfg.Worktree,
 		configPath:   cfg.Path,
 		configSource: cfg.Source,
-		cacheEnabled: cfg.Cache && !noCache,
 		noCache:      noCache,
 		out:          stdout,
 		errw:         stderr,

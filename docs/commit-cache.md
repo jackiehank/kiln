@@ -555,23 +555,14 @@ covered = 各层头里记录的 tip 集合（只信校验通过的层）
 
 结论：**≥10k 提交时，每次提交后 sync 一次也能回本**；3k–10k 建议批量 sync。表里的命中读按原型 7.7 MB 层测（解码 33.6 ms）；正式格式约 13 MB，解码预计 +15–25 ms，不改变结论。
 
-### 6. 配置项与开关
+### 6. 开关：一律开启，`--no-cache` 是唯一例外
 
-缓存**默认关闭**：`.kilnconfig.jsonc` 里没有 `cache` 这一项，就等于不缓存——不建目录、不写盘、不 spawn 额外进程，行为与今天逐字节一致。
+缓存是**后台行为**，不是用户要记得打开的开关：没有配置项，读命令自动写、自动合并、自动清理。
 
-```jsonc
-{
-  // 提交记录缓存：默认关闭；没有这一项 = 不缓存。
-  // 开启后读命令会顺手把记录落到 .git/kiln/records/（只影响速度，不影响输出）。
-  "cache": { "enabled": true }
-}
-```
-
-- **优先级**：`--no-cache` / `KILN_NO_CACHE=1` 强制关，不管配置怎么写；未配置 = 关。
-- **开启后**：读顺手写（§2）、`sync` 可预热（§3）、层数 ≥64 自动合并（§2）。
-- **未开启时 `kiln cache sync`**：exit 1，并提示去配置里打开——不静默建目录（"没有这一项就默认无缓存"）。
-- **位置**：`$(git rev-parse --path-format=absolute --git-common-dir)/kiln/records/`；老 git（<2.31）没有 `--path-format` 时回落相对路径拼接。
-- **兼容性**：配置是严格解析（`dec.DisallowUnknownFields()`），所以带 `cache` 的文件在老 kiln 上会报 `unknown field "cache"`。这与 `config-compat` 已定的"0.x 不承诺配置兼容、迁移写进 release notes"一致；播种的默认配置会带一段注释掉的 `cache` 示例。
+- **关闭**：`--no-cache` / `KILN_NO_CACHE=1`，只影响本次进程；输出逐字节不变——它存在的意义是排查问题和做 A/B 验收。
+- **`kiln cache gc`**：唯一保留的命令，按 `rev-list --all` 强制清理（旧记录、坏层、旧指纹层、临时文件）。日常不需要，读路径自己维护。
+- **位置**：`$(git rev-parse --path-format=absolute --git-common-dir)/kiln/records/`；老 git（<2.31）回落相对路径拼接。
+- **兼容性**：配置里现在没有 `cache` 键；写过 `"cache": {…}` 的文件会被严格解析判为 unknown field（0.x 不承诺配置兼容）。播种的默认配置只留一句注释说明它默认开启、`--no-cache` 可绕过。
 
 ### 7. 与"总流"的关系
 
@@ -701,7 +692,7 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 - 读路径：`Log` 路径（`graph` / `list` / `check` / `path` / `status` / `show`）枚举 + 查层 + `cat-file --batch` 补缺 + 顺手写；`action log` 全量走**流式枚举**（`EachOIDAuthorDate`）边枚举边查表边输出，`--limit` 保持直读。
 - 写路径：`kiln cache sync` 增量预热（HEAD 已覆盖即空转、不开 git）；`kiln cache gc` 按 `rev-list --all` 清理；两者与读路径共用同一个写层函数。
 - 自动 GC：扫描时删坏层；合并（层数 ≥64）时按"记录数 vs 枚举数"判定，有候选才跑可达性剪枝；**重写信号**（完整枚举全未命中且已有层）立刻合并 + 剪枝。
-- 开关：`cache.enabled`（缺省关）/ `--no-cache` / `KILN_NO_CACHE`。
+- 开关：**默认开启**（后台行为）；`--no-cache` / `KILN_NO_CACHE` 是唯一例外；`kiln cache gc` 是唯一保留的命令。
 
 **实测**（100k 合成仓，Windows，min of 5）：
 
@@ -748,6 +739,7 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 - 2026-10-29（同日，hypothesize 续）：补并发与持久化——缓存放 `--git-common-dir`，所有 worktree 共用一份（键是 OID；实测 linked worktree 上 common-dir 指向主 `.git`）；去掉 `chain`，**目录即索引**：内容寻址层名 + 临时名 rename + 容错读，于是无锁、无 stale lock、无半成品可见；损坏一律整层忽略（层名 = 内容 SHA-1，7.7 MB 校验 4.6 ms，100k 层约 6 ms），丢失即全扫、下次 `sync` 重建；GC 可达性按 `rev-list --all` 算，避免删掉别的 worktree 还在用的记录。验收扩到 10 条（新增并发、worktree、自愈）。
 - 2026-10-29（同日，hypothesize 续）：把 `sync` 的语义定成**幂等补缺**——HEAD 已被校验通过的层覆盖就 exit 0（不开 git 进程），并发 sync 因此是空转而不是冲突；两个进程同时落在 race 窗口时最多重复一次增量（~100 ms），写出的层内容相同、名字相同，等于空写。唯一"两种真相并存"的情形（两个进程词表不同）由层头指纹隔离：层名不同、各读各的，另一份等 `gc`。验收加第 10 条（空转不产生新层、不 spawn git）。
 - 2026-10-29（同日，hypothesize 续）：定清 GC 的自动边界。**自动只有两件**：层数 ≥64 合并（纯本地，100k ≈ 80 ms）；"本次枚举 100% 未命中且已有层"（历史被重写）时跑一次 `rev-list --all` 做集合差、丢掉不可达记录（100k ≈ 200 ms，只发生在改写后的第一次读）。其余（旧 magic/旧指纹层、坏层、临时文件）交给显式的 `kiln cache gc`；不设定时器、不做后台、不在每次读上算可达性。删除永远只是让下次读变慢，中间状态都是合法并集。
+- 2026-10-29（同日，apply 第五刀）：把缓存收回后台——删掉 `cache sync` 与 `cache.enabled` 配置项，读命令一律写缓存，`--no-cache` / `KILN_NO_CACHE` 是唯一例外，只留 `kiln cache gc` 作为强制回收的逃生口。理由是"缓存是后台行为，不该成为用户要理解的接口"；`sync` 唯一不可替代的场景（CI 预热）可以靠先跑一次读命令覆盖。
 - 2026-10-29（同日，apply 第四刀）：补齐剩下的验收——worktree 共享（linked worktree 读同一份层、不写自己的 .git）、写失败静默（把 .git/kiln 做成文件让写必败，输出仍与 --no-cache 逐字节相同）；重写信号落地（一次完整枚举里 OID 全未命中且有层 → 立刻合并 + 可达性过滤，不等 64 层）；README 双语新增「缓存（默认关闭）」一节。至此设计里的三条自动 GC 入口都有实现与测试。
 - 2026-10-29（同日，apply 第三刀）：`action log` 接入缓存，并补上 `kiln cache sync` / `cache gc`。关键发现：`action log` 的流式读取本来就把「git 遍历」和「渲染」重叠了，所以**枚举必须也流式**才有收益——第一版先枚举完再渲染，100k jsonl 是 1,452 ms（比全扫还慢 4%）；改成 `EachOIDAuthorDate` 边枚举边渲染后 1,413 → 1,001 ms（−29%），文本模式同样。缺一条记录会单独 `cat-file`（罕见，换流式重叠值得）。`cache gc` 按 `rev-list --all` 过滤并合并成一层；合并时若记录数 > 本次枚举数，会自动跑一次可达性过滤（三档判定的前两档），证不了就只合并不删。新增 7 条集成测试（action log 冷/命中/limit、sync 幂等、gc 丢弃不可达、合并自动剪枝）。
 - 2026-10-29（同日，apply 第二刀）：`Log` 路径接入缓存——`git log --format=%H` 枚举 + 层内查表 + `cat-file --batch` 补缺 + 顺手写层 + 64 层本地合并；`--no-cache` / `KILN_NO_CACHE` 全局关；配置没开就不建目录。100k 合成仓实测：命中 1,266 → 631 ms（−50%），冷读 +238 ms（编码约 100 ms），层 7.3 MB；`graph/list/check/path/status/show` 在 冷/命中/`--no-cache` 三态下输出逐字节一致（新增 5 条集成测试）。`action log` 与 `cache sync/gc` 命令仍未接。
