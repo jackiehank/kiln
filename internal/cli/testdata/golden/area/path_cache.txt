@@ -1,0 +1,13 @@
+argv: kiln path cache
+exit: 0
+stdout[274]:
+cache  已完成（当前 apply）
+  1. ask          3d66875  读命令要跑几次 git
+  2. hypothesize  427ca35  热读可以用快照
+  3. apply        17e900b  落地枚举快照
+  关系:
+    has-part cli-consistency（has-part ＝ 谁属于我）
+    relates-to graph
+
+stderr[0]:
+

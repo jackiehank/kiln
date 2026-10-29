@@ -1,0 +1,18 @@
+argv: kiln show cache
+exit: 0
+stdout[270]:
+cache · 3/3 apply · 17e900b · 落地枚举快照
+
+commit 17e900bbc765f17acaa725bbbf3f7ac370358d5b
+Author: Test <test@example.com>
+Date:   Thu Oct 1 12:00:00 2026 +0000
+
+    落地枚举快照
+    
+    issue: cache
+    action: apply
+    domain: tooling
+    tags: perf
+
+stderr[0]:
+

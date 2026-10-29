@@ -1,0 +1,16 @@
+argv: kiln action log --jsonl
+exit: 0
+stdout[2020]:
+{"issue":"late-idea","action":"collect","commit":"c0048619ae70faab87cea4ebb41500217032a8eb","date":"2026-10-05T09:00:00Z","title":"没有起点的问题","domain":"tooling"}
+{"issue":"doc-search","action":"collect","commit":"48efd3f77f185bc9666e0770562a9039c0c7ba88","date":"2026-10-04T10:00:00Z","title":"找到三条可选路径","domain":"design"}
+{"issue":"doc-search","action":"ask","commit":"845ccedd1c7fda259adf7d5d2590b96f586082a4","date":"2026-10-04T09:00:00Z","title":"文档搜索还没做","domain":"design","relations":[{"name":"blocks","target":"cli-consistency"}]}
+{"issue":"cli-consistency","action":"apply","commit":"90f6805f2010903d57b97440d7b4aac110766a9c","date":"2026-10-03T10:00:00Z","title":"统一 help 与错误文案","domain":"cli","tags":["docs"],"relations":[{"name":"part-of","target":"cache"}]}
+{"issue":"cli-consistency","action":"ask","commit":"8601eae3ccf45ac310beff56027d6dbd5f171bc1","date":"2026-10-03T09:00:00Z","title":"命令表面要一致","domain":"cli","relations":[{"name":"part-of","target":"cache"}]}
+{"issue":"graph","action":"conclude","commit":"2016e1a57b2cebc90cbbe46d28770d6a6066c7d5","date":"2026-10-02T10:00:00Z","title":"图查询按邻域收窄","domain":"design","relations":[{"name":"relates-to","target":"cache"}]}
+{"issue":"graph","action":"ask","commit":"e8c36122e853a85ae875d7900c75fd0a935ec061","date":"2026-10-02T09:00:00Z","title":"图形输出要能收窄","domain":"design","relations":[{"name":"relates-to","target":"cache"}]}
+{"issue":"cache","action":"apply","commit":"17e900bbc765f17acaa725bbbf3f7ac370358d5b","date":"2026-10-01T12:00:00Z","title":"落地枚举快照","domain":"tooling","tags":["perf"]}
+{"issue":"cache","action":"hypothesize","commit":"427ca357bb26f65bdb4de5eaf0e59d326b1a84af","date":"2026-10-01T11:00:00Z","title":"热读可以用快照","domain":"tooling"}
+{"issue":"cache","action":"ask","commit":"3d6687541b95e4ee02cea7f1ec0ba86a77dc5d48","date":"2026-10-01T10:00:00Z","title":"读命令要跑几次 git","domain":"tooling"}
+
+stderr[0]:
+

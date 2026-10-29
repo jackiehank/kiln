@@ -1,0 +1,7 @@
+argv: kiln config path
+exit: 0
+stdout[25]:
+<ROOT>\.kilnconfig.jsonc
+
+stderr[0]:
+

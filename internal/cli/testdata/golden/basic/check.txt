@@ -1,0 +1,12 @@
+argv: kiln check
+exit: 1
+stdout[411]:
+✓ cache                          完整（ask, hypothesize, apply）
+✓ cli-consistency                完整（ask, apply）
+⚠ doc-search                     缺少终点动作（当前 collect）
+✓ graph                          完整（ask, conclude）
+✗ late-idea                      缺少 ask：问题没有起点动作
+⚠ late-idea                      缺少终点动作（当前 collect）
+
+stderr[0]:
+

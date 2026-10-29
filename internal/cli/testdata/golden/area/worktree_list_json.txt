@@ -1,0 +1,26 @@
+argv: kiln worktree list --json
+exit: 0
+stdout[321]:
+{
+  "backend": "git",
+  "worktrees": [
+    {
+      "path": "<ROOT>",
+      "main": true,
+      "gone": false,
+      "dirty": false,
+      "unmerged": false
+    },
+    {
+      "path": "<ROOT>-area",
+      "main": false,
+      "issue": "area",
+      "gone": false,
+      "dirty": false,
+      "unmerged": false
+    }
+  ]
+}
+
+stderr[0]:
+

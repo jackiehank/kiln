@@ -1,0 +1,15 @@
+argv: kiln graph --mermaid
+exit: 0
+stdout[305]:
+flowchart LR
+  i_cache["cache (apply)"]
+  i_cli_consistency["cli-consistency (apply)"]
+  i_doc_search["doc-search (collect)"]
+  i_graph["graph (conclude)"]
+  i_late_idea["late-idea (collect)"]
+  i_cli_consistency -- part-of --> i_cache
+  i_doc_search -- blocks --> i_cli_consistency
+  i_graph --- i_cache
+
+stderr[0]:
+

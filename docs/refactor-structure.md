@@ -275,3 +275,34 @@ collect 把 `loadCached` 排在最后，是"先易后难"的直觉。但 `cache.
 诚实的提醒：`loadCached` 拆完分支总数不变（21 → 21，只是分布开），这是**命名，不是简化**——不要期待复杂度下降；`cache.go`（456 行）与 `enum.go`（443 行）仍是最大的两个文件，本轮不动它们，所以"最大文件 ≤330"只对新拆出的命令文件成立。
 
 四条全满足就算做完；不满意的部分，写明为什么没做，而不是"以后再说"。
+
+## 落地（阶段 0，2026-10-29）：golden 回归网
+
+### 1. 形状
+
+- `internal/cli/golden_test.go`（约 300 行）+ `internal/cli/testdata/golden/{basic,area}/`：30 个用例 × 2 个 fixture = **60 份录制，45.6 KB**，最大的一份 `help.txt` 5.6 KB。
+- 两个 fixture 都由测试现建。`basic`：10 个提交、4 个 issue（其中 `late-idea` 故意没有起点）、`blocks`/`part-of`/`relates-to` 三种关系、`tags`、两个 domain。`area` 在 `basic` 之上多一个 `git worktree`，所以 `status` 的 `已开 1 个` 与 `worktree list` 都被录进去。
+- 每个用例跑两遍：热读一次、`--no-cache` 一次，**两者必须逐字节相同**（`refactor` 的不变式固化进测试），然后再与录制文件比。
+- 记录格式：`argv` / `exit` / `stdout[n]` + 正文 / `stderr[n]`。n 是**归一化后**的字节数——fixture 路径本身长度每次运行不同，用原始长度会让 manifest 不稳定（第一版就是这么红的）。
+- 归一化：把 fixture 根替换成 `<ROOT>`，同时覆盖 JSON 转义（`\\`）与正斜杠（`/`）两种写法。
+- 用例只选只读命令（不含 `do`/`commit`/`worktree new|remove`/`cache gc`，它们会改 HEAD 或缓存目录），所以 30 个用例可以在同一个 fixture 上任意顺序跑。
+
+### 2. 确定性从哪来
+
+- `TestMain` 里加 `TZ=UTC`：`action log` 与日期列都用 `time.Local` 渲染，不钉住的话 UTC+8 录的 golden 在 CI（UTC）上必红。
+- 提交日期写死（`GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`，全部 `+00:00`），`KILN_LANG=zh` 早已固定。
+- `config path` 的用例在 fixture 里预先建好配置文件，否则第一次运行会多打印一行"已写入一份带注释的默认配置"——这是第二处踩到的坑。
+
+### 3. 一次"网会红"的验证
+
+故意在 `status` 表头加一个空格 → `TestGolden/basic/status` 立刻红，并打出首个不同行（`recorded` / `current` 各三行上下文）→ 还原 → 绿。这是 H3 的正面证据：搬家时一个空格的漂移就够触发。
+
+### 4. 成本
+
+- 全量 `go test ./internal/cli`：**21.5 s**（其中 golden 约 7.7 s）。
+- 钉住 `TZ` 后全套测试仍绿（本机验证；没有 CI 可复验，所以只记"本机绿"）。
+
+### 5. 遗留
+
+- 矩阵里没有 `do`/`commit`：写路径的输出也值得锁，但它们改 HEAD，得换成"每个用例克隆一份 fixture"，成本高一些，等阶段 2（拆 `loadCached`）需要时再补。
+- `graph --mermaid`、`path --stat` 等变体已经覆盖，但没有 `--shortstat`、`graph --format=ascii` 的显式重复（二者与已录用例等价）。

@@ -1,0 +1,18 @@
+argv: kiln graph
+exit: 0
+stdout[250]:
+cache (apply)
+
+cli-consistency (apply)
+└── ──part-of──▶ cache (apply)
+
+doc-search (collect)
+└── ──blocks──▶ cli-consistency (apply)
+
+graph (conclude)
+└── ──relates-to── cache (apply)
+
+late-idea (collect)
+
+stderr[0]:
+

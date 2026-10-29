@@ -1,0 +1,11 @@
+argv: kiln list
+exit: 0
+stdout[309]:
+cache                          apply        domain=tooling tags=perf
+cli-consistency                apply        domain=cli tags=docs
+doc-search                     collect      domain=design
+graph                          conclude     domain=design
+late-idea                      collect      domain=tooling
+
+stderr[0]:
+

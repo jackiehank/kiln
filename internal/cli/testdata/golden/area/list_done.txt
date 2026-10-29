@@ -1,0 +1,9 @@
+argv: kiln list --status=done
+exit: 0
+stdout[192]:
+cache                          apply        domain=tooling tags=perf
+cli-consistency                apply        domain=cli tags=docs
+graph                          conclude     domain=design
+
+stderr[0]:
+

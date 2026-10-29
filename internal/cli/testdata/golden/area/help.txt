@@ -1,0 +1,66 @@
+argv: kiln help
+exit: 0
+stdout[5597]:
+kiln — git-trailer 驱动的问题追踪与路径重建
+
+用法:
+  kiln do <issue> <action> --title <text> [flags]                                           生成规范提交信息（不写文件）
+  kiln commit <issue> <action> --title <text> [--only <paths>] [flags]                      用规范信息直接提交（--only 只提交列出的路径）
+  kiln path <issue> [<issue>…] | --all                                                      重建问题的研究路径（--all 一次读全仓；可加 --stat / --shortstat / --json）
+  kiln show <issue> [n|action]                                                              展开某个动作的完整变更（可加 --stat / --json）
+  kiln status                                                                               全库概览
+  kiln check [--verbose]                                                                    语义完整性校验
+  kiln list [--domain=] [--tag=] [--action=] [--status=open|done] [--search=]               按条件过滤问题
+  kiln action list [--json]                                                                 列出可用的 action 类型（词表）
+  kiln action log [--jsonl] [--limit N]                                                     全局动作流（一条动作一行；--jsonl 给 agent 读；--limit 只看最近 N 条）
+  kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]  问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）
+  kiln worktree new <issue>                                                                 建 worktree（main 只读，动作只在 worktree 提交）
+  kiln worktree list                                                                        列出全部 worktree（含 main）及各自状态（可加 --json）
+  kiln cache gc                                                                             按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条）
+  kiln worktree remove <issue>                                                              删除 worktree（尚有工作的默认拒绝，--force 强删）
+  kiln config path                                                                          打印配置路径（缺失时写入一份带注释的默认配置）
+  kiln --version                                                                            打印版本、可执行文件路径与构建时间（-V / version 同义）
+
+action 词表默认: ask | hypothesize | collect | test | conclude | apply（生效词表见 kiln action list）
+worktree 默认: off（允许在 main 提交）| on（动作只在 worktree 里提交——开工前先 kiln worktree new <issue>）
+提交范围: 默认提交当前工作区的全部改动（快照）；--only <paths> 只提交列出的路径（两后端同义；空动作允许）
+（配置：仓库根的 .kilnconfig.jsonc，JSONC；用 kiln config path 打印路径）
+
+do/commit 的 flags:  （位置参数 <issue> <action> 与 --title 必填；其余 flag 选填）
+  元数据:
+    --title <文本>                     动作标题（必填）
+    --refs <条目>[,<条目>]             引用
+    --target <文件>[,<文件>]           涉及的文件（必须在本次改动里）
+    --scope <文本>                     范围
+    --domain <名字>                    分类
+    --tag <标签>[,<标签>]              标签
+  关系:  （均可重复、逗号分隔）
+    --blocks <issue>[,<issue>]         我阻塞谁
+    --blocked-by <issue>[,<issue>]     谁阻塞我
+    --part-of <issue>[,<issue>]        我属于谁
+    --has-part <issue>[,<issue>]       谁属于我
+    --relates-to <issue>[,<issue>]     无向的关联
+    --caused-by <issue>[,<issue>]      谁引发了我
+    --causes <issue>[,<issue>]         我引发了谁
+    --supersedes <issue>[,<issue>]     我取代谁
+    --superseded-by <issue>[,<issue>]  谁取代了我
+    --unrelate <issue>[,<issue>]       撤销与该 issue 的关系
+  说明: <> 是值占位；[,<…>] 表示可重复、逗号分隔；关系名亦可写别名 derived-from / spawns。
+  值以 -- 开头时写 --flag=值（空格形式会报缺值）。
+  终点动作（默认 conclude / apply）之后仍可继续接动作——问题不会被关闭。
+
+path 的 flags:  --stat（每动作附文件统计）  --shortstat（每动作一行总计）  --json（机器可读输出）
+path 额外 flag:  --all（一次读全仓；只与 --json 同用，也可直接给多条问题）
+show 的 flags:  --stat（只给该动作的文件统计）  --json（机器可读输出）
+worktree list 的 flags:  --json（机器可读输出）
+status / list / check 的 flags:  --json（机器可读输出：stdout 只放一个 JSON 文档）
+list 的 --status:  open（未收尾）| done（末条动作是终点动作）
+list 的 --tag:  单个标签，不切逗号（多标签过滤暂不支持）
+list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感（搜 id / 当前标题 / 动作 subject）
+commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
+worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
+--lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
+--no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）
+
+stderr[0]:
+

@@ -1,0 +1,21 @@
+argv: kiln status
+exit: 0
+stdout[339]:
+问题总数: 5（完成 3 / 进行中 2）｜domain 3 个｜worktree off（已开 1 个）
+kiln 动作数: 10
+
+cli
+  cli-consistency ✓ apply
+
+design
+  doc-search        collect
+  graph           ✓ conclude
+
+tooling
+  cache           ✓ apply
+  late-idea         collect
+
+■ = 已开 worktree——各自状态见 kiln worktree list
+
+stderr[0]:
+

@@ -1,0 +1,71 @@
+argv: kiln graph --json
+exit: 0
+stdout[1077]:
+{
+  "summary": {
+    "issues": 5,
+    "edges": 3,
+    "missing": 0
+  },
+  "nodes": [
+    {
+      "id": "cache",
+      "domain": "tooling",
+      "action": "apply",
+      "done": true,
+      "tags": [
+        "perf"
+      ]
+    },
+    {
+      "id": "cli-consistency",
+      "domain": "cli",
+      "action": "apply",
+      "done": true,
+      "tags": [
+        "docs"
+      ]
+    },
+    {
+      "id": "doc-search",
+      "domain": "design",
+      "action": "collect",
+      "done": false
+    },
+    {
+      "id": "graph",
+      "domain": "design",
+      "action": "conclude",
+      "done": true
+    },
+    {
+      "id": "late-idea",
+      "domain": "tooling",
+      "action": "collect",
+      "done": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "cli-consistency",
+      "to": "cache",
+      "name": "part-of",
+      "directed": true
+    },
+    {
+      "from": "doc-search",
+      "to": "cli-consistency",
+      "name": "blocks",
+      "directed": true
+    },
+    {
+      "from": "graph",
+      "to": "cache",
+      "name": "relates-to",
+      "directed": false
+    }
+  ]
+}
+
+stderr[0]:
+

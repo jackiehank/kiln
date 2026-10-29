@@ -1,0 +1,7 @@
+argv: kiln worktree list
+exit: 0
+stdout[40]:
+<ROOT>  main（只读/只合并）  —
+
+stderr[0]:
+

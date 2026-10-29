@@ -1,0 +1,71 @@
+argv: kiln check --json
+exit: 1
+stdout[1061]:
+{
+  "passed": false,
+  "findings": {
+    "ok": 3,
+    "warn": 2,
+    "error": 1
+  },
+  "results": [
+    {
+      "issue": "cache",
+      "level": "ok",
+      "rule": "complete",
+      "actions": [
+        "ask",
+        "hypothesize",
+        "apply"
+      ]
+    },
+    {
+      "issue": "cli-consistency",
+      "level": "ok",
+      "rule": "complete",
+      "actions": [
+        "ask",
+        "apply"
+      ]
+    },
+    {
+      "issue": "doc-search",
+      "level": "warn",
+      "rule": "terminal-action",
+      "action": "collect",
+      "actions": [
+        "ask",
+        "collect"
+      ]
+    },
+    {
+      "issue": "graph",
+      "level": "ok",
+      "rule": "complete",
+      "actions": [
+        "ask",
+        "conclude"
+      ]
+    },
+    {
+      "issue": "late-idea",
+      "level": "error",
+      "rule": "start-action",
+      "actions": [
+        "collect"
+      ]
+    },
+    {
+      "issue": "late-idea",
+      "level": "warn",
+      "rule": "terminal-action",
+      "action": "collect",
+      "actions": [
+        "collect"
+      ]
+    }
+  ]
+}
+
+stderr[0]:
+

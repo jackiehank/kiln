@@ -1,0 +1,7 @@
+argv: kiln list --search 快照
+exit: 0
+stdout[63]:
+cache                          apply        落地枚举快照
+
+stderr[0]:
+

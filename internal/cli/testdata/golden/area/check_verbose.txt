@@ -1,0 +1,23 @@
+argv: kiln check --verbose
+exit: 1
+stdout[708]:
+✓ cache                          完整（ask, hypothesize, apply）
+      ask          3d66875
+      hypothesize  427ca35
+      apply        17e900b
+✓ cli-consistency                完整（ask, apply）
+      ask          8601eae
+      apply        90f6805
+⚠ doc-search                     缺少终点动作（当前 collect）
+      ask          845cced
+      collect      48efd3f
+✓ graph                          完整（ask, conclude）
+      ask          e8c3612
+      conclude     2016e1a
+✗ late-idea                      缺少 ask：问题没有起点动作
+      collect      c004861
+⚠ late-idea                      缺少终点动作（当前 collect）
+      collect      c004861
+
+stderr[0]:
+

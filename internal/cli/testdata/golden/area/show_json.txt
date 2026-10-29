@@ -1,0 +1,15 @@
+argv: kiln show cache --json
+exit: 0
+stdout[403]:
+{
+  "issue": "cache",
+  "ordinal": 3,
+  "total": 3,
+  "action": "apply",
+  "commit": "17e900bbc765f17acaa725bbbf3f7ac370358d5b",
+  "date": "2026-10-01T12:00:00Z",
+  "body": "commit 17e900bbc765f17acaa725bbbf3f7ac370358d5b\nAuthor: Test <test@example.com>\nDate:   Thu Oct 1 12:00:00 2026 +0000\n\n    落地枚举快照\n    \n    issue: cache\n    action: apply\n    domain: tooling\n    tags: perf"
+}
+
+stderr[0]:
+

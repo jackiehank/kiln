@@ -1,0 +1,56 @@
+argv: kiln status --json
+exit: 0
+stdout[871]:
+{
+  "summary": {
+    "total": 5,
+    "done": 3,
+    "open": 2,
+    "actions": 10,
+    "domains": 3
+  },
+  "worktree": {
+    "policy": "off",
+    "open": 1
+  },
+  "issues": [
+    {
+      "id": "cli-consistency",
+      "domain": "cli",
+      "action": "apply",
+      "done": true,
+      "has-worktree": false
+    },
+    {
+      "id": "doc-search",
+      "domain": "design",
+      "action": "collect",
+      "done": false,
+      "has-worktree": false
+    },
+    {
+      "id": "graph",
+      "domain": "design",
+      "action": "conclude",
+      "done": true,
+      "has-worktree": false
+    },
+    {
+      "id": "cache",
+      "domain": "tooling",
+      "action": "apply",
+      "done": true,
+      "has-worktree": false
+    },
+    {
+      "id": "late-idea",
+      "domain": "tooling",
+      "action": "collect",
+      "done": false,
+      "has-worktree": false
+    }
+  ]
+}
+
+stderr[0]:
+

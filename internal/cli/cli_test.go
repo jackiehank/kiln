@@ -26,6 +26,9 @@ import (
 // developer whose LANG is English must not turn every golden string English.
 func TestMain(m *testing.M) {
 	os.Setenv("KILN_LANG", "zh")
+	// timestamps are rendered in time.Local (action log and every date column), so
+	// pin the zone: a golden recorded on a UTC+8 machine must match on CI.
+	os.Setenv("TZ", "UTC")
 	os.Exit(m.Run())
 }
 

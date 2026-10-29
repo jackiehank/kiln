@@ -1,0 +1,7 @@
+argv: kiln list --domain=cli
+exit: 0
+stdout[65]:
+cli-consistency                apply        domain=cli tags=docs
+
+stderr[0]:
+

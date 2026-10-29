@@ -1,0 +1,9 @@
+argv: kiln show cache --stat
+exit: 0
+stdout[54]:
+cache · 3/3 apply · 17e900b · 落地枚举快照
+
+
+
+stderr[0]:
+

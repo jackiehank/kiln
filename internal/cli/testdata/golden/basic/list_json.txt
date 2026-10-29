@@ -1,0 +1,58 @@
+argv: kiln list --json
+exit: 0
+stdout[1187]:
+{
+  "filter": {},
+  "count": 5,
+  "issues": [
+    {
+      "id": "cache",
+      "domain": "tooling",
+      "action": "apply",
+      "done": true,
+      "title": "落地枚举快照",
+      "commit": "17e900bbc765f17acaa725bbbf3f7ac370358d5b",
+      "tags": [
+        "perf"
+      ]
+    },
+    {
+      "id": "cli-consistency",
+      "domain": "cli",
+      "action": "apply",
+      "done": true,
+      "title": "统一 help 与错误文案",
+      "commit": "90f6805f2010903d57b97440d7b4aac110766a9c",
+      "tags": [
+        "docs"
+      ]
+    },
+    {
+      "id": "doc-search",
+      "domain": "design",
+      "action": "collect",
+      "done": false,
+      "title": "找到三条可选路径",
+      "commit": "48efd3f77f185bc9666e0770562a9039c0c7ba88"
+    },
+    {
+      "id": "graph",
+      "domain": "design",
+      "action": "conclude",
+      "done": true,
+      "title": "图查询按邻域收窄",
+      "commit": "2016e1a57b2cebc90cbbe46d28770d6a6066c7d5"
+    },
+    {
+      "id": "late-idea",
+      "domain": "tooling",
+      "action": "collect",
+      "done": false,
+      "title": "没有起点的问题",
+      "commit": "c0048619ae70faab87cea4ebb41500217032a8eb"
+    }
+  ]
+}
+
+stderr[0]:
+

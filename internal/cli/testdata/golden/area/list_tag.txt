@@ -1,0 +1,7 @@
+argv: kiln list --tag=perf
+exit: 0
+stdout[69]:
+cache                          apply        domain=tooling tags=perf
+
+stderr[0]:
+

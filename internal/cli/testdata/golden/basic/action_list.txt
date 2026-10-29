@@ -1,0 +1,12 @@
+argv: kiln action list
+exit: 0
+stdout[88]:
+ask          start
+hypothesize
+collect
+test
+conclude     terminal
+apply        terminal
+
+stderr[0]:
+

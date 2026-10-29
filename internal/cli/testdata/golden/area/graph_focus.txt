@@ -1,0 +1,7 @@
+argv: kiln graph --issue cache --depth 1
+exit: 2
+stdout[0]:
+
+stderr[33]:
+--issue/--depth 只服务 --json
+
