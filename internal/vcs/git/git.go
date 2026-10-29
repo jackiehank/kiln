@@ -850,3 +850,14 @@ func parseLog(out string) []vcs.Commit {
 	}
 	return commits
 }
+
+// Compile-time contract checks: a backend that drifts from an interface it claims
+// to implement should fail here, not at a call site in another package.
+var (
+	_ vcs.Repo          = ExecRunner{}
+	_ vcs.CacheBackend  = ExecRunner{}
+	_ vcs.StatLog       = ExecRunner{}
+	_ vcs.Workspace     = ExecRunner{}
+	_ vcs.CheckedAction = ExecRunner{}
+	_ vcs.AreaHint      = ExecRunner{}
+)

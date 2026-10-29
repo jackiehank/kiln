@@ -382,3 +382,13 @@ collect 把 `loadCached` 排在最后，是"先易后难"的直觉。但 `cache.
 **没达成的目标**：hypothesize 写"最大新文件 ≤ 330 行"，实际 `path.go` 471、`write.go` 369、`area.go` 360、`action.go` 356、`list.go` 335 都超了。原因不是分得不够细，而是这几个文件各自装着一个大函数或一批文档类型：`path` 的批量写出器约 200 行、`write` 的单个 `e.write` 152 行、`area` 17 个函数。再往下就是拆函数或拆类型，属于另一件事，本轮没做。
 
 **一次手工补洞**：切 `path` 时把 `pathBatchError` 的错误码常量块移走了，却漏了类型本身（它在常量块上方 5 行）。`go build` 立刻报错，从 `git show HEAD:internal/cli/cli.go` 取回原文补上——补的是原文，不是重写的。
+
+## 落地（阶段 4，2026-10-29）：契约断言、jj 的测试缝、`relation.go` 补测
+
+1. **编译期断言**（此前一个都没有）：`git` 六个——`Repo`/`CacheBackend`/`StatLog`/`Workspace`/`CheckedAction`/`AreaHint`；`jj` 三个——`Repo`/`Workspace`/`CheckedAction`。以前"实现跟不上契约"只会在别的包的调用点炸，现在在定义处就炸。
+2. **jj 的缝**：`ExecRunner` 加一个 `runFn` 字段，`run` 先看它——生产永远不设，测试拿到同样的 argv 与返回形状。10 个命令壳因此不再需要 jj 二进制。顺带删掉 `run` 上重复的两行文档注释（上一版留下的旧注释）。
+3. **补测**：`model/relation.go` 新增 8 个测试（词汇形状、别名、反向、gloss、slot 链、Keys/Aliases、blocking、六种非法构造 + "一对反向只占一个 rank"），覆盖率 **33.3% → 91.5%**；`jj` 新增 15 个壳测试（argv 逐个断言，含"读回 id 失败不能把成功提交变成失败""路径没改动就拒绝提交"），覆盖率 **28.2% → 62.6%**。
+
+没补的：`jj` 剩下的多是 `LogEach` 的流式路径（要真进程）与错误分支；`git` 的包内覆盖率仍不补（端到端已覆盖，理由见 collecting 一节）。
+
+全套 `go test ./...` 绿（`internal/cli` 21.0 s），`gofmt -l` / `go vet` 干净。

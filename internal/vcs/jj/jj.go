@@ -24,7 +24,11 @@ import (
 )
 
 // ExecRunner runs the real `jj` binary in Dir.
-type ExecRunner struct{ Dir string }
+type ExecRunner struct {
+	Dir string
+	// runFn replaces the jj process in tests: same argv, same stdout. See run.
+	runFn func(args ...string) (string, error)
+}
 
 // revset and template define the log output. The revset drops the virtual root
 // and the working-copy commit (@) so the result matches git's "committed actions
@@ -431,11 +435,17 @@ func parseWorkspaces(out string) []vcs.WorkspaceInfo {
 	return areas
 }
 
-// run executes jj with args and returns stdout; on failure the error carries
-// jj's stderr so the caller can surface a useful message.
 // run executes jj in Dir; on failure the error carries jj's own explanation:
 // stderr when it wrote one, else the last line of stdout.
+//
+// runFn is the test seam: when set, it answers instead of starting jj with the
+// same argv and the same return shape. Production never sets it, so the shells
+// above stay one line each while their argv becomes testable without a jj
+// binary on the machine.
 func (r ExecRunner) run(args ...string) (string, error) {
+	if r.runFn != nil {
+		return r.runFn(args...)
+	}
 	cmd := exec.Command("jj", args...)
 	cmd.Dir = r.Dir
 	var stdout, stderr bytes.Buffer
@@ -494,3 +504,10 @@ func parseTime(s string) time.Time {
 	}
 	return time.Time{}
 }
+
+// Compile-time contract checks, same reason as the git side.
+var (
+	_ vcs.Repo          = ExecRunner{}
+	_ vcs.Workspace     = ExecRunner{}
+	_ vcs.CheckedAction = ExecRunner{}
+)
