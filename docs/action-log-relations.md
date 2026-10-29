@@ -263,3 +263,70 @@ git log / jj log          （一遍扫描，唯一的重活）
 - 2026-10-29（同日晚）：命名问题当场裁决——**沿用 `action log`**，依据 `action-view`（`e526dde`）已否掉 `kiln log`，且总流的记录单位仍是动作；名字失真的两种条件（多类型行、收非动作提交）都指向"新开命令"而非改名。
 - 2026-10-29（同日晚）：补上更强的命名论据——**按粒度命名**：存储里只有提交，每条提交的元数据都是那条动作的属性，所以 `action log` 天生是"全部已存储信息"的集合，加字段不改名；要守的不变量是"行 = 动作"，T3–T5 仍是视图。
 
+
+## conclude（2026-10-29）：总流收口——存储层定稿，T2 不做
+
+结论先行：
+
+- **落地的**：`action log --jsonl` 补齐 T1（`refs` / `target` / `scope` / `relations` / `unrelate`），提交 `223cb2c`；
+- **不做的**：`files`（T2，改动文件 + 增删行数）；
+- **没动的**：文本视图、`--limit` 语义、broken pipe、`--json` 拒绝、顺序（顺序归 git，见 `commit-cache`）。
+
+### 1. 契约（定稿）
+
+| key | 类型 | 出现条件 | 语义 |
+| --- | --- | --- | --- |
+| `issue` / `action` / `commit` / `date` | string | 永远 | 身份键；`commit` 全长；`date` 保留原始 offset |
+| `title` | string | 有 | trailer title，缺省用提交首行 |
+| `domain` / `tags` | string / []string | 有 | **本条提交自己的**声明，不是 issue 级 |
+| `refs` / `target` | []string | 有 | 按逗号拆，去重保序 |
+| `scope` | string | 有 | 原样 |
+| `relations` | [{name,target}] | 有 | **声明**，规范名，词表序 |
+| `unrelate` | []string | 有 | 撤销"关于某个 issue 的全部声明" |
+
+四条不变量：
+
+1. **一行一动作**，没有终止记录，没有多类型行；
+2. **缺省即没有**：为空时省略键，永远不写 `null` / `""` / `[]`；
+3. **新键只追加**在 `tags` 之后，已有键的位置与语义不变（老消费者按 key 取值不受影响）；
+4. **吞声明，不吞折叠**：`has-part: X` 原样是 `{name: has-part, target: X}`，不翻成边。
+
+### 2. 为什么 T2（`files`）不进流
+
+| 判据 | 结论 |
+| --- | --- |
+| 它是不是存储层 | **不是**。提交里没有"改动文件"这个字段，它是从树 diff 算出来的派生数据 |
+| join 是否必须由 kiln 做 | 不必。流里已有 `commit` 全 hash，下游一条 `git show --numstat <hash>` 就能拼 |
+| 是否已有批量路径 | 有。`show --stat`（单条）/ `path --all --stat`（283 动作 0.31 s） |
+| 成本落点 | 每条提交一次 tree diff，只该让要它的人付 |
+| 两后端 | 不对称：git 有机器友好的三元组，jj 只有 `diff.summary()` 文本 |
+
+一句话：**`files` 会把"名字的射程 = 存储层"这条刚擦干净的边界弄脏，而它带来的独有价值（一次扫描拿 join）可以交给消费者用 commit hash 自己拼。**
+
+### 3. 下游怎么接
+
+- 新键是**追加**：老代码按旧 key 读，一行都不用改；
+- 判"有没有"看**键在不在**，不要看空数组；
+- `relations` 是**这条动作说了什么**。要"现在谁阻塞谁"必须用 `graph --json` / `path --json`（折叠是视图的事）；
+- 别名已解析成规范名（`derived-from` → `caused-by`）；词表外的键不会出现在 `relations` 里，那是 `check` 的 `unknown-trailer`；
+- 要某个动作改了哪些文件：拿 `commit` 去 `git show --numstat`，或 `kiln show <issue> <n> --stat`。
+
+### 4. 与 `commit-cache` 的关系
+
+记录格式 = 本 issue 的 T1 契约（多一个 `isAction` 标志与 author date）。缓存不存 T2——`commit-cache` 的 v1 本来也只存属性。`commit-cache` 上那条 `blocked-by action-log-relations` 到此可以视为已解除：**记录格式已经定稿**，缓存只等 `perf-audit` 的规模触发条件。
+
+### 5. 验收（本仓实测）
+
+- `go test ./...` 全过，`gofmt -l` / `go vet` 干净；
+- `--jsonl`：363 行、87 行带关系、去重后 129 条声明；空记录不出现任何一个新键；
+- **折叠对账通过**：全部声明按 `FoldEdges` 规则重算，`graph --json` 的 120 条边全部能在声明里找到本侧或对侧原文，缺失 0；
+- 文本模式逐字节不变（diff 只触及 `--jsonl` 分支、doc 结构与一个 helper）；
+- `--limit` / broken pipe / `--json` 拒绝 / 空仓提示：行为未变。
+
+### 6. 遗留（明确不做，需要时另开）
+
+- `files`（T2）：形状已定，见上；
+- `--reverse`：顺序归 git，反过来读等于放弃流式；
+- 按关系过滤（`--blocks-of x`）：那是过滤器；
+- `action show` / `action search`：`action-view` 已列为非目标；
+- 非动作提交进流：那会是另一个命令，语义是"仓库的提交流"。

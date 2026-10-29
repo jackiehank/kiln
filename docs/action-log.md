@@ -882,6 +882,13 @@ export function tailActions(repoDir, limit, onAction, onDone) {
 - 本仓冒烟：99 行关系 / 147 条声明 / 87 行带关系；把全部声明按 `FoldEdges` 规则重算，覆盖 `graph --json` 的 120 条边（每条边都能在某条动作的声明里找到对侧或本侧的原文）；
 - 空记录（只声明了 `issue`/`action`/`title`）不出现 `refs`/`target`/`scope`/`relations`/`unrelate` 任何一个键。
 
-### 还没做（`action-log-relations` 的 apply B）
+### 不做：`files`（T2，改动文件 + 增删行数）
 
-`files`（T2，改动文件 + 增删行数）：需要 `-z --numstat` 的分帧状态机（带 tab 的算 numstat 行、40 位 hex 的算下一条 header，rename 另测），且 v1 只 git、jj 明确拒绝。
+`action log` 保持"只吐存储层的字节"。`files` 不是提交里写着的字段，而是拿提交树和父树 diff 出来的**派生数据**，所以不进流：
+
+- 下游要 join 时已经有 `commit` 全 hash，一条 `git show --numstat <hash>` 就能拼；
+- 逐动作要文件列表，`kiln show <issue> <n> --stat`（单条）或 `path --all --stat`（批量，283 动作 0.31 s）都现成；
+- 它是唯一需要额外计算（每条提交一次 tree diff）的字段，默认路径不该付这个钱；
+- 两后端还不对称：git 给机器友好的三元组，jj 只有 `diff.summary()` 的文本。
+
+形状已经设计好（`{path,add,del}` / `{binary:true}` / `{path,from}`），真有消费方时再上——那时做成 opt-in `--files`，默认路径一行都不变。
