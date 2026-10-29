@@ -66,3 +66,42 @@ internal/cli/cache.go     pruneAged(dir, fp, layers)：超龄 tmp + 超龄异指
 - **并发**：删除一律尽力而为，失败忽略；读方已把层读进内存。
 - **不做**按大小配额（100k 才 13 MB），不做定时器/后台进程。
 - **混用两版**：宽限期内互不干扰；超过之后旧版一次全扫重建，可接受。
+
+## apply
+
+三处改动。
+
+### 1. 层带上 mtime，tmp 清理变便宜
+
+`cache.Layer` 加 `ModTime`（`Scan` 从 `DirEntry.Info` 填，零额外 I/O）；新增 `cache.RemoveStaleTemps(dir, now)`：只 `ReadDir` + `stat`，不解码，读路径可以每次调。
+
+### 2. 读时顺手清：tmp 1 小时、旧指纹层 7 天
+
+`cli.pruneAged(dir, fp, layers)`：删超龄 tmp（`StaleTemp = 1h`）+ 超龄异指纹层（`foreignGrace = 7*24h`）；在 `openLayers`、`persistRecords`、`actionLogCached` 三处 Scan 之后各调一次。**当前指纹的层无论多老都不删**——年龄只决定这个二进制读不了的层。
+
+### 3. 不可达快照搭合并
+
+`mergeLayers` 在 `rev-list --all` 成功之后调 `gcEnums(dir, reachable)`：重写信号与 64 层合并都会走到这里，成本 +0。其余情况仍由"写时保留 4 份"封顶。
+
+## 测试
+
+三条新测试，先对旧行为跑过、确认失败：
+
+| 测试 | 旧行为下的失败 |
+| --- | --- |
+| `TestReadSweepsStaleTempFiles` | 2 小时前的 tmp 还在 |
+| `TestReadDropsForeignLayersOnlyAfterTheGracePeriod` | 8 天前的异指纹层还在 |
+| `TestMergeDropsUnreachableSnapshots` | 合并后剩 2 个快照（被 `reset` 掉的 HEAD 还在） |
+
+`TestReadDropsForeign…` 同时钉住两条边界：当前指纹的层即使 8 天前也保留；1 天前的异指纹层保留（宽限期内）。
+
+## 验证
+
+- `go test ./...` 绿（cli 24.9 s），黄金网 60 份录制未动。
+- `gofmt -l`、`go vet` 干净。
+
+## 结论
+
+- 三类残留现在都能自动收：tmp 1 小时、旧指纹层 7 天、不可达快照搭合并。
+- 手动入口仍在：`kiln cache gc` 立即清（不受年龄限制）、`kiln cache clear` 全清。
+- 没做配额、定时器、后台进程；时钟回拨（mtime 在未来）不删——保守方向。

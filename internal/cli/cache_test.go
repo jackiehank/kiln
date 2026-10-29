@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -550,5 +551,127 @@ func TestActionLogMergePrunesWithoutRenderingRows(t *testing.T) {
 	}
 	if recs := totalRecords(t, dir); recs != 2 {
 		t.Fatalf("the merge must prune the orphan with no rows rendered, got %d records", recs)
+	}
+}
+
+// cacheGitOut runs git and returns its stdout.
+func cacheGitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
+}
+
+func TestReadSweepsStaleTempFiles(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	_ = cacheOutput(t, "list", "--json")
+
+	stale := filepath.Join(recordsPath(dir), "layer-"+strings.Repeat("0", 40)+".rec.tmp-1")
+	fresh := filepath.Join(recordsPath(dir), "layer-"+strings.Repeat("1", 40)+".rec.tmp-2")
+	for _, path := range []string{stale, fresh} {
+		if err := os.WriteFile(path, []byte("torn"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = cacheOutput(t, "list", "--json")
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("a read must sweep a stale temp file: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("a read must leave a live temp file alone: %v", err)
+	}
+}
+
+func TestReadDropsForeignLayersOnlyAfterTheGracePeriod(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	want := cacheOutput(t, "list", "--json")
+
+	layers, err := cache.Scan(recordsPath(dir))
+	if err != nil || len(layers) != 1 {
+		t.Fatalf("expected one layer: %v", err)
+	}
+	ours := layers[0]
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	// Our own layer is kept however old it is: age only decides the fate of the
+	// layers this binary cannot read.
+	if err := os.Chtimes(ours.Path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	foreign := func(seed byte) string {
+		var fp [20]byte
+		fp[0] = seed
+		name, werr := cache.Write(recordsPath(dir), ours.Records, ours.Tips, fp)
+		if werr != nil {
+			t.Fatal(werr)
+		}
+		return filepath.Join(recordsPath(dir), name)
+	}
+	agedPath := foreign(0xAA)
+	if err := os.Chtimes(agedPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	youngPath := foreign(0xBB)
+
+	_ = cacheOutput(t, "list", "--json")
+
+	if _, err := os.Stat(ours.Path); err != nil {
+		t.Fatalf("a layer of this vocabulary must survive any age: %v", err)
+	}
+	if _, err := os.Stat(agedPath); !os.IsNotExist(err) {
+		t.Fatalf("a foreign layer older than %v must be dropped: %v", foreignGrace, err)
+	}
+	if _, err := os.Stat(youngPath); err != nil {
+		t.Fatalf("a fresh foreign layer must stay for the other version: %v", err)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != want {
+		t.Fatalf("pruning changed the output:\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+func TestMergeDropsUnreachableSnapshots(t *testing.T) {
+	old := maxLayers
+	maxLayers = 1
+	defer func() { maxLayers = old }()
+
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "collect", "调研", "2026-10-02T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-03T10:00:00+08:00")
+	t.Chdir(dir)
+	_ = cacheOutput(t, "list", "--json")
+	if len(enumFiles(t, dir)) == 0 {
+		t.Fatal("the warm read must store a snapshot")
+	}
+
+	// Drop the newest commit: its HEAD is no ref's ancestor any more, and the
+	// next read merges (maxLayers=1) and computes reachability for the records.
+	cacheGit(t, dir, nil, "", "reset", "-q", "--hard", "HEAD~1")
+	_ = cacheOutput(t, "list", "--json")
+
+	files := enumFiles(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("the merge must drop the unreachable snapshot, %d left", len(files))
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil || len(data) < 28 {
+		t.Fatalf("snapshot unreadable: %v", err)
+	}
+	head := strings.TrimSpace(hex.EncodeToString(data[8:28]))
+	if head != strings.TrimSpace(cacheGitOut(t, dir, "rev-parse", "HEAD")) {
+		t.Fatalf("the surviving snapshot must belong to HEAD, got %s", head)
 	}
 }

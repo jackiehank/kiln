@@ -25,12 +25,15 @@ const StaleTemp = time.Hour
 
 // Layer is one scanned layer file. Err is non-nil when the file is unusable
 // (truncated, corrupt, wrong magic): readers ignore it, Sweep deletes it.
+// ModTime is when the file was written; reads use its age to decide whether a
+// layer from another vocabulary is worth keeping around.
 type Layer struct {
 	Name    string
 	Path    string
 	Records []Record
 	Tips    [][20]byte
 	FP      [20]byte
+	ModTime time.Time
 	Err     error
 }
 
@@ -62,18 +65,50 @@ func Scan(dir string) ([]Layer, error) {
 			continue
 		}
 		path := filepath.Join(dir, name)
+		layer := Layer{Name: name, Path: path}
+		if info, ierr := e.Info(); ierr == nil {
+			layer.ModTime = info.ModTime()
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			out = append(out, Layer{Name: name, Path: path, Err: err})
+			layer.Err = err
+			out = append(out, layer)
 			continue
 		}
 		recs, tips, fp, err := Decode(data)
 		if err == nil && Name(data) != name {
 			err = fmt.Errorf("layer name %q does not match its contents", name)
 		}
-		out = append(out, Layer{Name: name, Path: path, Records: recs, Tips: tips, FP: fp, Err: err})
+		layer.Records, layer.Tips, layer.FP, layer.Err = recs, tips, fp, err
+		out = append(out, layer)
 	}
 	return out, nil
+}
+
+// RemoveStaleTemps deletes the torn temporary files a crashed writer leaves
+// behind: a live writer only holds its temp for the duration of a write and a
+// rename, so anything older than StaleTemp is dead. It reads directory entries
+// only — no decode, no git — so a read path can afford to call it every time.
+func RemoveStaleTemps(dir string, now time.Time) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var removed []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, FilePrefix) || !strings.Contains(name, TempInfix) {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || now.Sub(info.ModTime()) < StaleTemp {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, name)) == nil {
+			removed = append(removed, name)
+		}
+	}
+	return removed
 }
 
 // Write stores records as a new layer and returns its file name. The write is

@@ -26,6 +26,12 @@ const recordsDir = "records"
 // one read pays for it) and how many files a read opens.
 var maxLayers = 64
 
+// foreignGrace is how long a layer written by another vocabulary survives before
+// a read deletes it. Two kiln versions on one clone are rare but real (a pinned
+// CI binary next to the repo build); a week lets them coexist, and a downgrade
+// costs one full scan to rebuild.
+const foreignGrace = 7 * 24 * time.Hour
+
 // cacheOff turns the record cache off for every read. It exists for the test
 // suite, whose oracle is the cold path, and is deliberately not reachable from
 // argv or the environment: a user repairs a cache with `kiln cache clear`, not
@@ -128,6 +134,20 @@ func usable(layers []cache.Layer, fp [20]byte) []cache.Layer {
 	return out
 }
 
+// pruneAged drops leftovers no live reader can use: temp files a crashed writer
+// left behind, and layers from another vocabulary once they have aged out.
+// Deletion is always safe — the losing side rebuilds with one full scan — and it
+// never touches a readable layer of this vocabulary, however old.
+func (e *env) pruneAged(dir string, fp [20]byte, layers []cache.Layer) {
+	now := time.Now()
+	for _, l := range layers {
+		if l.FP != fp && now.Sub(l.ModTime) > foreignGrace {
+			_ = cache.Remove(l)
+		}
+	}
+	cache.RemoveStaleTemps(dir, now)
+}
+
 // cachedHistory is what the record layer and one enumeration together know: where
 // the layers live, which commits the enumeration named, and how many the layers
 // already hold. It exists so loadCached reads as the six steps it always did.
@@ -174,6 +194,7 @@ func (e *env) openLayers(backend vcs.Repo) (cachedHistory, bool) {
 	if err != nil {
 		return cachedHistory{}, false
 	}
+	e.pruneAged(dir, fp, layers)
 	layers = usable(layers, fp)
 	if len(layers) == 0 {
 		return cachedHistory{}, false // cold: full scan + persist in the caller
@@ -285,6 +306,7 @@ func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip [20]b
 	if err != nil {
 		layers = nil
 	}
+	e.pruneAged(dir, fp, layers)
 	layers = usable(layers, fp)
 	if l := e.persist(dir, fp, records, tip); l != nil {
 		layers = append(layers, *l)
@@ -334,6 +356,10 @@ func (e *env) mergeLayers(cb vcs.CacheBackend, layers []cache.Layer, dir string,
 	// failed `rev-list --all` simply skips the pruning.
 	if visited > 0 && len(records) > visited {
 		if reachable, rerr := cb.Reachable(); rerr == nil {
+			// The reachable set was just paid for, so the snapshots get the same
+			// treatment: a snapshot keyed by a HEAD no ref reaches can never be
+			// looked up again and only waits for the four-file window to evict it.
+			gcEnums(dir, reachable)
 			kept := make([]cache.Record, 0, len(records))
 			for _, r := range records {
 				if reachable[r.OID] {
@@ -381,6 +407,7 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	if err != nil {
 		return 0, false, nil
 	}
+	e.pruneAged(dir, fp, layers)
 	layers = usable(layers, fp)
 	if len(layers) == 0 {
 		return 0, false, nil
