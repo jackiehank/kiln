@@ -4,7 +4,9 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/hex"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -456,6 +458,16 @@ type Edge struct {
 	Slot string
 }
 
+// foldItem names one action to fold without copying it: the fold only needs the
+// declaring issue, the action's date and its position, so a run over a large
+// history moves 40 bytes per action instead of whole model.Action values.
+type foldItem struct {
+	issue string
+	p     *model.Issue
+	when  int64
+	i     int
+}
+
 // FoldEdges folds every declaration in the repository by (unordered pair, slot)
 // — last declaration wins, whichever side made it — so a relationship declared
 // from both sides shows one shape once. Within one issue the strength chain
@@ -463,21 +475,27 @@ type Edge struct {
 // (higher rank wins, a tie goes to the later action), which is exactly
 // foldRelations' rule.
 func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
-	type item struct {
-		issue string
-		a     model.Action
+	ids := IDs(repo)
+	total := 0
+	for _, id := range ids {
+		total += len(repo.Issues[id].Actions)
 	}
-	var items []item
-	for _, id := range IDs(repo) {
-		for _, a := range repo.Issues[id].Actions {
-			items = append(items, item{id, a})
+	items := make([]foldItem, 0, total)
+	for _, id := range ids {
+		p := repo.Issues[id]
+		for i := range p.Actions {
+			items = append(items, foldItem{issue: id, p: p, when: p.Actions[i].Date.UnixNano(), i: i})
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if !items[i].a.Date.Equal(items[j].a.Date) {
-			return items[i].a.Date.Before(items[j].a.Date)
+	// The fold is chronological, so the walk is a stable sort by (date, issue):
+	// equal keys keep their append order, which is the per-issue action order.
+	// Sorting indices with integer keys is what makes this cheap — the previous
+	// form copied every action and paid for a reflection-based swap per move.
+	slices.SortStableFunc(items, func(a, b foldItem) int {
+		if a.when != b.when {
+			return cmp.Compare(a.when, b.when)
 		}
-		return items[i].issue < items[j].issue
+		return cmp.Compare(a.issue, b.issue)
 	})
 
 	type key struct{ pair, slot string }
@@ -488,14 +506,16 @@ func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
 		return a + "\x00" + b
 	}
 	state := map[key]Edge{}
+	declared := make(map[string]bool)
 	for _, it := range items {
-		declared := map[string]bool{}
-		for _, r := range it.a.Relations {
+		a := &it.p.Actions[it.i]
+		clear(declared)
+		for _, r := range a.Relations {
 			declared[r.Target] = true
 		}
 		// An unrelate clears the pair as a whole: it says the two issues are no
 		// longer related, not merely that this side stopped declaring.
-		for _, t := range it.a.Unrelate {
+		for _, t := range a.Unrelate {
 			if declared[t] {
 				continue
 			}
@@ -506,7 +526,7 @@ func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
 				}
 			}
 		}
-		for _, r := range it.a.Relations {
+		for _, r := range a.Relations {
 			n, ok := rel.Lookup(r.Name)
 			if !ok {
 				continue

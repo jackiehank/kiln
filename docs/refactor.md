@@ -388,3 +388,43 @@
 P1 是唯一"改形态"的改动，也是唯一能让真仓从 96 ms 掉到 50 ms 以下的。它换来的东西很清楚：**把 git 从热路径上拿掉，但仍然完全依赖 git 得出一致的结果**——快照就是 git 的输出，不重写语义。代价是多一份与 HEAD 绑定的可变文件，和一套"判不准就回退"的规则。
 
 如果只想拿低风险收益，P0 大约能用 40 行换 100k 上 27%；但那对真仓用户几乎不可见。**我的建议：P0 立刻做，P1 单独立项、按上面的验收矩阵推进，P2/P3 等 P1 的数字出来再定。**
+
+## 落地（P0，2026-10-29）：三处热修
+
+### 1. 改了什么
+
+1. **热读只扫一遍层。** `persist` 现在返回它刚写的那个 `cache.Layer`；`loadCached` / `actionLogCached` 把它并进内存里的切片，`maybeMerge` 收 `[]cache.Layer` 而不是自己 `cache.Scan`。顺手也去掉了"重写信号"分支里的第三次扫描。pprof 复核：`cache.Scan` 的调用方只剩 `loadCached`（此前 54% 来自 `maybeMerge`）。
+2. **index map 预分配。** `loadCached` 按 `len(oids)`、`actionLogCached` 按各层记录总数给容量。
+3. **折边不再全量拷+反射排序。** `FoldEdges` 原来把 10 万个 `model.Action` 拷进 `[]item`（56 B/条，含 4 个 slice 头）再用 `sort.SliceStable`（内部走 `reflectlite.Swapper`，每次交换一次反射调用）。现在装 40 B 的 `foldItem{issue, *Issue, when int64, i}`，用 `slices.SortStableFunc` 做整数比较；每个动作的 `declared` map 复用（`clear`）而不是 10 万次分配。排序键与稳定性不变：`(date, issue)` 升序，相等保持追加序（= 每 issue 的动作序）。
+
+### 2. 实测（稳态：同进程跑 4 次、取后 3 次的最小值；`HEAD` 源码对照）
+
+| 规模 | 命令 | HEAD | 本次 | Δ |
+| --- | --- | --- | --- | --- |
+| 100k | `graph --json` | 502.3 ms | 382.5 ms | **−23.8%** |
+| 100k | `path --all --json` | 578.2 | 473.4 | −18.1% |
+| 100k | `list --json` | 390.1 | 349.4 | −10.5% |
+| 100k | `action log --jsonl` | 818.9 | 784.1 | −4.2% |
+| 10k | `graph --json` | 83.2 | 79.0 | −5.1% |
+| 10k | `list --json` | 79.2 | 74.0 | −6.6% |
+| 10k | `path --all --json` | 93.5 | 85.0 | −9.2% |
+| 10k | `action log --jsonl` | 121.0 | 116.0 | −4.2% |
+| 真仓 | `status` / `list` / `check` | 51.5 / 52.7 / 51.9 | 49.9 / 51.2 / 51.5 | −3.1% / −2.9% / −0.9% |
+| 真仓 | `graph --json` / `path --all` / `action log` | 52.6 / 52.3 / 68.6 | 51.5 / 51.4 / 67.4 | −2.1% / −1.7% / −1.8% |
+
+端到端（.NET harness，7 次取 min，含进程地板）：真仓 `graph --json` 95.4 → 93.2 ms（−2.3%）、`action log` 109.2 → 107.6（−1.5%）；100k `graph` 551.9 → 457.4（−17.1%）、`path --all` 671.8 → 573.8（−14.6%）、`status` 454.3 → 424.8（−6.5%）、`action log` 863.2 → 836.2（−3.1%）。
+
+**口径修正（诚实说一句）**：hypothesize 里预估 100k `graph` −138 ms，实际 −120 ms，三处各自的账与预估不完全一致——
+- 折边 97.7 → 26.4 ms（−71，与预估的 −60 同量级，pprof 行级确认排序那部分消失）；
+- 第二轮 `cache.Scan` 消失（−32）；
+- **map 的收益被高估了**：原先"51.8 → 9.2 ms"其实是"建表 + 按 OID 装配 records"对"只建表"，装配循环（`decodeOID` + 查找 + append，约 25 ms）两次都在，真实收益 ≈16 ms，不是 43。
+
+### 3. 验证
+
+- `go test ./...` 全绿，含 11 条缓存集成测试（冷/热/`--no-cache` 逐字节一致、合并、重写信号、worktree 共享）与折边的三条关系语义用例（`TestGraphLastWinsAcrossBothSides` / `…KeepsStrongerNameWithinOneIssue` / `…UnrelateClearsThePair`）。
+- 交叉对比：本次二进制 vs HEAD 二进制，六个命令在真仓输出**逐字节一致**；r10000 / r100000 上 `graph` / `list` / `path --all` / `action log` 的 `HEAD = 本次 = --no-cache` 三份输出哈希全同（含 31.5 MB 的 `path`）。
+- 合并路径仍被覆盖：`maxLayers=2` 的合并/裁剪测试照旧通过；`actionLogCached` 也走同一条"写增量层 → 计入内存层集"的路。
+
+### 4. 下一步
+
+P1（枚举快照：热读不起 git）仍是主菜——P0 只是把它前面的噪声清掉。真仓的 −1~−3% 说明：在"热读还起 git"的前提下，代码热修已经到头了。

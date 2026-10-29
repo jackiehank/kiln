@@ -146,7 +146,9 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 	if err != nil || len(oids) == 0 {
 		return nil, false
 	}
-	index := make(map[[20]byte]cache.Record, 0)
+	// The record count is the map's size hint: without one, 100k [20]byte keys
+	// grow the map through every power of two and copy the whole table each time.
+	index := make(map[[20]byte]cache.Record, len(oids))
 	for _, l := range layers {
 		for _, r := range l.Records {
 			index[r.OID] = r
@@ -185,20 +187,22 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 		fresh = append(fresh, rec)
 	}
 	// Persist what this read had to compute anyway; the enumeration covered the
-	// whole history, so the layer may claim HEAD.
-	e.persist(dir, fp, fresh, oids[0])
+	// whole history, so the layer may claim HEAD. The layer just written joins the
+	// set in memory: re-reading the directory to find it is what made every read
+	// decode the same bytes twice.
+	if l := e.persist(dir, fp, fresh, oids[0]); l != nil {
+		layers = append(layers, *l)
+	}
 	if len(fresh) > 0 && len(fresh) == len(oids) {
 		// Every enumerated commit missed while layers exist: the history was
 		// rewritten (rebase / amend). Merge (and prune) now instead of waiting for
 		// the layer count to reach maxLayers.
-		if layers, err := cache.Scan(dir); err == nil {
-			if keep := usable(layers, fp); len(keep) > 1 {
-				e.mergeLayers(cb, keep, dir, fp, len(oids))
-				return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
-			}
+		if len(layers) > 1 {
+			e.mergeLayers(cb, layers, dir, fp, len(oids))
+			return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
 		}
 	}
-	e.maybeMerge(cb, dir, fp, len(oids))
+	e.maybeMerge(cb, layers, dir, fp, len(oids))
 	return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
 }
 
@@ -209,32 +213,46 @@ func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip strin
 	if !ok || len(records) == 0 {
 		return
 	}
-	e.persist(dir, fp, records, tip)
-	e.maybeMerge(cb, dir, fp, len(records))
+	layers, err := cache.Scan(dir)
+	if err != nil {
+		layers = nil
+	}
+	layers = usable(layers, fp)
+	if l := e.persist(dir, fp, records, tip); l != nil {
+		layers = append(layers, *l)
+	}
+	e.maybeMerge(cb, layers, dir, fp, len(records))
 }
 
-// persist writes one layer and swallows every error: a cache that cannot be
-// written must not change what the command prints or what it exits with.
-func (e *env) persist(dir string, fp [20]byte, records []cache.Record, tip string) {
+// persist writes one layer and returns it, so a caller that just wrote a layer
+// can count it without re-reading the directory. Every error is swallowed: a
+// cache that cannot be written must not change what the command prints or what
+// it exits with.
+func (e *env) persist(dir string, fp [20]byte, records []cache.Record, tip string) *cache.Layer {
 	if len(records) == 0 {
-		return
+		return nil
 	}
 	var tips [][20]byte
 	if oid, ok := decodeOID(tip); ok {
 		tips = append(tips, oid)
 	}
-	_, _ = cache.Write(dir, records, tips, fp)
+	name, err := cache.Write(dir, records, tips, fp)
+	if err != nil || name == "" {
+		return nil
+	}
+	return &cache.Layer{
+		Name:    name,
+		Path:    filepath.Join(dir, name),
+		Records: records,
+		Tips:    tips,
+		FP:      fp,
+	}
 }
 
 // maybeMerge folds the layers back into one when the count reaches maxLayers.
-// The merge is a local rewrite: no git process, no ordering, and it is idempotent
-// because encoding is deterministic.
-func (e *env) maybeMerge(cb vcs.CacheBackend, dir string, fp [20]byte, visited int) {
-	layers, err := cache.Scan(dir)
-	if err != nil {
-		return
-	}
-	layers = usable(layers, fp)
+// The caller passes the layers it already holds — reading the directory again
+// here would decode every layer a second time in the same command.
+func (e *env) maybeMerge(cb vcs.CacheBackend, layers []cache.Layer, dir string, fp [20]byte, visited int) {
 	if len(layers) < maxLayers {
 		return
 	}
@@ -316,7 +334,11 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	if len(layers) == 0 {
 		return 0, false, nil
 	}
-	index := make(map[[20]byte]cache.Record, 0)
+	cached := 0
+	for _, l := range layers {
+		cached += len(l.Records)
+	}
+	index := make(map[[20]byte]cache.Record, cached)
 	for _, l := range layers {
 		for _, r := range l.Records {
 			index[r.OID] = r
@@ -362,8 +384,10 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	}
 	// The first enumerated commit is the newest tip of HEAD's history; claiming it
 	// covers a subset of what HEAD covers, which is all the records prove.
-	e.persist(dir, fp, fresh, first)
-	e.maybeMerge(cb, dir, fp, emitted)
+	if l := e.persist(dir, fp, fresh, first); l != nil {
+		layers = append(layers, *l)
+	}
+	e.maybeMerge(cb, layers, dir, fp, emitted)
 	return emitted, true, nil
 }
 
