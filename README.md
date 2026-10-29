@@ -202,6 +202,23 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 - **严格校验**：词表为空 / `start`、`terminal` 不在 `names` 里 / **键拼错** → 启动即报错，不静默忽略。
 - **最小配置**：`{"actions": {"names": ["ask", "probe", "done"]}}` → `start=ask`、`terminal=done`。
 
+## 缓存（可选，默认关闭）
+
+每条读命令都要遍历全史。仓库大到几千提交以后，这段扫描就是主要成本；开启缓存后，读命令把解析结果落到 `.git/kiln/records/`（每克隆一份、所有 worktree 共享），下次直接读层——**输出逐字节不变**。
+
+```jsonc
+{ "cache": { "enabled": true } }
+```
+
+- **默认关闭**：没有 `cache` 这一项就不建目录、不写盘，行为和今天一致。
+- 第一次读顺手把记录写进去（一次性多花几十毫秒），之后的读命中。
+- `kiln cache sync` 提前预热；`kiln cache gc` 按可达集强制清理（旧记录、坏层、旧版本）。层数到 64 自动合并，合并时发现不可达记录会顺手剪掉。
+- 单个命令可以 `--no-cache`（或 `KILN_NO_CACHE=1`）绕过，输出不变。
+- 只读仓 / CI 挂载：写失败静默跳过，读照常。
+- 代价（100k 提交实测）：`graph --json` 1,266 → 631 ms、`action log --jsonl` 1,413 → 1,001 ms；磁盘约 130 B/提交。
+
+设计细节见 [docs/commit-cache.md](docs/commit-cache.md)。
+
 ## 工作区模式（隔离）
 
 并行干活的 agent 会互相污染：同一个工作副本里，两个 agent 的未提交改动会被混进同一条提交，动作归属就错了。kiln 的对策是**结构性**的——**main（主干）只读 / 只合并，动作只在专用工作区提交**：

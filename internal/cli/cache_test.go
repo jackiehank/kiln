@@ -361,3 +361,55 @@ func TestMergePrunesUnreachableRecords(t *testing.T) {
 		t.Fatalf("pruning changed the output:\n--- before ---\n%s\n--- after ---\n%s", afterAmend, got)
 	}
 }
+
+func TestCacheIsSharedAcrossWorktrees(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+	want := cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("main worktree must write one layer, got %d", n)
+	}
+
+	wt := filepath.Join(t.TempDir(), "probe-wt")
+	cacheGit(t, dir, nil, "", "worktree", "add", "-q", "-b", "probe-cache", wt)
+	t.Chdir(wt)
+
+	// The linked worktree reads the same history; a cached answer must be the
+	// same as a full scan there too.
+	if got, plain := cacheOutput(t, "list", "--json"), cacheOutput(t, "list", "--json", "--no-cache"); got != plain {
+		t.Fatalf("worktree cache hit differs from a full scan:\n--- cached ---\n%s\n--- plain ---\n%s", got, plain)
+	}
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != cacheOutput(t, "action", "log", "--jsonl", "--no-cache") {
+		t.Fatal("worktree action log differs from a full scan")
+	}
+	// One cache for the whole clone: nothing is written under the worktree's own
+	// git dir (a file in a linked worktree, so a directory there would be wrong).
+	if _, err := os.Stat(filepath.Join(wt, ".git", "kiln")); !os.IsNotExist(err) {
+		t.Fatalf("a linked worktree must share the main cache: %v", err)
+	}
+	_ = want
+}
+
+func TestCacheWriteFailureIsSilent(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+
+	// A file where the cache directory should go makes every write fail the way a
+	// read-only checkout does. The command must not notice.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "kiln"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := cacheOutput(t, "list", "--json", "--no-cache")
+	if got := cacheOutput(t, "list", "--json"); got != plain {
+		t.Fatalf("a failed write must not change the output:\n--- plain ---\n%s\n--- got ---\n%s", plain, got)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != plain {
+		t.Fatal("the second read must stay correct too")
+	}
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != cacheOutput(t, "action", "log", "--jsonl", "--no-cache") {
+		t.Fatal("action log must stay correct when the cache cannot be written")
+	}
+}
