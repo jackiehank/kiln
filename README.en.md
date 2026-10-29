@@ -40,7 +40,7 @@ Pick one of three ways.
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-The binary lands in `$GOBIN` (default `$(go env GOPATH)/bin`, on Windows `%USERPROFILE%\go\bin`); make sure it is on `PATH`. Pin a version with `@v0.3.0` if you like.
+The binary lands in `$GOBIN` (default `$(go env GOPATH)/bin`, on Windows `%USERPROFILE%\go\bin`); make sure it is on `PATH`. Pin a version with `@v0.4.0` if you like.
 
 **2. Build it yourself (single binary, no external dependencies)**
 
@@ -54,7 +54,7 @@ go build -o kiln ./cmd/kiln
 
 Take the artifact for your platform from [Releases](https://github.com/jackiehank/kiln/releases) and put it on `PATH` (Windows: `kiln.exe`). Every `v*` tag is built by GitHub Actions into five artifacts — Windows amd64, macOS arm64/amd64, Linux amd64/arm64 — plus `checksums.txt`; Termux and other arm64 Linux environments take `kiln_linux_arm64`. The tag must be `v0.x` / `v1.x`: the module path has no `/v2`, so Go's version stamping ignores a higher major.
 
-A single-binary CLI, with no `require` in `go.mod`. `kiln --version` tells you which build you run (release artifacts print the tag, e.g. `v0.3.0`).
+A single-binary CLI, with no `require` in `go.mod`. `kiln --version` tells you which build you run (release artifacts print the tag, e.g. `v0.4.0`).
 
 ## Five-minute tour
 
@@ -113,6 +113,8 @@ jj commit -m "$(kiln do session-expiry test --title 'Reproduce under load')"
 | `kiln worktree new <issue>` | Create a dedicated worktree (see "Worktree mode") |
 | `kiln worktree list` | List every worktree and its state |
 | `kiln worktree remove <issue> [--force]` | Remove a worktree (refused while it still has work; `--force` discards it) |
+| `kiln cache gc` | Clean the commit-record cache by reachability (reads write and merge it themselves; only forced reclaim needs this) |
+| `kiln cache clear` | Empty the commit-record cache (after a cache fault or a kiln upgrade; the next read rebuilds it with the current version) |
 | `kiln config path` | Print the config path (writing a commented default config when missing) |
 | `kiln --version` | Print the version, executable path, build time and go platform (`-V` / `version` are the same command) |
 | `kiln help` / `kiln -h` / `kiln <cmd> -h` | Help (`<cmd> -h` shows that command's usage and flags only) |
@@ -206,11 +208,11 @@ The config file is `.kilnconfig.jsonc` at the **repository root** (JSONC: JSON +
 
 Every read command needs two things: the ordered list of commits, and each commit's parsed fields. Both are stored — the list as an **enumeration snapshot** keyed by HEAD (`.git/kiln/enums/`, about 20 B per commit), the fields as **record layers** (`.git/kiln/records/`, one per clone, shared by every worktree). **A warm read starts no git at all**, with byte-identical output: the snapshot *is* git's own output, and a layer holds the same fields the parser derives.
 
-- The first read writes both (tens of milliseconds, once); later reads hit. A new HEAD is a new snapshot and the old ones converge (the newest four survive; `kiln cache gc` drops the unreachable ones). Layers merge at 64, and a merge drops records no ref can reach.
-- `--no-cache` (or `KILN_NO_CACHE=1`) bypasses it per command; output is unchanged.
+- The first read writes both (about 0.1 s here, about 1 s at 100k, once); later reads hit. A new HEAD is a new snapshot and the old ones converge (the newest four survive; `kiln cache gc` drops the unreachable ones). Layers merge at 64, and a merge drops records no ref can reach.
+- There is no per-command switch that turns the cache off; after a cache fault or a kiln upgrade, `kiln cache clear` resets it (the next read rebuilds it with the current version), and `kiln cache gc` is the everyday reclaim.
 - Read-only checkouts / CI mounts: a failed write is skipped silently; reads keep working (by asking git every time).
 - A repository with `refs/replace`, `info/grafts`, `shallow`, reftable, or `GIT_DIR`-style environment variables makes kiln back off: it asks git every time rather than guess.
-- Measured: this repository (408 commits) 130 → 42 ms per read (−68%); 100k commits: `graph --json` 1,185 → 246 ms (−79%), `list` 1,162 → 219 (−81%), `action log --jsonl` 1,381 → 405 (−71%), `path --all --json` 1,308 → 360 (−73%). The first read pays ~100 ms once; about 20 B per commit (snapshot) plus ~130 B (layer) on disk.
+- Measured (2026-10-30, this repository at 455 commits): `list` 151 → 25 ms, `action log --jsonl` 112 → 27 ms; 100k commits: `graph --json` 1,022 → 144 ms (−86%), `list` 1,035 → 146 (−86%), `action log --jsonl` 1,173 → 166 (−86%), `path --all --json` 1,084 → 203 (−81%). A cold read pays one full scan more than a warm one (about 0.1 s here, about 1 s at 100k); about 20 B per commit (snapshot) plus ~130 B (layer) on disk.
 
 Design notes: [docs/commit-cache.md](docs/commit-cache.md); the "warm reads start no git" trade-off and its experiments: [docs/refactor.md](docs/refactor.md).
 

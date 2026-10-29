@@ -42,7 +42,7 @@ kiln 把两样东西都拆成**原子**，再让复杂性从**组合**里长出�
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.3.0` 之类的版本写法固定版本。
+二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.4.0` 之类的版本写法固定版本。
 
 **2. 自己构建（单文件、零外部依赖）**
 
@@ -56,7 +56,7 @@ go build -o kiln ./cmd/kiln
 
 从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。每个 `v*` tag 由 GitHub Actions 构建五个产物：Windows amd64、macOS arm64/amd64、Linux amd64/arm64，并附 `checksums.txt`；Termux 等 arm64 Linux 环境取 `kiln_linux_arm64`。tag 需是 `v0.x` / `v1.x`——模块路径没有 `/v2`，更高的主版本会被 Go 的版本戳忽略。
 
-单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.3.0`）。
+单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.4.0`）。
 
 ## 五分钟上手
 
@@ -113,6 +113,8 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln worktree new <issue>` | 建一个专用工作区（详见「工作区模式」） |
 | `kiln worktree list` | 列出全部工作区及各自状态 |
 | `kiln worktree remove <issue> [--force]` | 删除工作区（还有工作的默认拒绝，`--force` 强删） |
+| `kiln cache gc` | 按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条） |
+| `kiln cache clear` | 清空提交记录缓存（缓存出错、升级 kiln 之后用；下一次读会用当前版本重建） |
 | `kiln config path` | 打印配置路径（缺失时写入一份带注释的默认配置） |
 | `kiln --version` | 打印版本、可执行文件路径、构建时间与 go 平台（`-V` / `version` 同义） |
 | `kiln help` / `kiln -h` / `kiln <cmd> -h` | 帮助（`<cmd> -h` 只列该命令的用法与 flags） |
@@ -206,11 +208,11 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 
 每条读命令都要两样东西：一份"提交列表"，和每条提交解析后的字段。两样都落盘——列表按 HEAD 存成**枚举快照**（`.git/kiln/enums/`，约 20 B/提交），字段存成**记录层**（`.git/kiln/records/`，每克隆一份、所有 worktree 共享）。**热读不启动 git**，输出逐字节不变：快照就是 git 自己的输出，层里存的就是解析后的同一份字段。
 
-- 第一次读顺手写进去（一次性多花几十毫秒），之后命中。HEAD 前进就是一份新快照，旧的自动收敛（写时保留最近 4 份，`kiln cache gc` 清掉不可达的）；层数到 64 自动合并，合并时顺手剪掉不可达记录。
+- 第一次读顺手写进去（本仓一次性多花约 0.1 秒，100k 约 1 秒），之后命中。HEAD 前进就是一份新快照，旧的自动收敛（写时保留最近 4 份，`kiln cache gc` 清掉不可达的）；层数到 64 自动合并，合并时顺手剪掉不可达记录。
 - 单个命令不再有"关缓存"的开关；缓存出错或升级 kiln 之后，用 `kiln cache clear` 清空（下一次读会用当前版本重建），`kiln cache gc` 只做日常回收。
 - 只读仓 / CI 挂载：写失败静默跳过，读照常（退化成每次问 git）。
 - 仓库里若出现 `refs/replace`、`info/grafts`、`shallow`、reftable，或设了 `GIT_DIR` 一类变量，kiln 不猜——直接按老办法每次问 git。
-- 实测（本仓 408 提交）：读命令 130 → 42 ms（−68%）；100k 提交：`graph --json` 1,185 → 246 ms（−79%）、`list` 1,162 → 219（−81%）、`action log --jsonl` 1,381 → 405（−71%）、`path --all --json` 1,308 → 360（−73%）。首次读一次性多花约 100 ms；磁盘约 20 B/提交（快照）+ 约 130 B/提交（层，真实仓）。
+- 实测（2026-10-30，本仓 455 提交）：`list` 151 → 25 ms、`action log --jsonl` 112 → 27 ms；100k 提交：`graph --json` 1,022 → 144 ms（−86%）、`list` 1,035 → 146（−86%）、`action log --jsonl` 1,173 → 166（−86%）、`path --all --json` 1,084 → 203（−81%）。冷读比热读多付一次全扫（本仓约 0.1 秒，100k 约 1 秒）；磁盘约 20 B/提交（快照）+ 约 130 B/提交（层，真实仓）。
 
 设计细节见 [docs/commit-cache.md](docs/commit-cache.md)；"热读不起 git"的取舍与实验数据见 [docs/refactor.md](docs/refactor.md)。
 

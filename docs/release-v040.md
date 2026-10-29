@@ -33,3 +33,14 @@
 - 两份命令表都含 `kiln cache gc` / `kiln cache clear`。
 - 实测段数字与 2026-10-30 的测量一致。
 - `go test ./...` 仍全过（只改文档）。
+
+## apply（2026-10-30）：README 四处更新
+
+- `README.en.md`：删掉失效的 `--no-cache` / `KILN_NO_CACHE=1` 说明，改成与中文版一致（没有单命令开关；
+  `kiln cache clear` 复位，`kiln cache gc` 日常回收）；「第一次读一次性多花几十毫秒」→ 本仓约 0.1 秒、100k 约 1 秒。
+- 两份 README 的命令表各补 `kiln cache gc` / `kiln cache clear` 两行（`worktree remove` 与 `config path` 之间）。
+- 版本示例 4 处 → `v0.4.0`（`README.md:45/59`、`README.en.md:43/57`）。
+- 实测段换成 2026-10-30 的测量（本仓 455 提交）：`list` 151 → 25 ms、`action log --jsonl` 112 → 27 ms；
+  100k：`graph --json` 1,022 → 144、`list` 1,035 → 146、`action log --jsonl` 1,173 → 166、`path --all --json` 1,084 → 203。
+- 验证：`v0.3.0` 与 `--no-cache` / `KILN_NO_CACHE` 在 README 里无残留；两份命令表都含两条 cache 命令；
+  `go test ./...` 全过（只改文档）；未 tag、未 push。
