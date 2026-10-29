@@ -69,8 +69,15 @@ type CacheBackend interface {
 	HeadOID() (string, error)
 	// LogOIDs lists commit ids newest first, in the same order as Log.
 	LogOIDs() ([]string, error)
+	// EachOIDAuthorDate streams commit ids in author-date order, the order action
+	// log promises (git's two rules: children before parents, then author date).
+	// Streaming lets a caller emit rows while git is still walking.
+	EachOIDAuthorDate(fn func(id string) bool) error
 	// Commits returns the raw commits for oids, keyed by id.
 	Commits(oids []string) (map[string]RawCommit, error)
+	// Reachable is every commit reachable from any ref (`` rev-list --all ``),
+	// the set gc keeps records for.
+	Reachable() (map[[20]byte]bool, error)
 }
 
 type Repo interface {

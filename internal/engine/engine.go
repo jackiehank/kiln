@@ -135,15 +135,15 @@ func ActionsFromRecords(recs []cache.Record) []model.Action {
 			hex.EncodeToString(r.OID[:]),
 			time.Unix(r.Date, 0).In(time.FixedZone("", int(r.TZ)*60)),
 			r.Subject,
-			fieldsFromRecord(r),
+			FieldsFromRecord(r),
 			r.Unknown,
 		))
 	}
 	return out
 }
 
-// fieldsFromRecord rebuilds the trailer fields the action needs from a record.
-func fieldsFromRecord(r cache.Record) trailer.Fields {
+// FieldsFromRecord rebuilds the trailer fields the action needs from a record.
+func FieldsFromRecord(r cache.Record) trailer.Fields {
 	f := trailer.Fields{
 		Issue: r.Issue, Action: r.Kind, Title: r.Title, Refs: r.Refs,
 		Target: r.Target, Scope: r.Scope, Domain: r.Domain, Tags: r.Tags,

@@ -5,6 +5,7 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -631,7 +632,76 @@ func (r ExecRunner) LogOIDs() ([]string, error) {
 	return lines, nil
 }
 
-// Commits reads the raw commit objects for oids in one process, so filling a gap
+// Reachable is every commit any ref can reach. gc uses it to decide which
+// records are still worth keeping; a missing ref (rewritten branch) simply drops
+// out of the set.
+func (r ExecRunner) Reachable() (map[[20]byte]bool, error) {
+	out, err := r.run("rev-list", "--all")
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[[20]byte]bool)
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var oid [20]byte
+		if _, err := hex.Decode(oid[:], []byte(line)); err != nil {
+			return nil, err
+		}
+		set[oid] = true
+	}
+	return set, nil
+}
+
+// EachOIDAuthorDate streams commit ids newest first by author date. A caller
+// that renders per id keeps git's walk and its own output overlapped, which is
+// exactly what `action log` does on the streaming path.
+func (r ExecRunner) EachOIDAuthorDate(fn func(id string) bool) error {
+	cmd := exec.Command("git", "log", "--author-date-order", "--format=%H")
+	cmd.Dir = r.Dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("git log: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = 3 * time.Second
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("git log: %w", err)
+	}
+	br := bufio.NewReaderSize(stdout, 64*1024)
+	stopped := false
+	for {
+		line, readErr := br.ReadString('\n')
+		if id := strings.TrimRight(line, "\r\n"); id != "" {
+			if !fn(id) {
+				stopped = true
+				break
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	if stopped {
+		_ = cmd.Process.Kill()
+		_ = stdout.Close()
+	}
+	waitErr := cmd.Wait()
+	if stopped {
+		return nil
+	}
+	if waitErr == nil {
+		return nil
+	}
+	if r.noHistory() {
+		return nil
+	}
+	return fmt.Errorf("git log: %s", failureText(stderr.String(), waitErr))
+}
+
+// Commits reads the raw commit objects for oids in one process// Commits reads the raw commit objects for oids in one process, so filling a gap
 // costs one spawn rather than one per commit.
 func (r ExecRunner) Commits(oids []string) (map[string]vcs.RawCommit, error) {
 	out := make(map[string]vcs.RawCommit, len(oids))

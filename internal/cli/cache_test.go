@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jackiehank/kiln/internal/cache"
 )
 
 // These tests are the acceptance condition the design puts first: a read command
@@ -204,5 +206,158 @@ func TestCacheIgnoresCorruptLayer(t *testing.T) {
 
 	if got := cacheOutput(t, "list", "--json"); got != want {
 		t.Fatalf("a corrupt layer must fall back to a full scan, output changed:\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+func TestActionLogCachedMatchesTheStream(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "beta", "ask", "乙单", "2026-10-01T11:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	commitAction(t, dir, "beta", "collect", "调研", "2026-10-02T10:00:00+08:00")
+	t.Chdir(dir)
+
+	// A cold action log streams and leaves no layer behind; it must still print
+	// exactly what the stream prints.
+	coldText := cacheOutput(t, "action", "log")
+	coldJSON := cacheOutput(t, "action", "log", "--jsonl")
+	if n := layerCount(t, dir); n != 0 {
+		t.Fatalf("a cold action log must not write a layer, got %d", n)
+	}
+
+	// A full read of another command populates the layer; the cached action log
+	// must produce the same bytes.
+	_ = cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("warm-up must write one layer, got %d", n)
+	}
+	if got := cacheOutput(t, "action", "log"); got != coldText {
+		t.Fatalf("cached action log text differs:\n--- stream ---\n%s\n--- cache ---\n%s", coldText, got)
+	}
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != coldJSON {
+		t.Fatalf("cached action log jsonl differs:\n--- stream ---\n%s\n--- cache ---\n%s", coldJSON, got)
+	}
+
+	// --limit keeps streaming (a first screen is cheaper than decoding a layer).
+	if got, want := cacheOutput(t, "action", "log", "--limit", "2"), cacheOutput(t, "action", "log", "--limit", "2", "--no-cache"); got != want {
+		t.Fatalf("limited action log differs:\n--- cached ---\n%s\n--- no-cache ---\n%s", got, want)
+	}
+}
+
+func TestActionLogGapFillMatchesTheStream(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	want := cacheOutput(t, "action", "log")
+	_ = cacheOutput(t, "list", "--json")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	if got := cacheOutput(t, "action", "log"); got == want {
+		t.Fatal("the new action must show up")
+	}
+	if got, want2 := cacheOutput(t, "action", "log"), cacheOutput(t, "action", "log", "--no-cache"); got != want2 {
+		t.Fatalf("gap fill changed the stream:\n--- cached ---\n%s\n--- no-cache ---\n%s", got, want2)
+	}
+}
+
+func totalRecords(t *testing.T, dir string) int {
+	t.Helper()
+	layers, err := cache.Scan(recordsPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, l := range layers {
+		n += len(l.Records)
+	}
+	return n
+}
+
+func TestCacheSyncFillsTheLayerAndIsIdempotent(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+
+	cacheOutput(t, "cache", "sync")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("sync must write one layer, got %d", n)
+	}
+	if recs := totalRecords(t, dir); recs != 1 {
+		t.Fatalf("sync must record every commit, got %d", recs)
+	}
+	cacheOutput(t, "cache", "sync")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("a second sync must be a no-op, got %d layers", n)
+	}
+}
+
+func TestCacheGCDropsUnreachableRecords(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+	want := cacheOutput(t, "list", "--json")
+	if recs := totalRecords(t, dir); recs != 2 {
+		t.Fatalf("warm-up must record two commits, got %d", recs)
+	}
+
+	// Amend the last commit: its old OID becomes unreachable, but its record stays.
+	env := []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=2026-10-03T09:00:00+08:00", "GIT_COMMITTER_DATE=2026-10-03T09:00:00+08:00",
+	}
+	cacheGit(t, dir, env, "落地改\n\nissue: alpha\naction: apply\n", "commit", "--amend", "--allow-empty", "-q", "-F", "-")
+	afterAmend := cacheOutput(t, "list", "--json") // the read fills the gap
+	if recs := totalRecords(t, dir); recs != 3 {
+		t.Fatalf("the gap fill must record the amended commit, got %d", recs)
+	}
+	if afterAmend == want {
+		t.Fatal("the amended action must change the output")
+	}
+
+	cacheOutput(t, "cache", "gc")
+	if recs := totalRecords(t, dir); recs != 2 {
+		t.Fatalf("gc must drop the unreachable record, got %d", recs)
+	}
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("gc must merge into one layer, got %d", n)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != afterAmend {
+		t.Fatalf("gc changed the output:\n--- before ---\n%s\n--- after ---\n%s", afterAmend, got)
+	}
+}
+
+func TestMergePrunesUnreachableRecords(t *testing.T) {
+	old := maxLayers
+	maxLayers = 2
+	defer func() { maxLayers = old }()
+
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+	want := cacheOutput(t, "list", "--json")
+
+	env := []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=2026-10-03T09:00:00+08:00", "GIT_COMMITTER_DATE=2026-10-03T09:00:00+08:00",
+	}
+	cacheGit(t, dir, env, "落地改\n\nissue: alpha\naction: apply\n", "commit", "--amend", "--allow-empty", "-q", "-F", "-")
+	afterAmend := cacheOutput(t, "list", "--json")
+	if afterAmend == want {
+		t.Fatal("the amended action must change the output")
+	}
+	// Two layers now, so the next read merges; the merge sees three records for
+	// two reachable commits and must drop the orphan without a gc.
+	_ = cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("the merge must leave one layer, got %d", n)
+	}
+	if recs := totalRecords(t, dir); recs != 2 {
+		t.Fatalf("the merge must prune the unreachable record, got %d", recs)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != afterAmend {
+		t.Fatalf("pruning changed the output:\n--- before ---\n%s\n--- after ---\n%s", afterAmend, got)
 	}
 }

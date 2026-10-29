@@ -9,6 +9,19 @@ package i18n
 // the same order as its key, because T hands the arguments straight to Sprintf
 // (or Errorf, for E).
 var enCatalog = map[string]string{
+	"用法: kiln cache <sync|gc>\n": "usage: kiln cache <sync|gc>\n",
+	"提交记录缓存：预热（sync）或按可达集清理（gc）——读命令会自己写缓存，这两个命令只用于提前预热/强制回收":          "record cache: prewarm (sync) or clean by reachability (gc) — reads populate it on their own; these only prewarm and reclaim",
+	"缓存未启用：在 .kilnconfig.jsonc 里设置 \"cache\": { \"enabled\": true }\n": "cache is not enabled: set \"cache\": { \"enabled\": true } in .kilnconfig.jsonc\n",
+	"已是最新（无需同步）":                      "already up to date (nothing to sync)",
+	"已同步 %d 条提交记录":                    "synced %d commit records",
+	"读取 HEAD 失败: %v\n":                "cannot read HEAD: %v\n",
+	"读取缓存失败: %v\n":                    "cannot read the cache: %v\n",
+	"读取提交失败: %v\n":                    "cannot read commits: %v\n",
+	"读取可达集失败: %v\n":                   "cannot compute the reachable set: %v\n",
+	"写入缓存失败: %v\n":                    "cannot write the cache: %v\n",
+	"当前后端不支持缓存\n":                     "this backend does not support the cache\n",
+	"没有可清理的层":                         "no layer to clean",
+	"已清理：保留 %d 条记录，丢弃 %d 条，层 %d → %d": "cleaned: kept %d records, dropped %d, layers %d -> %d",
 	"<文本>":        "<text>",
 	"动作标题":        "action title",
 	"<条目>[,<条目>]": "<entry>[,<entry>]",

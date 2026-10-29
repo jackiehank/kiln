@@ -73,6 +73,7 @@ var usageCommands = [][2]string{
 	{"kiln graph [--format=ascii|mermaid|json] [--mermaid] [--json] [--issue <id>] [--depth N]", "问题关系图（--mermaid 出流程图文本；--json 给 agent 读，--issue/--depth 收窄邻域）"},
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
+	{"kiln cache <sync|gc>", "提交记录缓存：预热（sync）或按可达集清理（gc）——读命令会自己写缓存，这两个命令只用于提前预热/强制回收"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 	{"kiln --version", "打印版本、可执行文件路径与构建时间（-V / version 同义）"},
@@ -459,7 +460,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "version", "--version", "-V":
 		return printVersion(stdout)
-	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config", "action":
+	case "do", "commit", "path", "status", "check", "list", "graph", "show", "worktree", "config", "action", "cache":
 		// handled below
 	default:
 		if now, ok := retiredCommands[cmd]; ok {
@@ -510,6 +511,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.config(rest)
 	case "action":
 		return e.action(rest)
+	case "cache":
+		return e.cacheCmd(rest)
 	}
 	return 2
 }
@@ -1385,40 +1388,27 @@ func (e *env) actionLog(f flags) int {
 		if !ok {
 			return false
 		}
-		label := fields.Title
-		if label == "" {
-			label = engine.Subject(c.Message)
+		if err := e.writeActionLogRow(c.ID, c.Date, fields, engine.Subject(c.Message), jsonl, &scratch, enc); err != nil {
+			writeErr = err
 		}
-		if jsonl {
-			scratch.Reset()
-			if err := enc.Encode(actionLogDoc{
-				Issue:     fields.Issue,
-				Action:    fields.Action,
-				Commit:    c.ID,
-				Date:      c.Date.Format(time.RFC3339),
-				Title:     label,
-				Domain:    fields.Domain,
-				Tags:      fields.Tags,
-				Refs:      dedupeStrings(fields.Refs),
-				Target:    dedupeStrings(trailer.SplitList(fields.Target)),
-				Scope:     fields.Scope,
-				Relations: actionLogRelations(e.rel(), fields.Relations),
-				Unrelate:  dedupeStrings(fields.Unrelate),
-			}); err != nil {
-				writeErr = err
-				return true
-			}
-			_, writeErr = e.out.Write(scratch.Bytes())
-			return true
-		}
-		line := fmt.Sprintf("%s  %s  %s  %s  %s",
-			c.Date.Local().Format("2006-01-02 15:04"),
-			pad(fields.Issue, 24),
-			pad(fields.Action, 12),
-			shortID(c.ID),
-			label)
-		_, writeErr = fmt.Fprintln(e.out, strings.TrimRight(line, " "))
 		return true
+	}
+	// No --limit means the whole history is going to be printed: on a warm cache
+	// that is an enumeration plus lookups, without printing 35 MB of messages.
+	if limit == 0 {
+		if n, handled, cerr := e.actionLogCached(backend, jsonl, &scratch, enc); handled {
+			if cerr != nil {
+				if isBrokenPipe(cerr) {
+					return 0
+				}
+				fmt.Fprint(e.errw, i18n.T("输出失败: %v\n", cerr))
+				return 1
+			}
+			if n == 0 {
+				fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
+			}
+			return 0
+		}
 	}
 	err = stream.LogEach(func(c vcs.Commit) bool {
 		kept := emit(c)
@@ -1445,6 +1435,44 @@ func (e *env) actionLog(f flags) int {
 		fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
 	}
 	return 0
+}
+
+// writeActionLogRow renders one action's row. Both read paths — the stream and the
+// cache — call it, so their bytes cannot drift apart.
+func (e *env) writeActionLogRow(id string, when time.Time, f trailer.Fields, subject string, jsonl bool, scratch *bytes.Buffer, enc *json.Encoder) error {
+	label := f.Title
+	if label == "" {
+		label = subject
+	}
+	if jsonl {
+		scratch.Reset()
+		if err := enc.Encode(actionLogDoc{
+			Issue:     f.Issue,
+			Action:    f.Action,
+			Commit:    id,
+			Date:      when.Format(time.RFC3339),
+			Title:     label,
+			Domain:    f.Domain,
+			Tags:      f.Tags,
+			Refs:      dedupeStrings(f.Refs),
+			Target:    dedupeStrings(trailer.SplitList(f.Target)),
+			Scope:     f.Scope,
+			Relations: actionLogRelations(e.rel(), f.Relations),
+			Unrelate:  dedupeStrings(f.Unrelate),
+		}); err != nil {
+			return err
+		}
+		_, err := e.out.Write(scratch.Bytes())
+		return err
+	}
+	line := fmt.Sprintf("%s  %s  %s  %s  %s",
+		when.Local().Format("2006-01-02 15:04"),
+		pad(f.Issue, 24),
+		pad(f.Action, 12),
+		shortID(id),
+		label)
+	_, err := fmt.Fprintln(e.out, strings.TrimRight(line, " "))
+	return err
 }
 
 // actionLogRelations lays an action's declarations out in a fixed order: the
