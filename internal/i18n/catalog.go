@@ -9,6 +9,7 @@ package i18n
 // the same order as its key, because T hands the arguments straight to Sprintf
 // (or Errorf, for E).
 var enCatalog = map[string]string{
+	"--no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）\n": "--no-cache:  neither read nor write the commit-record cache (same as KILN_NO_CACHE=1; output is unchanged)\n",
 	"用法: kiln cache <sync|gc>\n": "usage: kiln cache <sync|gc>\n",
 	"提交记录缓存：预热（sync）或按可达集清理（gc）——读命令会自己写缓存，这两个命令只用于提前预热/强制回收":          "record cache: prewarm (sync) or clean by reachability (gc) — reads populate it on their own; these only prewarm and reclaim",
 	"缓存未启用：在 .kilnconfig.jsonc 里设置 \"cache\": { \"enabled\": true }\n": "cache is not enabled: set \"cache\": { \"enabled\": true } in .kilnconfig.jsonc\n",
@@ -259,6 +260,7 @@ list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感�
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
+--no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）
 `: `
 path flags:  --stat（a file summary per action）  --shortstat（one total line per action）  --json（machine-readable output）
 extra path flag:  --all（read the whole repository in one process; --json only, or pass several issues directly）
@@ -271,6 +273,7 @@ extra list flag:  --search:  whitespace-split terms, AND, literal, case-insensit
 extra commit flag:  --force（**required** to commit on main while worktree=on, as a one-off waiver）  --only <paths>（commit just the listed paths）
 extra worktree remove flag:  --force（remove even with an unmerged branch / a worktree that still has changes）
 --lang <zh|en>:  global language switch (by default detected from KILN_LANG / LC_ALL / LC_MESSAGES / LANG, Chinese when unset)
+--no-cache:  neither read nor write the commit-record cache (same as KILN_NO_CACHE=1; output is unchanged)
 `,
 	`// kiln 配置 —— 随仓库提交（项目共享），放在仓库根。
 // 位置：<仓库根>/.kilnconfig.jsonc（kiln config path 打印路径）

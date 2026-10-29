@@ -53,6 +53,7 @@ list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感�
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
+--no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）
 `
 
 // retiredCommands maps a name kiln no longer answers to its current spelling, so
@@ -211,7 +212,7 @@ func lineNamesCommand(line, cmd string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	if fields[0] == "--lang" {
+	if fields[0] == "--lang" || fields[0] == "--no-cache" {
 		return true
 	}
 	if i := strings.Index(trimmed, " flags"); i > 0 {
