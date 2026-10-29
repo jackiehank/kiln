@@ -35,6 +35,9 @@ type file struct {
 	} `json:"actions"`
 	VCS      string `json:"vcs"`
 	Worktree string `json:"worktree"`
+	Cache    struct {
+		Enabled bool `json:"enabled"`
+	} `json:"cache"`
 }
 
 // Config sources: where the effective vocabulary came from.
@@ -51,6 +54,7 @@ type Config struct {
 	Relations *model.RelationSet // the relation vocabulary (built-in defaults when unset)
 	VCS       string             // backend preference: auto | git | jj
 	Worktree  string             // isolation mode: off (default) | on
+	Cache     bool               // commit-record cache: off unless the file asks for it
 }
 
 // Worktree modes answer one question: may an action be recorded in the main
@@ -96,6 +100,7 @@ func Read(startDir string) (Config, error) {
 	if v := strings.TrimSpace(f.VCS); v != "" {
 		cfg.VCS = v
 	}
+	cfg.Cache = f.Cache.Enabled
 	wt, err := worktreeMode(f.Worktree)
 	if err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
@@ -217,6 +222,10 @@ const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享），�
   "vcs": "auto",
   // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交——开工前先 kiln worktree new <issue>）
   "worktree": "off"
+  // 提交记录缓存：默认关闭；没有这一项 = 不缓存（不建目录、不写盘、行为与今天一致）。
+  // 开启后读命令会把记录落到 .git/kiln/records/，只影响速度、不影响输出。
+  // 开启写法（去掉行首 // 并给上一行补逗号）：
+  // "cache": { "enabled": true }
 }
 `
 

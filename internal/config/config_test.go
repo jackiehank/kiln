@@ -307,3 +307,40 @@ func TestReadRejectsUnknownWorktreeMode(t *testing.T) {
 		t.Fatal("expected an error for an unknown worktree mode")
 	}
 }
+
+// The cache is opt-in: a file without the key must behave exactly like today.
+func TestCacheIsOffUnlessEnabled(t *testing.T) {
+	root := mkRepo(t)
+	cfg, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Cache {
+		t.Fatal("cache must default to off when the file is missing")
+	}
+
+	writeConfig(t, root, `{ "cache": { "enabled": true } }`)
+	if cfg, err = Read(root); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Cache {
+		t.Fatal("cache must be on when enabled")
+	}
+
+	writeConfig(t, root, `{ "cache": { "enabled": false } }`)
+	if cfg, err = Read(root); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Cache {
+		t.Fatal("cache must be off when disabled")
+	}
+}
+
+// A typo inside the cache group is an error, not a silent off.
+func TestCacheRejectsUnknownField(t *testing.T) {
+	root := mkRepo(t)
+	writeConfig(t, root, `{ "cache": { "enabledd": true } }`)
+	if _, err := Read(root); err == nil {
+		t.Fatal("expected an error for an unknown field inside cache")
+	}
+}
