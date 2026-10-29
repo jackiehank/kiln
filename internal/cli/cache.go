@@ -130,6 +130,17 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 	// Persist what this read had to compute anyway; the enumeration covered the
 	// whole history, so the layer may claim HEAD.
 	e.persist(dir, fp, fresh, oids[0])
+	if len(fresh) > 0 && len(fresh) == len(oids) {
+		// Every enumerated commit missed while layers exist: the history was
+		// rewritten (rebase / amend). Merge (and prune) now instead of waiting for
+		// the layer count to reach maxLayers.
+		if layers, err := cache.Scan(dir); err == nil {
+			if keep := usable(layers, fp); len(keep) > 1 {
+				e.mergeLayers(cb, keep, dir, fp, len(oids))
+				return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
+			}
+		}
+	}
 	e.maybeMerge(cb, dir, fp, len(oids))
 	return engine.Build(engine.ActionsFromRecords(records), e.rel()), true
 }
@@ -170,6 +181,12 @@ func (e *env) maybeMerge(cb vcs.CacheBackend, dir string, fp [20]byte, visited i
 	if len(layers) < maxLayers {
 		return
 	}
+	e.mergeLayers(cb, layers, dir, fp, visited)
+}
+
+// mergeLayers rewrites the given layers into one, pruning records no ref can
+// reach when the counts say there may be some.
+func (e *env) mergeLayers(cb vcs.CacheBackend, layers []cache.Layer, dir string, fp [20]byte, visited int) {
 	records, tips := cache.Merge(layers)
 	// The GC ladder's first rung: a merge that sees more records than the
 	// enumeration visited has candidates. Only then is reachability worth its

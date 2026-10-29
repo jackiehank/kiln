@@ -413,3 +413,33 @@ func TestCacheWriteFailureIsSilent(t *testing.T) {
 		t.Fatal("action log must stay correct when the cache cannot be written")
 	}
 }
+
+func TestRewriteSignalCleansWithoutWaitingForTheLayerCount(t *testing.T) {
+	dir := cacheTestRepo(t, true)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+	_ = cacheOutput(t, "list", "--json")
+	if recs := totalRecords(t, dir); recs != 1 {
+		t.Fatalf("warm-up must record one commit, got %d", recs)
+	}
+
+	// Rewrite the only commit: every enumerated OID then misses, which is the
+	// free "history was rewritten" signal. The read must merge and prune on the
+	// spot, without waiting for maxLayers layers to pile up.
+	env := []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=2026-10-02T09:00:00+08:00", "GIT_COMMITTER_DATE=2026-10-02T09:00:00+08:00",
+	}
+	cacheGit(t, dir, env, "改过的开单\n\nissue: alpha\naction: ask\n", "commit", "--amend", "--allow-empty", "-q", "-F", "-")
+	want := cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("the rewrite signal must leave one layer, got %d", n)
+	}
+	if recs := totalRecords(t, dir); recs != 1 {
+		t.Fatalf("the rewrite signal must prune the old record, got %d", recs)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != want {
+		t.Fatalf("cleanup changed the output:\n--- before ---\n%s\n--- after ---\n%s", want, got)
+	}
+}
