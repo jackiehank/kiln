@@ -110,3 +110,7 @@ kiln action log --no-cache   # 1 行 —— git 的答案
 - **没有"重建缓存"命令**：`cache gc` 只合并已有记录、不重新解析；解析器修 bug 后要么删 `.git/kiln`，要么换 magic。这是下一次的触发条件。
 - **仍是单机结论**：Windows + git 2.55，没有 CI；Linux/macOS、只读 FS、reftable、git <2.31 未验。
 
+
+## 追记（2026-10-29，用户重新考虑）
+
+用户指出"保留 `--no-cache`"是把实现需要当成了用户需要：用户要的是恢复命令，不是关缓存开关。结论撤回——`--no-cache` / `KILN_NO_CACHE` 已删除，缓存关断降为包内开关（只给测试），用户面改为 `kiln cache clear`。推演、设计与实现见 [`cache-recovery.md`](cache-recovery.md)。本文件其余内容（两个洞的复现与修法）仍然有效。

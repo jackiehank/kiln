@@ -3,8 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/jackiehank/kiln/internal/i18n"
 )
 
 // writeConfig puts body at <root>/.kilnconfig.jsonc.
@@ -305,5 +308,20 @@ func TestReadRejectsUnknownWorktreeMode(t *testing.T) {
 	writeConfig(t, root, `{"worktree": "sometimes"}`)
 	if _, err := Read(root); err == nil {
 		t.Fatal("expected an error for an unknown worktree mode")
+	}
+}
+
+// TestDefaultFileIsTranslated pins the seed to the catalog. A stale key means an
+// English checkout gets a Chinese config, which is exactly how this drifted when
+// the cache comment was added without touching the catalog.
+func TestDefaultFileIsTranslated(t *testing.T) {
+	i18n.Set(i18n.En)
+	defer i18n.Set(i18n.Zh)
+	en := i18n.T(defaultFile)
+	if en == defaultFile {
+		t.Fatal("the seed has no English entry: the catalog key drifted from defaultFile")
+	}
+	if regexp.MustCompile(`[\x{4e00}-\x{9fff}]`).MatchString(en) {
+		t.Fatalf("the English seed still has CJK:\n%s", en)
 	}
 }

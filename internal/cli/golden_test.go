@@ -17,9 +17,9 @@ import (
 // calls elsewhere in this package) cannot see a dropped newline or a reordered
 // column; a recorded whole output can.
 //
-// Each case is run twice — once with the cache, once with `--no-cache` — and the
-// two must be identical. That is the same invariant refactor settled on, kept
-// here so no later step can trade one path for the other.
+// Each case is run twice — once with the cache, once with the cache switched off
+// internally — and the two must be identical. That is the same invariant the
+// refactor settled on, kept here so no later step can trade one path for the other.
 
 // updateGolden rewrites testdata/golden from the current output. It is the only
 // way those files change, so a diff there always means someone ran -update.
@@ -95,9 +95,9 @@ func TestGolden(t *testing.T) {
 				c := c
 				t.Run(c.name, func(t *testing.T) {
 					warm := runGolden(t, c.args...)
-					cold := runGolden(t, append(append([]string{}, c.args...), "--no-cache")...)
+					cold := runColdGolden(t, c.args...)
 					if warm != cold {
-						t.Fatalf("cache and --no-cache disagree for %v:\ncache:\n%s\nno-cache:\n%s",
+						t.Fatalf("cache and the cold path disagree for %v:\ncache:\n%s\ncold:\n%s",
 							c.args, warm.render(dir, c.args), cold.render(dir, c.args))
 					}
 					want := warm.render(dir, c.args)
@@ -138,6 +138,17 @@ func runGolden(t *testing.T, args ...string) goldenRun {
 	var out, errb bytes.Buffer
 	code := Run(args, &out, &errb)
 	return goldenRun{code: code, stdout: out.String(), stderr: errb.String()}
+}
+
+// runColdGolden answers the same command with the record cache switched off: the
+// oracle a warm read is checked against. The switch is internal — the CLI itself
+// has no way to run uncached, because a user repairs a cache with
+// `kiln cache clear`.
+func runColdGolden(t *testing.T, args ...string) goldenRun {
+	t.Helper()
+	cacheOff = true
+	defer func() { cacheOff = false }()
+	return runGolden(t, args...)
 }
 
 // render is the recorded form: the argv names the case inside the file, and the

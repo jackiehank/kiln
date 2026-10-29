@@ -26,12 +26,18 @@ const recordsDir = "records"
 // one read pays for it) and how many files a read opens.
 var maxLayers = 64
 
+// cacheOff turns the record cache off for every read. It exists for the test
+// suite, whose oracle is the cold path, and is deliberately not reachable from
+// argv or the environment: a user repairs a cache with `kiln cache clear`, not
+// by running the tool uncached.
+var cacheOff bool
+
 // cacheSite resolves where the cache lives and which vocabulary it belongs to.
-// The cache is background behaviour: it is on unless --no-cache (or
-// KILN_NO_CACHE) turns it off, and it stays off for a backend that cannot serve
-// it (jj) or a directory that cannot be resolved.
+// The cache is background behaviour: it is on unless cacheOff says otherwise,
+// and it stays off for a backend that cannot serve it (jj) or a directory that
+// cannot be resolved.
 func (e *env) cacheSite(backend vcs.Repo) (vcs.CacheBackend, string, [20]byte, bool) {
-	if e.noCache {
+	if cacheOff {
 		return nil, "", [20]byte{}, false
 	}
 	return e.cacheDir(backend)
@@ -435,17 +441,16 @@ func decodeOID(id string) ([20]byte, bool) {
 	return oid, true
 }
 
-// cacheCmd is `kiln cache gc`: the explicit escape hatch. Reads write the cache,
-// merge it and prune unreachable records on their own, so the only job left for a
-// command is forcing a full reachability clean-up (old records, foreign-fingerprint
-// layers, broken files).
+// cacheCmd is the escape hatch, in two shapes: gc reclaims (reachability, merge,
+// broken files), clear forgets everything so the next read rebuilds with the
+// code in this binary.
 func (e *env) cacheCmd(args []string) int {
 	pos, _, missing := parse(args)
 	if code := rejectMissingValues(e.errw, missing, allowedFlags()); code != 0 {
 		return code
 	}
-	if len(pos) != 1 || pos[0] != "gc" {
-		fmt.Fprint(e.errw, i18n.T("用法: kiln cache gc\n"))
+	if len(pos) != 1 || (pos[0] != "gc" && pos[0] != "clear") {
+		fmt.Fprint(e.errw, i18n.T("用法: kiln cache gc | kiln cache clear\n"))
 		return 2
 	}
 	backend, err := e.backend()
@@ -453,7 +458,40 @@ func (e *env) cacheCmd(args []string) int {
 		fmt.Fprint(e.errw, i18n.T("打开仓库失败: %v\n", err))
 		return 1
 	}
+	if pos[0] == "clear" {
+		return e.cacheClear(backend)
+	}
 	return e.cacheGC(backend)
+}
+
+// cacheClear deletes every layer and snapshot. A read that was already running
+// has its layers in memory and may write a fresh one afterwards; that is a
+// rebuild, not a conflict. Clearing is the recovery path: the next read scans
+// with the code in this binary, so a parser fix stops being masked by layers
+// written by an older version.
+func (e *env) cacheClear(backend vcs.Repo) int {
+	_, dir, _, ok := e.cacheDir(backend)
+	if !ok {
+		fmt.Fprint(e.errw, i18n.T("当前后端不支持缓存\n"))
+		return 1
+	}
+	enumsDir := filepath.Join(filepath.Dir(dir), "enums")
+	layers, _ := cache.Scan(dir)
+	enums, _ := os.ReadDir(enumsDir)
+	if len(layers) == 0 && len(enums) == 0 {
+		fmt.Fprintln(e.out, i18n.T("缓存是空的"))
+		return 0
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprint(e.errw, i18n.T("清空缓存失败: %v\n", err))
+		return 1
+	}
+	if err := os.RemoveAll(enumsDir); err != nil {
+		fmt.Fprint(e.errw, i18n.T("清空缓存失败: %v\n", err))
+		return 1
+	}
+	fmt.Fprintln(e.out, i18n.T("已清空缓存：层 %d、快照 %d；下一次读会用当前版本重建", len(layers), len(enums)))
+	return 0
 }
 
 func (e *env) cacheGC(backend vcs.Repo) int {

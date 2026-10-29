@@ -151,9 +151,11 @@ func TestSnapshotAnswersWithoutGit(t *testing.T) {
 	}
 	// And the snapshot is what made that possible: without the cache the same
 	// environment cannot answer at all.
+	cacheOff = true
+	defer func() { cacheOff = false }()
 	var out, errb bytes.Buffer
-	if code := Run([]string{"graph", "--json", "--no-cache"}, &out, &errb); code == 0 {
-		t.Fatal("--no-cache must need git, so it must fail without it")
+	if code := Run([]string{"graph", "--json"}, &out, &errb); code == 0 {
+		t.Fatal("a cold read must need git, so it must fail without it")
 	}
 }
 
@@ -163,7 +165,7 @@ func TestSnapshotFollowsHead(t *testing.T) {
 	check := func(label string) {
 		t.Helper()
 		warm := cacheOutput(t, "graph", "--json")
-		plain := cacheOutput(t, "graph", "--json", "--no-cache")
+		plain := uncached(t, "graph", "--json")
 		if warm != plain {
 			t.Fatalf("%s: snapshot output differs from the full scan", label)
 		}
@@ -206,7 +208,7 @@ func TestSnapshotFallsBackOnPackedReplaceRefs(t *testing.T) {
 	_ = cacheOutput(t, "action", "log")
 	cacheGit(t, dir, nil, "", "replace", "--graft", "HEAD")
 	cacheGit(t, dir, nil, "", "pack-refs", "--all")
-	want := cacheOutput(t, "action", "log", "--no-cache")
+	want := uncached(t, "action", "log")
 	if got := cacheOutput(t, "action", "log"); got != want {
 		t.Fatalf("a packed replace ref must invalidate the snapshot:\n--- cached ---\n%s\n--- git ---\n%s", got, want)
 	}
@@ -272,7 +274,7 @@ func TestSnapshotSilentWithoutWritableCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	warm := cacheOutput(t, "graph", "--json")
-	plain := cacheOutput(t, "graph", "--json", "--no-cache")
+	plain := uncached(t, "graph", "--json")
 	if warm != plain {
 		t.Fatal("an unwritable cache must not change the output")
 	}
@@ -286,7 +288,7 @@ func TestSnapshotPackedRefs(t *testing.T) {
 	t.Chdir(dir)
 	cacheOutput(t, "graph", "--json")
 	cacheGit(t, dir, nil, "", "pack-refs", "--all", "--prune")
-	want := cacheOutput(t, "graph", "--json", "--no-cache")
+	want := uncached(t, "graph", "--json")
 	noGit(t)
 	if got := cacheOutput(t, "graph", "--json"); got != want {
 		t.Fatal("a packed ref must still resolve from the filesystem")
@@ -298,7 +300,7 @@ func TestSnapshotDetachedHead(t *testing.T) {
 	t.Chdir(dir)
 	cacheGit(t, dir, nil, "", "checkout", "-q", "--detach", "HEAD~1")
 	warm := cacheOutput(t, "graph", "--json")
-	plain := cacheOutput(t, "graph", "--json", "--no-cache")
+	plain := uncached(t, "graph", "--json")
 	if warm != plain {
 		t.Fatal("a detached HEAD must read the same as a full scan")
 	}
@@ -312,7 +314,7 @@ func TestSnapshotSharedByWorktrees(t *testing.T) {
 	cacheGit(t, dir, nil, "", "worktree", "add", "-q", "-b", "enum-wt", wt, "HEAD~1")
 	t.Chdir(wt)
 	warm := cacheOutput(t, "graph", "--json")
-	plain := cacheOutput(t, "graph", "--json", "--no-cache")
+	plain := uncached(t, "graph", "--json")
 	if warm != plain {
 		t.Fatal("a linked worktree must read the same as a full scan")
 	}

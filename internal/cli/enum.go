@@ -222,7 +222,7 @@ func replaceRefs(common string) (found, ok bool) {
 // keyed by. ok=false means the filesystem could not name HEAD confidently, in
 // which case every read keeps asking git.
 func (e *env) enumSite() (string, enumKey, bool) {
-	if e.noCache {
+	if cacheOff {
 		return "", enumKey{}, false
 	}
 	common, ok := commonDirFromFS(e.dir)

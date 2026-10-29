@@ -22,7 +22,6 @@ type env struct {
 	worktree     string
 	configPath   string
 	configSource string
-	noCache      bool // --no-cache / KILN_NO_CACHE turns the record cache off
 	repo         vcs.Repo
 	kind         vcs.Kind // the backend that was opened, recorded for backend-specific wording
 	out          io.Writer

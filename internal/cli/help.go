@@ -32,7 +32,6 @@ list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感�
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
---no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）
 `
 
 // usageCommands is the command surface rendered by usageText.
@@ -50,6 +49,7 @@ var usageCommands = [][2]string{
 	{"kiln worktree new <issue>", "建 worktree（main 只读，动作只在 worktree 提交）"},
 	{"kiln worktree list", "列出全部 worktree（含 main）及各自状态（可加 --json）"},
 	{"kiln cache gc", "按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条）"},
+	{"kiln cache clear", "清空提交记录缓存（缓存出错、升级 kiln 之后用；下一次读会用当前版本重建）"},
 	{"kiln worktree remove <issue>", "删除 worktree（尚有工作的默认拒绝，--force 强删）"},
 	{"kiln config path", "打印配置路径（缺失时写入一份带注释的默认配置）"},
 	{"kiln --version", "打印版本、可执行文件路径与构建时间（-V / version 同义）"},
@@ -187,7 +187,7 @@ func lineNamesCommand(line, cmd string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	if fields[0] == "--lang" || fields[0] == "--no-cache" {
+	if fields[0] == "--lang" {
 		return true
 	}
 	if i := strings.Index(trimmed, " flags"); i > 0 {

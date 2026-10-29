@@ -217,8 +217,8 @@ const defaultFile = `// kiln 配置 —— 随仓库提交（项目共享），�
   "vcs": "auto",
   // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交——开工前先 kiln worktree new <issue>）
   "worktree": "off"
-  // 提交记录缓存是后台行为：读命令自动落到 .git/kiln/records/，没有配置项；
-  // 需要绕过时用 --no-cache（或 KILN_NO_CACHE=1），输出不变。
+  // 提交记录缓存是后台行为：读命令自动写到 .git/kiln/，没有配置项。
+  // 缓存出错或升级后行为仍旧，用 kiln cache clear 清空；下一次读会用当前版本重建。
 }
 `
 

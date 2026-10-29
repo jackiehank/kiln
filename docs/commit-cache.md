@@ -555,14 +555,15 @@ covered = 各层头里记录的 tip 集合（只信校验通过的层）
 
 结论：**≥10k 提交时，每次提交后 sync 一次也能回本**；3k–10k 建议批量 sync。表里的命中读按原型 7.7 MB 层测（解码 33.6 ms）；正式格式约 13 MB，解码预计 +15–25 ms，不改变结论。
 
-### 6. 开关：一律开启，`--no-cache` 是唯一例外
+### 6. 开关：一律开启，恢复用 `kiln cache clear`
 
 缓存是**后台行为**，不是用户要记得打开的开关：没有配置项，读命令自动写、自动合并、自动清理。
 
-- **关闭**：`--no-cache` / `KILN_NO_CACHE=1`，只影响本次进程；输出逐字节不变——它存在的意义是排查问题和做 A/B 验收。
-- **`kiln cache gc`**：唯一保留的命令，按 `rev-list --all` 强制清理（旧记录、坏层、旧指纹层、临时文件）。日常不需要，读路径自己维护。
+- **恢复**：`kiln cache clear` 删掉层与快照，下一次读走冷路径、用当前二进制重建。缓存出错、或升级 kiln 后旧层遮住解析修复，都用这条。
+- **`kiln cache gc`**：日常回收（按 `rev-list --all` 强制清理旧记录、坏层、旧指纹层、临时文件）。日常不需要，读路径自己维护。
+- **没有用户可见的"关缓存"**：关断降级为包内开关（只给测试用），因为用户需要的是"回到可信状态"，不是"不读缓存地跑一次"。
 - **位置**：`$(git rev-parse --path-format=absolute --git-common-dir)/kiln/records/`；老 git（<2.31）回落相对路径拼接。
-- **兼容性**：配置里现在没有 `cache` 键；写过 `"cache": {…}` 的文件会被严格解析判为 unknown field（0.x 不承诺配置兼容）。播种的默认配置只留一句注释说明它默认开启、`--no-cache` 可绕过。
+- **兼容性**：配置里现在没有 `cache` 键；写过 `"cache": {…}` 的文件会被严格解析判为 unknown field（0.x 不承诺配置兼容）。播种的默认配置只留一句注释说明它默认开启、坏了用 `kiln cache clear`。
 
 ### 7. 与"总流"的关系
 
@@ -753,3 +754,4 @@ GC 只有两种活：**删掉永远不会再被用的层**（坏层、旧 magic�
 - 2026-10-29（同日，apply 第六刀）：性能实测 + 两处优化。发现缓存路径上每读一次都多 spawn 一个 `git rev-parse --git-common-dir`（Windows 约 45 ms），1k 仓因此**净亏 20%**；改成从 cwd 走文件系统找 `.git` / worktree 的 `commondir`（失败才回落 git）后，1k 变成**省 24%**。另外 `action log` 的缓存路径多算了一次 `rev-parse HEAD`（纯为记录 tips，而没有消费者），删掉后 action log 从 1k 亏 23% 变成省 24%。最终：100k 上 graph −56%、list −61%、check −60%、path −51%、action log −37%；`--limit` 不变（不走缓存）；六命令 × 五规模的 warm 与 `--no-cache` 输出逐字节一致。
 - 2026-10-29（同日，apply 第五刀）：把缓存收回后台——删掉 `cache sync` 与 `cache.enabled` 配置项，读命令一律写缓存，`--no-cache` / `KILN_NO_CACHE` 是唯一例外，只留 `kiln cache gc` 作为强制回收的逃生口。理由是"缓存是后台行为，不该成为用户要理解的接口"；`sync` 唯一不可替代的场景（CI 预热）可以靠先跑一次读命令覆盖。
 - 2026-10-29（同日，cache-hardening）：补两个会静默出错的洞。**(1) packed replace ref**：`enumInvariant` 只 `ReadDir(refs/replace)`，`pack-refs` 之后目录为空、指纹与替换前相同，暖读会命中替换前的快照（复现：`action log` 3 行 vs git 的 1 行）；改为同时扫 `packed-refs` 里的 `refs/replace/` 行，命中即不信任快照。**(2) 坏枚举永不自愈**：`storeEnum` 只比大小，位翻转（大小不变、CRC 坏）让 `loadEnum` 永远失败，每次读多起一个 `git log`；改为解码失败就删、写入时按 `bytes.Equal` 比较内容，坏文件当场覆盖。顺手把一直没人调用的 `cache.Sweep` 接进 `kiln cache gc`（清崩溃留下的临时文件）。三条新测试先对旧代码验证过失败。
+- 2026-10-29（同日，cache-recovery）：`--no-cache` / `KILN_NO_CACHE` 删除，缓存关断降为包内开关（只给测试）；用户面新增 `kiln cache clear`（删层 + 快照，下一次读用当前版本重建），`cache gc` 保留为日常回收。顺带修好配置种子的英文键漂移（`KILN_LANG=en` 写出的 `.kilnconfig.jsonc` 曾是中文）。

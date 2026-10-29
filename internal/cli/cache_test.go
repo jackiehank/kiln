@@ -61,6 +61,16 @@ func cacheOutput(t *testing.T, args ...string) string {
 	return out.String()
 }
 
+// uncached answers args with the record cache switched off: the oracle every
+// cached assertion is checked against. The switch is internal — a user repairs a
+// cache with `kiln cache clear`, not by running the tool uncached.
+func uncached(t *testing.T, args ...string) string {
+	t.Helper()
+	cacheOff = true
+	defer func() { cacheOff = false }()
+	return cacheOutput(t, args...)
+}
+
 func recordsPath(dir string) string { return filepath.Join(dir, ".git", "kiln", "records") }
 
 func layerCount(t *testing.T, dir string) int {
@@ -111,7 +121,7 @@ func TestCacheReadsPrintIdenticalBytes(t *testing.T) {
 	if miss == before {
 		t.Fatal("output must change after a new action")
 	}
-	if plainMiss := cacheOutput(t, "path", "--all", "--json", "--no-cache"); plainMiss != miss {
+	if plainMiss := uncached(t, "path", "--all", "--json"); plainMiss != miss {
 		t.Fatalf("the gap fill changed the output:\n--- miss ---\n%s\n--- full scan ---\n%s", miss, plainMiss)
 	}
 	if n := layerCount(t, dir); n != 2 {
@@ -127,10 +137,10 @@ func TestCacheReadsPrintIdenticalBytes(t *testing.T) {
 		t.Fatalf("rebuilding the cache changed the output:\n--- miss ---\n%s\n--- rebuilt ---\n%s", miss, rebuilt)
 	}
 
-	// --no-cache must answer exactly like the cached path.
-	off := cacheOutput(t, "path", "--all", "--json", "--no-cache")
+	// The uncached answer must be the same one the cache gave.
+	off := uncached(t, "path", "--all", "--json")
 	if off != miss {
-		t.Fatalf("--no-cache changed the output:\n--- cached ---\n%s\n--- no-cache ---\n%s", miss, off)
+		t.Fatalf("the cold path changed the output:\n--- cached ---\n%s\n--- cold ---\n%s", miss, off)
 	}
 }
 
@@ -149,23 +159,23 @@ func TestCacheCoversEveryReadCommand(t *testing.T) {
 		{"graph", "--json"},
 		{"show", "alpha", "1", "--json"},
 	} {
-		plain := cacheOutput(t, append(args, "--no-cache")...)
+		plain := uncached(t, args...)
 		_ = cacheOutput(t, args...)
 		cached := cacheOutput(t, args...)
 		if plain != cached {
-			t.Fatalf("%v: cached output differs from --no-cache\n--- plain ---\n%s\n--- cached ---\n%s", args, plain, cached)
+			t.Fatalf("%v: cached output differs from the cold path\n--- plain ---\n%s\n--- cached ---\n%s", args, plain, cached)
 		}
 	}
 }
 
-func TestNoCacheFlagLeavesNoState(t *testing.T) {
+func TestColdReadLeavesNoState(t *testing.T) {
 	dir := cacheTestRepo(t)
 	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
 	t.Chdir(dir)
 
-	cacheOutput(t, "list", "--json", "--no-cache")
+	_ = uncached(t, "list", "--json")
 	if _, err := os.Stat(recordsPath(dir)); !os.IsNotExist(err) {
-		t.Fatalf("--no-cache must not create state: %v", err)
+		t.Fatalf("a cold read must not create state: %v", err)
 	}
 }
 
@@ -225,8 +235,8 @@ func TestActionLogCachedMatchesTheStream(t *testing.T) {
 	}
 
 	// --limit keeps streaming (a first screen is cheaper than decoding a layer).
-	if got, want := cacheOutput(t, "action", "log", "--limit", "2"), cacheOutput(t, "action", "log", "--limit", "2", "--no-cache"); got != want {
-		t.Fatalf("limited action log differs:\n--- cached ---\n%s\n--- no-cache ---\n%s", got, want)
+	if got, want := cacheOutput(t, "action", "log", "--limit", "2"), uncached(t, "action", "log", "--limit", "2"); got != want {
+		t.Fatalf("limited action log differs:\n--- cached ---\n%s\n--- cold ---\n%s", got, want)
 	}
 }
 
@@ -240,8 +250,8 @@ func TestActionLogGapFillMatchesTheStream(t *testing.T) {
 	if got := cacheOutput(t, "action", "log"); got == want {
 		t.Fatal("the new action must show up")
 	}
-	if got, want2 := cacheOutput(t, "action", "log"), cacheOutput(t, "action", "log", "--no-cache"); got != want2 {
-		t.Fatalf("gap fill changed the stream:\n--- cached ---\n%s\n--- no-cache ---\n%s", got, want2)
+	if got, want2 := cacheOutput(t, "action", "log"), uncached(t, "action", "log"); got != want2 {
+		t.Fatalf("gap fill changed the stream:\n--- cached ---\n%s\n--- cold ---\n%s", got, want2)
 	}
 }
 
@@ -375,10 +385,10 @@ func TestCacheIsSharedAcrossWorktrees(t *testing.T) {
 
 	// The linked worktree reads the same history; a cached answer must be the
 	// same as a full scan there too.
-	if got, plain := cacheOutput(t, "list", "--json"), cacheOutput(t, "list", "--json", "--no-cache"); got != plain {
+	if got, plain := cacheOutput(t, "list", "--json"), uncached(t, "list", "--json"); got != plain {
 		t.Fatalf("worktree cache hit differs from a full scan:\n--- cached ---\n%s\n--- plain ---\n%s", got, plain)
 	}
-	if got := cacheOutput(t, "action", "log", "--jsonl"); got != cacheOutput(t, "action", "log", "--jsonl", "--no-cache") {
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != uncached(t, "action", "log", "--jsonl") {
 		t.Fatal("worktree action log differs from a full scan")
 	}
 	// One cache for the whole clone: nothing is written under the worktree's own
@@ -399,14 +409,14 @@ func TestCacheWriteFailureIsSilent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".git", "kiln"), []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	plain := cacheOutput(t, "list", "--json", "--no-cache")
+	plain := uncached(t, "list", "--json")
 	if got := cacheOutput(t, "list", "--json"); got != plain {
 		t.Fatalf("a failed write must not change the output:\n--- plain ---\n%s\n--- got ---\n%s", plain, got)
 	}
 	if got := cacheOutput(t, "list", "--json"); got != plain {
 		t.Fatal("the second read must stay correct too")
 	}
-	if got := cacheOutput(t, "action", "log", "--jsonl"); got != cacheOutput(t, "action", "log", "--jsonl", "--no-cache") {
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != uncached(t, "action", "log", "--jsonl") {
 		t.Fatal("action log must stay correct when the cache cannot be written")
 	}
 }
@@ -438,5 +448,60 @@ func TestRewriteSignalCleansWithoutWaitingForTheLayerCount(t *testing.T) {
 	}
 	if got := cacheOutput(t, "list", "--json"); got != want {
 		t.Fatalf("cleanup changed the output:\n--- before ---\n%s\n--- after ---\n%s", want, got)
+	}
+}
+
+func TestCacheClearRebuildsFromScratch(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+	want := cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("warm-up must write one layer, got %d", n)
+	}
+
+	if got := cacheOutput(t, "cache", "clear"); !strings.Contains(got, "已清空缓存") {
+		t.Fatalf("clear must say what it did: %q", got)
+	}
+	if n := layerCount(t, dir); n != 0 {
+		t.Fatalf("clear must delete every layer, %d left", n)
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, ".git", "kiln", "enums")); err == nil && len(entries) != 0 {
+		t.Fatalf("clear must delete every snapshot, %d left", len(entries))
+	}
+
+	// Clearing is not a state: the next read rebuilds with the same bytes.
+	if got := cacheOutput(t, "list", "--json"); got != want {
+		t.Fatalf("a rebuild changed the output:\n--- before ---\n%s\n--- after ---\n%s", want, got)
+	}
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("the next read must rebuild one layer, got %d", n)
+	}
+	if len(enumFiles(t, dir)) == 0 {
+		t.Fatal("the rebuild must leave a snapshot")
+	}
+
+	// Clearing twice is not an error: the second one reports an empty cache.
+	_ = cacheOutput(t, "cache", "clear")
+	if got := cacheOutput(t, "cache", "clear"); !strings.Contains(got, "缓存是空的") {
+		t.Fatalf("clearing an empty cache must be quiet: %q", got)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != want {
+		t.Fatal("clearing an empty cache must not change the output")
+	}
+}
+
+func TestNoCacheFlagIsRejected(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	t.Chdir(dir)
+
+	var out, errb bytes.Buffer
+	if code := Run([]string{"list", "--no-cache"}, &out, &errb); code != 0 {
+		t.Fatalf("an unknown flag must only warn, got exit %d", code)
+	}
+	if !strings.Contains(errb.String(), "未知 flag --no-cache") {
+		t.Fatalf("--no-cache must be reported as unknown: %q", errb.String())
 	}
 }

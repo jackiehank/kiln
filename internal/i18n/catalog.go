@@ -9,9 +9,12 @@ package i18n
 // the same order as its key, because T hands the arguments straight to Sprintf
 // (or Errorf, for E).
 var enCatalog = map[string]string{
-	"--no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）\n": "--no-cache:  neither read nor write the commit-record cache (same as KILN_NO_CACHE=1; output is unchanged)\n",
-	"用法: kiln cache gc\n": "usage: kiln cache gc\n",
-	"按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条）": "clean the commit-record cache by reachability (reads write and merge it themselves; only forced reclaim needs this)",
+	"用法: kiln cache gc | kiln cache clear\n": "usage: kiln cache gc | kiln cache clear\n",
+	"按可达集清理提交记录缓存（读命令自己写、自己合并；只有强制回收需要这条）":    "clean the commit-record cache by reachability (reads write and merge it themselves; only forced reclaim needs this)",
+	"清空提交记录缓存（缓存出错、升级 kiln 之后用；下一次读会用当前版本重建）": "empty the commit-record cache (after a cache fault or a kiln upgrade; the next read rebuilds it with the current version)",
+	"缓存是空的": "the cache is already empty",
+	"已清空缓存：层 %d、快照 %d；下一次读会用当前版本重建": "cache cleared: %d layers, %d snapshots; the next read rebuilds it with the current version",
+	"清空缓存失败: %v\n":                    "cannot clear the cache: %v\n",
 	"读取缓存失败: %v\n":                    "cannot read the cache: %v\n",
 	"读取可达集失败: %v\n":                   "cannot compute the reachable set: %v\n",
 	"写入缓存失败: %v\n":                    "cannot write the cache: %v\n",
@@ -255,7 +258,6 @@ list 的 --search:  空白分词、词间 AND、字面量、大小写不敏感�
 commit 额外 flag:  --force（worktree=on 时在 main 提交**必填**，作一次性豁免）  --only <paths>（只提交列出的路径）
 worktree remove 额外 flag:  --force（连同未合并的分支 / 尚有改动的 worktree 一起删）
 --lang <zh|en>:  全局语言开关（默认按 KILN_LANG / LC_ALL / LC_MESSAGES / LANG 探测，未设则中文）
---no-cache:  不读也不写提交记录缓存（等价于 KILN_NO_CACHE=1；输出不变）
 `: `
 path flags:  --stat（a file summary per action）  --shortstat（one total line per action）  --json（machine-readable output）
 extra path flag:  --all（read the whole repository in one process; --json only, or pass several issues directly）
@@ -268,7 +270,6 @@ extra list flag:  --search:  whitespace-split terms, AND, literal, case-insensit
 extra commit flag:  --force（**required** to commit on main while worktree=on, as a one-off waiver）  --only <paths>（commit just the listed paths）
 extra worktree remove flag:  --force（remove even with an unmerged branch / a worktree that still has changes）
 --lang <zh|en>:  global language switch (by default detected from KILN_LANG / LC_ALL / LC_MESSAGES / LANG, Chinese when unset)
---no-cache:  neither read nor write the commit-record cache (same as KILN_NO_CACHE=1; output is unchanged)
 `,
 	`// kiln 配置 —— 随仓库提交（项目共享），放在仓库根。
 // 位置：<仓库根>/.kilnconfig.jsonc（kiln config path 打印路径）
@@ -285,6 +286,8 @@ extra worktree remove flag:  --force（remove even with an unmerged branch / a w
   "vcs": "auto",
   // worktree 模式：off（默认，允许在 main 提交）| on（动作只在 worktree 提交——开工前先 kiln worktree new <issue>）
   "worktree": "off"
+  // 提交记录缓存是后台行为：读命令自动写到 .git/kiln/，没有配置项。
+  // 缓存出错或升级后行为仍旧，用 kiln cache clear 清空；下一次读会用当前版本重建。
 }
 `: `// kiln config — commit it with the repository (shared by the project), at the repository root.
 // Location: <repository root>/.kilnconfig.jsonc (kiln config path prints it)
@@ -301,6 +304,8 @@ extra worktree remove flag:  --force（remove even with an unmerged branch / a w
   "vcs": "auto",
   // worktree mode: off (default, commits on main allowed) | on (actions commit in a worktree only — run kiln worktree new <issue> first)
   "worktree": "off"
+  // The commit-record cache is background behaviour: reads write it to .git/kiln/ and there is no config for it.
+  // If the cache misbehaves or an upgrade seems ignored, run kiln cache clear; the next read rebuilds it.
 }
 `,
 }

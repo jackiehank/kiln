@@ -32,12 +32,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
-	// --no-cache is global like --lang: pull it out before dispatch so every read
-	// command accepts it without adding a flag to each parser.
-	args, noCache := stripNoCache(args)
-	if os.Getenv("KILN_NO_CACHE") != "" {
-		noCache = true
-	}
 	// Load config before help so `-h` reflects the project's relation vocabulary.
 	// Help must not fail on a broken config: fall back to the built-in default.
 	cfg, cfgErr := config.Read(".")
@@ -93,7 +87,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		worktree:     cfg.Worktree,
 		configPath:   cfg.Path,
 		configSource: cfg.Source,
-		noCache:      noCache,
 		out:          stdout,
 		errw:         stderr,
 	}
@@ -185,20 +178,6 @@ func printVersion(w io.Writer) int {
 	return 0
 }
 
-// stripNoCache removes the global --no-cache switch from the argument list.
-func stripNoCache(args []string) ([]string, bool) {
-	out := make([]string, 0, len(args))
-	found := false
-	for _, a := range args {
-		if a == "--no-cache" {
-			found = true
-			continue
-		}
-		out = append(out, a)
-	}
-	return out, found
-}
-
 // retiredCommands maps a name kiln no longer answers to its current spelling, so
 // a hard cut still tells the caller where the command went.
-var retiredCommands = map[string]string{"workspace": "worktree"}
+var retiredCommands = map[string]string{"workspace": "worktree", "no-cache": "cache clear"}
