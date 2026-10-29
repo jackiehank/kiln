@@ -282,3 +282,5 @@ OID(20) | authorDate(8, unix 秒) | tzOffset(2, 分钟) | flags(1) | 字段块(T
 - 2026-10-29：由"总流扫的时候顺手落缓存"的想法开的条目。**现在不建**——今天缓存是净亏（进程启动 46–62 ms，log 边际约 20 ms），触发条件沿用 `perf-audit`（1k+ issue 或 `path --all` >10 MB）。先记下设计前提（hash 键、只增不改、损坏退化为全扫）与两个更便宜的先行项（commit-graph、`%(trailers)` 快路径）。
 - 2026-10-29（同日）：收集 git 自己的做法（§collect）。要点：git 用"内容寻址 + 缺失即正常 + 自校验文件名 + 换 chunk id 不迁移 + stat 可疑才验"这五条做到**陈旧只变慢不变错**；它确实缓存计算出来的东西（generation number、corrected commit date、changed-paths Bloom filter、bitmap），前提是键装下全部输入且缺失就回退。对 kiln 的直接结论：**枚举走 `rev-list`、缓存只回答属性**，于是不需要"新鲜度"判断；缓存文件自校验；派生结果可缓存但默认先不缓存。
 - 2026-10-29（同日，hypothesize）：定下形态——属性层（OID→记录）、枚举走 `git log --author-date-order --format=%H`（顺序只认 git，本仓 3 对同秒提交是硬证据）、不可变分层 + chain + 自校验名、`cache sync` 显式写、默认关闭、v1 只 git。派生缓存与 T2 明确不进 v1；验收 7 条里"字节一致"排第一。
+
+- 2026-10-29（同日晚）：`action-log-relations` 已 concluded（`876b898`），记录格式定稿为"T1 字段 + `isAction` 标志 + author date"。本 issue 的那条 `blocked-by action-log-relations` 据此解除（`--unrelate`）；现在缓存只等 `perf-audit` 的规模触发条件（1k+ issue 或 `path --all` >10 MB）。
