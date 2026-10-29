@@ -426,7 +426,10 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	if l := e.persist(dir, fp, fresh, oids[0]); l != nil {
 		layers = append(layers, *l)
 	}
-	e.maybeMerge(cb, layers, dir, fp, emitted)
+	// The merge ladder compares the layered records against the enumeration, not
+	// against the rows rendered: plain commits count as visited history too, and
+	// a repository can hold no actions at all.
+	e.maybeMerge(cb, layers, dir, fp, len(oids))
 	return emitted, true, nil
 }
 

@@ -505,3 +505,50 @@ func TestNoCacheFlagIsRejected(t *testing.T) {
 		t.Fatalf("--no-cache must be reported as unknown: %q", errb.String())
 	}
 }
+
+// commitPlain writes a commit with no kiln trailers: the record layer still
+// holds it, but `action log` renders no row for it.
+func commitPlain(t *testing.T, dir, subject, when string) {
+	t.Helper()
+	env := []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=" + when, "GIT_COMMITTER_DATE=" + when,
+	}
+	cacheGit(t, dir, env, subject+"\n", "commit", "--allow-empty", "-q", "-F", "-")
+}
+
+func TestActionLogMergePrunesWithoutRenderingRows(t *testing.T) {
+	old := maxLayers
+	maxLayers = 2
+	defer func() { maxLayers = old }()
+
+	dir := cacheTestRepo(t)
+	commitPlain(t, dir, "普通提交一", "2026-10-01T10:00:00+08:00")
+	commitPlain(t, dir, "普通提交二", "2026-10-02T10:00:00+08:00")
+	t.Chdir(dir)
+	_ = cacheOutput(t, "list", "--json")
+	if recs := totalRecords(t, dir); recs != 2 {
+		t.Fatalf("warm-up must record two commits, got %d", recs)
+	}
+
+	// Amend: the old head becomes unreachable, but its record stays behind.
+	cacheGit(t, dir, []string{
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE=2026-10-03T09:00:00+08:00", "GIT_COMMITTER_DATE=2026-10-03T09:00:00+08:00",
+	}, "改过的普通提交\n", "commit", "--amend", "--allow-empty", "-q", "-F", "-")
+
+	// No commit is an action, so `action log` renders nothing. It still writes a
+	// layer and reaches the merge threshold: the ladder must count the
+	// enumeration, not the zero rows it printed.
+	if got := cacheOutput(t, "action", "log"); strings.TrimSpace(got) != "" {
+		t.Fatalf("plain commits must render no rows, got %q", got)
+	}
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("the merge must leave one layer, got %d", n)
+	}
+	if recs := totalRecords(t, dir); recs != 2 {
+		t.Fatalf("the merge must prune the orphan with no rows rendered, got %d records", recs)
+	}
+}

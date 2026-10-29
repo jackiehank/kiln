@@ -45,3 +45,32 @@
 2. `pruneEnums` 不再有 `kind` 参数；`TestEnumStoreLoadAndPrune` 仍绿。
 3. `go test ./...` 绿。
 4. 文档：`commit-cache.md` 的"保留最近 4 份"与实现一致（总数）。
+
+## apply
+
+两处都改。
+
+### `visited` = 本次枚举的提交数
+
+`actionLogCached` 的 `maybeMerge(…, len(oids))`。注释写清：比较的是枚举，不是渲染行数——普通提交也算访问过的历史，而且仓库可能一个动作都没有。
+
+回归测试 `TestActionLogMergePrunesWithoutRenderingRows`：两条普通提交 warm 后 amend 一次，`action log` 渲染 0 行、但仍写一个层并触发合并；旧代码留下 3 条记录，新代码剪到 2 条。先对旧代码跑过（FAIL: got 3 records），再转绿。
+
+### `pruneEnums` 说真话
+
+- 去掉没用到的 `kind` 参数：`pruneEnums(dir, keep)`；
+- `enumKeep` 与 `pruneEnums` 的注释改成"总数 4 份、两种顺序共享窗口、被挤出只是多一次 git log"；
+- 行为不变（本来就按 mtime 取最新 4 个文件），`TestEnumStoreLoadAndPrune` 照旧。
+
+### 验证
+
+- `go test ./...` 绿（cli 21.7 s）。
+- 回归测试先对旧代码验证失败。
+
+## 结论
+
+- 合并门槛的口径统一：`settle` / `persistRecords` / `actionLogCached` 三处都用"本次枚举的提交数"。
+- 枚举保留策略的注释与实现一致：总数 4 份。
+- 自动 GC 仍不覆盖旧指纹层、不可达快照、tmp 文件——归 `kiln cache gc`，与本文的"五档"一致。
+
+没做的：没有为多 worktree 提高保留份数（10 万提交下每份约 2 MB，多留几份换命中率不划算）；也没有把 `cache gc` 挂到 `commit` 之后（提交路径不该承担读路径的回收）。

@@ -30,9 +30,10 @@ import (
 const (
 	enumMagic   = "KILNEN"
 	enumVersion = 1
-	// enumKeep is how many snapshots of one kind survive a write. A repository
-	// gets a new HEAD on every commit; keeping a handful covers the worktree that
-	// is being used without letting 2 MB files pile up.
+	// enumKeep is how many snapshots survive a write, both orders included. A
+	// repository gets a new HEAD on every commit; keeping a handful covers the
+	// worktree that is being used without letting 2 MB files pile up, and an
+	// evicted snapshot costs one git log to rebuild.
 	enumKeep = 4
 )
 
@@ -342,12 +343,14 @@ func storeEnum(dir string, kind enumKind, key enumKey, oids [][20]byte) {
 		_ = os.Remove(tmp)
 		return
 	}
-	pruneEnums(dir, kind, path)
+	pruneEnums(dir, path)
 }
 
-// pruneEnums keeps the newest snapshots of one kind. Deleting an old one is
+// pruneEnums keeps the newest snapshots, whatever order they cache: the two
+// kinds share one four-file window, which is enough for the worktree in use and
+// costs one git log to refill when a snapshot is evicted. Deleting an old one is
 // always safe — a reader that loses the race falls back to git.
-func pruneEnums(dir string, kind enumKind, keep string) {
+func pruneEnums(dir, keep string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
