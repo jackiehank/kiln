@@ -161,10 +161,22 @@ func (e *env) loadRepo() (*model.Repo, int) {
 	if repo, ok := e.loadCached(backend); ok {
 		return repo, 0
 	}
-	commits, err := backend.Log()
+	repo, err := e.loadUncached(backend)
 	if err != nil {
 		fmt.Fprint(e.errw, i18n.T("读取历史失败: %v\n", err))
 		return nil, 1
+	}
+	return repo, 0
+}
+
+// loadUncached is the cold path every caller shares: read the whole history,
+// build the model, and seed the cache with what was read. It returns the error
+// instead of printing it, so a caller whose failure is not an error (the
+// duplicate-start check) can stay silent.
+func (e *env) loadUncached(backend vcs.Repo) (*model.Repo, error) {
+	commits, err := backend.Log()
+	if err != nil {
+		return nil, err
 	}
 	actions, records := engine.ActionsAndRecordsFromCommits(commits, e.rel())
 	if len(commits) > 0 {
@@ -174,5 +186,5 @@ func (e *env) loadRepo() (*model.Repo, int) {
 		// snapshot so the next read does not have to ask git for the same list.
 		e.storeEnumFromCommits(commits)
 	}
-	return engine.Build(actions, e.rel()), 0
+	return engine.Build(actions, e.rel()), nil
 }

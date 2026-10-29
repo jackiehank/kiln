@@ -160,19 +160,6 @@ func (e *env) actionLog(f flags) int {
 	var scratch bytes.Buffer
 	enc := json.NewEncoder(&scratch)
 	enc.SetEscapeHTML(false)
-	var writeErr error
-	emitted := 0
-	// emit writes one row and reports whether the commit was an action at all.
-	emit := func(c vcs.Commit) bool {
-		fields, ok := trailer.Parse(c.Message, e.rel())
-		if !ok {
-			return false
-		}
-		if err := e.writeActionLogRow(c.ID, c.Date, fields, engine.Subject(c.Message), jsonl, &scratch, enc); err != nil {
-			writeErr = err
-		}
-		return true
-	}
 	// A warm cache answers both shapes: the whole stream (an enumeration plus
 	// lookups, without re-parsing 35 MB of messages) and the first screen (the
 	// rows come from the layer, when an author-date snapshot already exists).
@@ -189,16 +176,7 @@ func (e *env) actionLog(f flags) int {
 		}
 		return 0
 	}
-	err = stream.LogEach(func(c vcs.Commit) bool {
-		kept := emit(c)
-		if writeErr != nil {
-			return false
-		}
-		if kept {
-			emitted++
-		}
-		return limit == 0 || emitted < limit
-	})
+	emitted, writeErr, err := e.actionLogStream(stream, backend, jsonl, &scratch, enc, limit)
 	if writeErr != nil {
 		if isBrokenPipe(writeErr) {
 			return 0 // the consumer closed the pipe: not a kiln failure
@@ -214,6 +192,64 @@ func (e *env) actionLog(f flags) int {
 		fmt.Fprint(e.errw, i18n.T("仓库里还没有任何动作（用 kiln do <issue> ask --title <文本> 开一条）\n"))
 	}
 	return 0
+}
+
+// actionLogStream renders the action stream straight from git and turns every
+// commit into a record as it arrives. A complete walk seeds the cache — the
+// records in chunks, the author-date enumeration as a snapshot — so the next call
+// is answered without git. An early stop (--limit) writes the prefix it saw but
+// no snapshot: a partial walk has no complete enumeration to claim.
+//
+// The row bytes come from the same record-to-row code the cached path uses, so
+// the two paths cannot drift.
+func (e *env) actionLogStream(stream vcs.LogEach, backend vcs.Repo, jsonl bool, scratch *bytes.Buffer, enc *json.Encoder, limit int) (int, error, error) {
+	cb, dir, fp, siteOK := e.cacheSite(backend)
+	var sink *layerSink
+	if siteOK {
+		sink = newLayerSink(dir, fp)
+	}
+	var oids [][20]byte
+	if siteOK && limit == 0 {
+		oids = make([][20]byte, 0, 0)
+	}
+	emitted := 0
+	stopped := false
+	var writeErr error
+	err := stream.LogEach(func(c vcs.Commit) bool {
+		rec := engine.RecordFromCommit(c, e.rel())
+		if sink != nil {
+			sink.add(rec)
+			if limit == 0 {
+				oids = append(oids, rec.OID)
+			}
+		}
+		if !rec.Action {
+			return true
+		}
+		when := time.Unix(rec.Date, 0).In(time.FixedZone("", int(rec.TZ)*60))
+		if werr := e.writeActionLogRow(c.ID, when, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc); werr != nil {
+			writeErr = werr
+			return false
+		}
+		emitted++
+		if limit > 0 && emitted >= limit {
+			stopped = true
+			return false
+		}
+		return true
+	})
+	if sink != nil {
+		// Whatever was read is worth keeping; coverage is only claimed when the
+		// enumeration completed and stopped for no reason.
+		sink.flush(nil)
+		if err == nil && writeErr == nil && !stopped && limit == 0 && len(oids) > 0 {
+			if edir, key, ok := e.enumSite(); ok && e.enumKeyHeld(edir, key) {
+				storeEnum(edir, enumAuthorDate, key, oids)
+			}
+		}
+		e.maybeMergeDir(cb, dir, fp, len(oids))
+	}
+	return emitted, writeErr, err
 }
 
 // writeActionLogRow renders one action's row. Both read paths — the stream and the

@@ -72,6 +72,106 @@ func uncached(t *testing.T, args ...string) string {
 	return cacheOutput(t, args...)
 }
 
+// TestActionLogColdSeedsTheCache pins the seeding behaviour: a cold action log
+// reads every message, so it leaves the records behind and stores the author-date
+// enumeration. The next call must be answerable without git, with the same bytes.
+func TestActionLogColdSeedsTheCache(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitPlain(t, dir, "不是动作", "2026-10-01T12:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+
+	cold := cacheOutput(t, "action", "log", "--jsonl")
+	if n := layerCount(t, dir); n == 0 {
+		t.Fatal("a cold action log must seed the cache")
+	}
+	if n := len(enumFiles(t, dir)); n != 1 {
+		t.Fatalf("a complete stream must store one snapshot, got %d", n)
+	}
+
+	// With git unreachable only the cache can answer; the bytes must not move.
+	t.Setenv("PATH", t.TempDir())
+	if got := cacheOutput(t, "action", "log", "--jsonl"); got != cold {
+		t.Fatalf("cached stream differs:\n--- stream ---\n%s\n--- cache ---\n%s", cold, got)
+	}
+}
+
+// TestActionLogEarlyStopWritesNoSnapshot pins the other half: a peek that stopped
+// early may keep the prefix (those records are true), but it must not claim a
+// complete enumeration it never walked.
+func TestActionLogEarlyStopWritesNoSnapshot(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+
+	_ = cacheOutput(t, "action", "log", "--limit", "1")
+	if n := len(enumFiles(t, dir)); n != 0 {
+		t.Fatalf("an early stop must not store a snapshot, got %d", n)
+	}
+	if n := layerCount(t, dir); n == 0 {
+		t.Fatal("an early stop must keep the prefix it read")
+	}
+
+	// A second peek still streams: nothing pretends the enumeration is known.
+	_ = cacheOutput(t, "action", "log", "--limit", "1")
+	if n := len(enumFiles(t, dir)); n != 0 {
+		t.Fatalf("a peek must not create a snapshot, got %d", n)
+	}
+}
+
+// TestChunkedLayersReadIdentical pins the chunking boundary: when one read has to
+// write more than one layer, the model it produces is still the full scan's.
+func TestChunkedLayersReadIdentical(t *testing.T) {
+	old := layerChunkRecords
+	layerChunkRecords = 2
+	defer func() { layerChunkRecords = old }()
+
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitAction(t, dir, "beta", "ask", "乙单", "2026-10-01T11:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	commitAction(t, dir, "beta", "collect", "调研", "2026-10-02T10:00:00+08:00")
+	t.Chdir(dir)
+
+	want := cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n < 2 {
+		t.Fatalf("a 2-record chunk must split 4 commits into more than one layer, got %d", n)
+	}
+	if got := uncached(t, "list", "--json"); got != want {
+		t.Fatalf("chunked read differs from the full scan:\n--- full scan ---\n%s\n--- chunked ---\n%s", got, want)
+	}
+	if got := cacheOutput(t, "list", "--json"); got != want {
+		t.Fatalf("hot read differs:\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+// TestStreamedRecordsCoverTheHistory pins that the stream records every commit,
+// not only the actions: the enumeration names all of them, so a layer that skipped
+// plain commits would leave permanent gaps.
+func TestStreamedRecordsCoverTheHistory(t *testing.T) {
+	dir := cacheTestRepo(t)
+	commitAction(t, dir, "alpha", "ask", "开单", "2026-10-01T10:00:00+08:00")
+	commitPlain(t, dir, "普通提交", "2026-10-01T12:00:00+08:00")
+	commitAction(t, dir, "alpha", "apply", "落地", "2026-10-02T09:00:00+08:00")
+	t.Chdir(dir)
+
+	_ = cacheOutput(t, "action", "log", "--jsonl")
+	if got, want := totalRecords(t, dir), 3; got != want {
+		t.Fatalf("the stream must record every commit, got %d want %d", got, want)
+	}
+
+	before := layerCount(t, dir)
+	want := cacheOutput(t, "list", "--json")
+	if after := layerCount(t, dir); after != before {
+		t.Fatalf("the model read must reuse the seeded records: %d → %d layers", before, after)
+	}
+	if got := uncached(t, "list", "--json"); got != want {
+		t.Fatalf("seeded records changed the model:\n--- full scan ---\n%s\n--- seeded ---\n%s", got, want)
+	}
+}
+
 func recordsPath(dir string) string { return filepath.Join(dir, ".git", "kiln", "records") }
 
 func layerCount(t *testing.T, dir string) int {
@@ -214,25 +314,28 @@ func TestActionLogCachedMatchesTheStream(t *testing.T) {
 	commitAction(t, dir, "beta", "collect", "调研", "2026-10-02T10:00:00+08:00")
 	t.Chdir(dir)
 
-	// A cold action log streams and leaves no layer behind; it must still print
-	// exactly what the stream prints.
+	// A cold action log streams and seeds the cache: it must print exactly what
+	// the stream prints, and leave the records behind for the next read.
 	coldText := cacheOutput(t, "action", "log")
 	coldJSON := cacheOutput(t, "action", "log", "--jsonl")
-	if n := layerCount(t, dir); n != 0 {
-		t.Fatalf("a cold action log must not write a layer, got %d", n)
+	if n := layerCount(t, dir); n == 0 {
+		t.Fatal("a cold action log must seed the cache")
 	}
 
-	// A full read of another command populates the layer; the cached action log
-	// must produce the same bytes.
-	_ = cacheOutput(t, "list", "--json")
-	if n := layerCount(t, dir); n != 1 {
-		t.Fatalf("warm-up must write one layer, got %d", n)
-	}
+	// The same cache now answers both shapes from the seeded records; the bytes
+	// must not have moved.
 	if got := cacheOutput(t, "action", "log"); got != coldText {
 		t.Fatalf("cached action log text differs:\n--- stream ---\n%s\n--- cache ---\n%s", coldText, got)
 	}
 	if got := cacheOutput(t, "action", "log", "--jsonl"); got != coldJSON {
 		t.Fatalf("cached action log jsonl differs:\n--- stream ---\n%s\n--- cache ---\n%s", coldJSON, got)
+	}
+
+	// A full model read reuses the seeded records: it may add the default
+	// enumeration snapshot, but it must not write another layer.
+	_ = cacheOutput(t, "list", "--json")
+	if n := layerCount(t, dir); n != 1 {
+		t.Fatalf("the seeded records must be reused, got %d layers", n)
 	}
 
 	// --limit takes the cached author-date enumeration, since the full walk it

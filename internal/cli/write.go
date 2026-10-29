@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/jackiehank/kiln/internal/config"
-	"github.com/jackiehank/kiln/internal/engine"
 	"github.com/jackiehank/kiln/internal/i18n"
 	"github.com/jackiehank/kiln/internal/model"
 	"github.com/jackiehank/kiln/internal/trailer"
@@ -357,8 +356,8 @@ func (e *env) hasStart(p *model.Issue) bool {
 // history means "no opinion", never an error. It answers from the record layer
 // when the cache can serve it: the duplicate-start check used to read the whole
 // history (every message, via `git log`) on every attempt, which is exactly the
-// work the cache exists to skip. The cached answer is the same model a full scan
-// builds, and the scan is still the fallback whenever the cache cannot serve.
+// work the cache exists to skip. The cold fallback goes through the shared
+// loadUncached, so even the first answer seeds the cache the next check uses.
 func (e *env) findIssue(issue string) (*model.Issue, bool) {
 	backend, err := e.backend()
 	if err != nil {
@@ -368,10 +367,10 @@ func (e *env) findIssue(issue string) (*model.Issue, bool) {
 		p, found := repo.Issues[issue]
 		return p, found
 	}
-	commits, err := backend.Log()
+	repo, err := e.loadUncached(backend)
 	if err != nil {
 		return nil, false
 	}
-	p, ok := engine.Build(engine.ActionsFromCommits(commits, e.rel()), e.rel()).Issues[issue]
+	p, ok := repo.Issues[issue]
 	return p, ok
 }

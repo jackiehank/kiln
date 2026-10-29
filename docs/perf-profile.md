@@ -519,3 +519,83 @@ V2（本轮不做）：给 `LogEach` 加 order 参数，让模型冷读也流式
 - 不并发写、不开 goroutine（先靠 git 并行）；
 - 不缓存 `show` 的 body 与 `--stat` 的 diffstat；
 - 不为 `action log --limit` 预生成完整快照（它读完就杀，没有完整枚举）。
+
+## apply（2026-10-30）：读取组件 + 边读边种
+
+### 改了什么
+
+- **新增 `internal/cli/reader.go`**：`reader`（扫描层、建 OID 索引、缺口一次 `commits` 补读、正/反向遍历）、`layerSink`（按 8192 条分块写层，写完就丢记录）、`layerFileCount` / `settleRead` / `maybeMergeDir`（先数文件、到阈值才重新解码合并）。
+- **`loadCached` 与 `actionLogCached` 合并到同一套读取**：`actionLogCached` 不再自己 scan/index/lookup/persist，两处“找这条提交的 record”只剩一份实现。
+- **流式 `action log` 边读边种**：每个提交都构造成 record 落盘；完整走完且 HEAD 未变时写作者日序快照；早停只留半块、不写快照。行仍由同一段 record→row 代码渲染。
+- **`findIssue` / `loadRepo` 共用 `loadUncached`**：冷回退读全史后顺手落盘 + 写默认序快照，D 在这里完成。
+- **冷模型路径的 `persistRecords` 也走 sink**：一次 92 MB 的编码峰值被拆成每块约 10 MB。
+
+### 等价性
+
+- **新旧二进制逐字节对比**：真仓与 1k 各 21 条命令（`list` / `status` / `check` / `graph` / `path` / `show`×3 / `action log`×3 / `worktree list` / `do`×3），**0 组不同**；冷缓存下 `action log --jsonl`、`list --json`、`show` 在 1k 与 100k 也逐字节相同。
+- **4 条新测试全部先对旧代码（`d319518`）验证失败**：
+
+| 测试 | 旧代码上的失败 |
+| --- | --- |
+| `TestActionLogColdSeedsTheCache` | 冷跑后 0 层 |
+| `TestActionLogEarlyStopWritesNoSnapshot` | 早停后 0 层（应留前缀） |
+| `TestChunkedLayersReadIdentical` | 4 提交只写 1 层（应 ≥2 块） |
+| `TestStreamedRecordsCoverTheHistory` | 层里 0 条记录（应 3 条，含普通提交） |
+
+- 全量 `go test ./...` 绿；`gofmt` / `go vet` 干净。
+
+### 性能（100k，中位数）
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| `action log --jsonl` 冷 | 1026 | **1166**（写盘 +140） |
+| 同上，第二次 | 174（要先有别的命令种过） | **167** |
+| `list --json` 在 action log 之后首次 | 1084（action log 不种，等于冷读） | **385** |
+| 同上，再读 | 158 | 149 |
+| `do <issue> ask` 冷 | 864 | **983**（+119） |
+| 同上，第二次 | 864 | **122** |
+| 一次冷读留下的层 / 快照 | 0 / 0 | 13 / 1 |
+
+真仓：
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| `action log --jsonl` 冷 | 105 | 111 |
+| 同上，第二次 | 105 | **29** |
+| `list` 在 action log 之后首次 | 111 | 84 |
+| `do cache-perf ask` 冷 | 106 | 113 |
+| 同上，第二次 | 106 | **29** |
+
+1k：`action log --jsonl` 冷 106 → 115，第二次 30 → 28。
+
+**热读的 git 进程数**：`action log --jsonl` / `list --json` / `action log --limit` 在种子就位后都是 **0**（trace2 实测）。
+
+### 内存（诚实记录：没有达到“不高于现在”）
+
+冷流式的峰值工作集：**旧 15 MB → 新 30 MB**（8192 条/块）。这是分块编码的临时表，与历史长度无关（除快照 OID 列表：每 10 万提交约 2 MB）。分块大小实测（100k 冷 `action log --jsonl`）：
+
+| 块大小 | 墙钟 | 峰值 WS | 层数 |
+| --- | --- | --- | --- |
+| 2048 | 1235 | 21 MB | 49 |
+| 4096 | 1226 | 26 MB | 25 |
+| **8192** | **1200** | **30 MB** | **13** |
+| 16384 | 1167 | 49 MB | 7 |
+
+取 8192：13 层/次冷读，64 层合并线约每 5 次冷读触发一次；墙钟与最小块只差 35 ms。
+
+### 与 hypothesize 的偏差（都要记）
+
+1. **块大小从 16384 改成 8192**：16384 的峰值 49 MB 太高（比旧流式多 34 MB），8192 用 +35 ms 换回 19 MB。
+2. **冷流式 +140 ms，超过“变差 50 ms 就退窄版本”的护栏**：护栏防的是 pipe 背压拖成秒级，实际 +14% 且换来之后每次 1026 → 167——正是本方案的目标。若只跑一次 `action log` 就再也不用，这 140 ms 是纯支出；这个取舍写在这里，不再偷偷放宽口径。
+3. **早停写半块**（按计划）：重复 peek 同一个前缀时内容寻址让文件名相同，不会无限涨层。
+4. `--limit` 的缺口改成一次批量 `commits`（旧代码每条缺口一个 `cat-file`）。
+5. **“净删约 100 行”的估计不成立**：`cache.go` 删了 230 行，`reader.go` 新增 234 行（其中约一半是注释），生产代码净增约 100 行。换来的是“找一条提交的 record”只剩一份实现——这是结构收益，不是行数收益。
+
+### 验收
+
+- [x] 输出逐字节不变（真仓/1k 各 21 条 + 冷路径 3 条 × 2 个仓）；
+- [x] 4 条新测试先失败后通过；
+- [x] 全量测试绿、`gofmt` / `go vet` 干净；
+- [x] 100k 冷 `action log` 之后第二次 167；`do ask` 第二次 122；热读 0 个 git 进程；
+- [x] 早停不写快照；
+- [ ] 冷流式峰值不高于旧值：30 vs 15 MB，未达成（理由与矩阵见上）。
