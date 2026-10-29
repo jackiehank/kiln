@@ -407,7 +407,52 @@ TLV:   issue action title subject domain scope target refs tags
 
 不存它们就得存原文（355 B/条）——那是缓存想省掉的东西。两项都依赖词表，所以层头的**词表指纹**仍然覆盖得住。
 
-原型（不含这两个字段）实测 77 B/提交；加上它们约 +40 B/条，**100k ≈ 11 MB**。体积仍比原文（100k × 355 B ≈ 35 MB）小一个量级。
+（test 里的 77 B/提交是**下界**：那个原型只写了 `refs / target / scope / relations / unrelate`，漏了 `issue / action / title / domain / tags / subject / unknownKeys`。正式格式见下。）
+
+### 1.1 文件与磁盘布局
+
+```text
+.git/kiln/records/              # $(git rev-parse --path-format=absolute --git-common-dir)/kiln/records
+  layer-<40 hex>.rec            # 不可变；名字 = 内容（除末尾 20 B）的 SHA-1
+  layer-<40 hex>.rec.tmp-<pid>  # 写临时名，完成后 rename；读侧只认 .rec
+```
+
+**一个层一个文件**；没有 chain、没有索引文件、没有锁文件（§8）。常态 ≤16 层。
+
+层布局（小端）：
+
+```text
+偏移  长度      字段
+0     8        magic "KILNREC1"
+8     2        layout = 1
+10    20       词表指纹（关系名 / 槽位 / 强度 / 别名）
+30    2        tipCount
+32    20×N     覆盖的 HEAD（去重、升序）
+..    4        strCount
+..    ...      字符串表：strCount × (u16 长度 + UTF-8)，字典序
+..    4        recCount
+..    ...      记录区：recCount 条，按 OID 升序
+末尾  20       SHA-1（前面所有字节）——文件名就是它的 hex
+```
+
+单条记录：
+
+```text
+OID[20] | date i64 | tz i16 | flags u8 | 7 × u32 字符串表索引
+flags: bit0 isAction; bit1 "subject == title"（相等就不再存 subject）
+索引：issue action title subject domain scope target
+数组：refs / tags / unrelate / unknownKeys  （u16 个数 + u32 索引）
+      relations                            （u16 个数 + (u32 name, u32 target)）
+```
+
+**为什么带字符串表**：100k 提交里 issue 名只有几百个、action 只有 6 个、target/refs 都是 issue 名、标题重复率也高。内联字符串每条约 240 B（原文 355 B 的七折），建表后约 **130 B/条 → 100k ≈ 13 MB**。表按字典序、记录按 OID 排序，序列化因此是确定的：同样输入产生同样字节、同一个文件名——这是并发幂等（§8）和内容寻址的前提。
+
+其它约定：
+
+- 权限 0644 / 目录 0755；**不 fsync**——断电最多留一个哈希不符的层，读侧忽略、下次重写。
+- 布局或字段一变就换 magic（`KILNREC2`），旧层当没有，不做迁移（§collect 第 4 条）。
+- 合并 = 读所有层 → 按 OID 去重 → 重新建表 → 写一个新层 → 尽力删旧层；因为序列化确定，两个进程同时合并会得到同一个文件名。
+- 100k 的估计值（13 MB / ~130 B 一条）要在 apply 里实测，误差主要来自标题长度。
 
 ### 2. 读路径（两条）
 
@@ -480,15 +525,25 @@ covered = 各层头里记录的 tip 集合（只信校验通过的层）
 | 30,000 | 216 ms | ~100 ms | 1 |
 | 100,000 | 710 ms | ~100 ms | 1 |
 
-结论：**≥10k 提交时，每次提交后 sync 一次也能回本**；3k–10k 建议批量 sync。
+结论：**≥10k 提交时，每次提交后 sync 一次也能回本**；3k–10k 建议批量 sync。表里的命中读按原型 7.7 MB 层测（解码 33.6 ms）；正式格式约 13 MB，解码预计 +15–25 ms，不改变结论。
 
-### 6. 默认值与开关
+### 6. 配置项与开关
 
-- **读**：目录里有合法层就用；顺手把补缺的记录写回去（见 §2），写失败静默。目录为空就全扫并建层。
-- **`sync`**：不再是必经步骤，保留给"预热 / 批量导入后 / 合并或 GC 前"；语义仍是幂等补缺（§3）。
-- **关闭**：`--no-cache` / `KILN_NO_CACHE=1` 同时关读和写。
-- **只读仓**：读照常（写静默跳过）；`sync` 报错 exit 1。
-- 位置仍是 `$(git rev-parse --git-common-dir)/kiln/records/`。
+缓存**默认关闭**：`.kilnconfig.jsonc` 里没有 `cache` 这一项，就等于不缓存——不建目录、不写盘、不 spawn 额外进程，行为与今天逐字节一致。
+
+```jsonc
+{
+  // 提交记录缓存：默认关闭；没有这一项 = 不缓存。
+  // 开启后读命令会顺手把记录落到 .git/kiln/records/（只影响速度，不影响输出）。
+  "cache": { "enabled": true }
+}
+```
+
+- **优先级**：`--no-cache` / `KILN_NO_CACHE=1` 强制关，不管配置怎么写；未配置 = 关。
+- **开启后**：读顺手写（§2）、`sync` 可预热（§3）、层数 ≥16 自动合并（§2）。
+- **未开启时 `kiln cache sync`**：exit 1，并提示去配置里打开——不静默建目录（"没有这一项就默认无缓存"）。
+- **位置**：`$(git rev-parse --path-format=absolute --git-common-dir)/kiln/records/`；老 git（<2.31）没有 `--path-format` 时回落相对路径拼接。
+- **兼容性**：配置是严格解析（`dec.DisallowUnknownFields()`），所以带 `cache` 的文件在老 kiln 上会报 `unknown field "cache"`。这与 `config-compat` 已定的"0.x 不承诺配置兼容、迁移写进 release notes"一致；播种的默认配置会带一段注释掉的 `cache` 示例。
 
 ### 7. 与"总流"的关系
 
@@ -544,7 +599,9 @@ covered = 各层头里记录的 tip 集合（只信校验通过的层）
 11. **读顺手写**：空目录下第一次 `graph` 建层；第二次 `graph` 命中且不产生新层；`action log --limit 5` 产生的层不声明覆盖（`covered` 为空），但它的记录能被后续读命中。
 12. **写失败静默**：缓存目录只读 / `GIT_DIR` 只读时，读命令的 stdout、stderr、退出码与 `--no-cache` 完全一致。
 13. **层数上限**：连续 20 次"提交 → 读"后，层数 ≤ 16（读路径的本地合并生效），且总记录数不变。
-14. **jj**：行为与今天完全一致（不支持缓存）。
+14. **默认关**：配置里没有 `cache` 项时，任何读命令都不创建 `.git/kiln/records/`、不写盘；`kiln cache sync` exit 1 并提示去配置里打开。
+15. **配置开关**：`cache.enabled=true` 后行为与验收 1–13 一致；`--no-cache` / `KILN_NO_CACHE=1` 在开启后仍能完全关掉（输出字节不变）。
+16. **jj**：行为与今天完全一致（不支持缓存）。
 
 ### 10. 与上一版的差异
 
@@ -581,4 +638,5 @@ covered = 各层头里记录的 tip 集合（只信校验通过的层）
 - 2026-10-29（同日，hypothesize 修订）：按两条读路径重推设计。记录层与序无关（一份层、两条枚举共用），写改成增量（rev-list + cat-file，100k 加 1 条约 100 ms；全量仍用一次 `git log`，因为 cat-file 全量 1,227 ms 比 log 973 ms 慢）；记录补 `subject` / `unknownKeys`（否则要存原文），`action log --limit` 不查缓存。门槛从 100k 降到 10k（增量 sync 下 2 次读回本）。验收改为 8 条，含增量 sync ≤ 200 ms 与 `--limit` ≤ 60 ms。
 - 2026-10-29（同日，hypothesize 续）：补并发与持久化——缓存放 `--git-common-dir`，所有 worktree 共用一份（键是 OID；实测 linked worktree 上 common-dir 指向主 `.git`）；去掉 `chain`，**目录即索引**：内容寻址层名 + 临时名 rename + 容错读，于是无锁、无 stale lock、无半成品可见；损坏一律整层忽略（层名 = 内容 SHA-1，7.7 MB 校验 4.6 ms，100k 层约 6 ms），丢失即全扫、下次 `sync` 重建；GC 可达性按 `rev-list --all` 算，避免删掉别的 worktree 还在用的记录。验收扩到 10 条（新增并发、worktree、自愈）。
 - 2026-10-29（同日，hypothesize 续）：把 `sync` 的语义定成**幂等补缺**——HEAD 已被校验通过的层覆盖就 exit 0（不开 git 进程），并发 sync 因此是空转而不是冲突；两个进程同时落在 race 窗口时最多重复一次增量（~100 ms），写出的层内容相同、名字相同，等于空写。唯一"两种真相并存"的情形（两个进程词表不同）由层头指纹隔离：层名不同、各读各的，另一份等 `gc`。验收加第 10 条（空转不产生新层、不 spawn git）。
+- 2026-10-29（同日，hypothesize 续）：定下磁盘格式与开关。缓存 = `.git/kiln/records/` 下若干 `layer-<sha1>.rec`（一个层一个文件，无 chain/无索引/无锁），层 = 头（magic/版本/词表指纹/covered tips）+ 字典序字符串表 + 按 OID 排序的记录 + 20 B SHA-1 trailer；正式格式约 130 B/条（100k ≈ 13 MB），test 里的 77 B 是漏了字段的下界。配置项 `"cache": {"enabled": true}`，**没有这一项就默认不缓存**（不建目录、不写盘、行为与今天一致）；`--no-cache` / `KILN_NO_CACHE=1` 强制关；未开启时 `cache sync` exit 1 并提示。
 - 2026-10-29（同日，hypothesize 续）：**读命令也写缓存**——读路径把补缺时本来就要算的记录顺手落盘（100k 全冷约 50 ms，之后为 0），枚举完整才声明 `covered=HEAD`，`--limit` 的部分枚举只贡献记录；写失败（只读仓/磁盘满）静默跳过，不动输出与退出码。冷缓存（无任何合法层）直接走今天的全扫再落盘，避免"枚举 + cat-file"比一次 `log` 慢 25%。读路径在层数 ≥16 时做一次纯本地合并（100k ≈ 30 ms）。`sync` 退化为可选的预热/合并入口；验收扩到 14 条（新增读顺手写、写失败静默、层数上限）。
