@@ -108,7 +108,7 @@ jj commit -m "$(kiln do session-expiry test --title '压测复现')"
 | `kiln check [--verbose] [--json]` | 语义完整性校验 |
 | `kiln list [--domain=] [--tag=] [--action=] [--status=open\|done] [--search=] [--json]` | 按条件过滤 issue；`--action` 必须命中动作词表；`--tag` 只接受单个标签（不切逗号）；`--status=open` 只留未收尾的（末条动作不是终点）；`--search` 空白分词、词间 AND、字面量、大小写不敏感（搜 id / 标题 / 动作 subject），结果按 rank 0–4 排序（id 首词前缀 / id 全词 / 标题全词 / 单条动作全词 / 词分散），同档按末条动作日期降序、再按 id；`--json` 的搜索行带 `rank`，`hit` 带 `total`/`date`；空结果会在 stderr 说明是哪些条件没匹配 |
 | `kiln action list [--json]` | 列出当前生效的 action 类型（词表）及起点/终点；`--json` 输出 `actions` / `source` / `config`，其中 `config` 是当前 OS 原生绝对路径；不读历史、不需要仓库、不创建配置文件 |
-| `kiln action log [--jsonl] [--limit N]` | 全局动作流：只留带 `issue:` + `action:` 的提交，一条一行（本地日期 / issue / action / 7 位 hash / 标题）；`--jsonl` 逐行一个 JSON 对象（NDJSON）；`--limit N` 只看最近 N 条，取够即停；空仓 exit 0，消费者提前关管道静默 exit 0。顺序与首行按后端：**git** 按 author-date 倒序、首行随第一批提交即出；**jj** 用 jj 自己的拓扑序（线性历史下即 newest-first）、等 jj 扫完才一次到齐，所以 jj 上 `--limit` 省的是读取与输出，不是扫描 |
+| `kiln action log [--jsonl] [--limit N]` | 全局动作流：只留带 `issue:` + `action:` 的提交，一条一行（本地日期 / issue / action / 7 位 hash / 标题）；`--jsonl` 逐行一个 JSON 对象（NDJSON），带**全部 trailer**（`refs` / `target` / `scope` / `relations` / `unrelate`）——关系是**这条动作的声明**，不是折叠后的边（要当前图用 `graph --json`），不含改动文件（用 `show --stat` / `path --all --stat`）；`--limit N` 只看最近 N 条，取够即停；空仓 exit 0，消费者提前关管道静默 exit 0。顺序与首行按后端：**git** 按 author-date 倒序、首行随第一批提交即出；**jj** 用 jj 自己的拓扑序（线性历史下即 newest-first）、等 jj 扫完才一次到齐，所以 jj 上 `--limit` 省的是读取与输出，不是扫描 |
 | `kiln graph [--format=ascii\|mermaid\|json] [--mermaid] [--json] [--issue <id>] [--depth N]` | 关系图（`--mermaid` 出流程图文本；`--json` 出给 agent 读的一份文档，`--issue`/`--depth` 收窄成无向邻域，默认 `ascii`） |
 | `kiln worktree new <issue>` | 建一个专用工作区（详见「工作区模式」） |
 | `kiln worktree list` | 列出全部工作区及各自状态 |
@@ -296,6 +296,7 @@ kiln path --all --json
 - **缺省即省略**（省略 = 没有），**布尔恒显**（`false` 是判定结果，不是"没有"）。
 - **stdout 只放一个 JSON 文档**：提示、legend、报错一律在 stderr，退出码与文本视图一致。
 - **`path --all --json` 一次进程读全仓**：`{"issues":[<单条 path 文档>…]}`，每项与 `kiln path <id> --json` 逐字节同形。显式给多条 issue 时保持给定顺序，`--all` 按 id 字典序；单条取不到不拖垮整份——该条进 `errors`（`unknown-issue` / `stat-failed`），其余照出，退出码 1。批量只服务 `--json`（文本视图一次只展开一条）。
+- **例外：`action log --jsonl` 是 NDJSON**，不是"一份文档"——一行一个动作、一个独立对象，没有信封也没有终止记录；字段为 `issue` / `action` / `commit` / `date` / `title` / `domain` / `tags` / `refs` / `target` / `scope` / `relations` / `unrelate`，为空省键。`relations` 是**这条动作的声明**（`has-part: X` 原样保留，不翻成边），要当前关系图请用 `graph --json` / `path --json`。见 [docs/action-log.md](docs/action-log.md)。
 
 ## 与 agent 协作
 
