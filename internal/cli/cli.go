@@ -3107,7 +3107,11 @@ func (e *env) loadRepo() (*model.Repo, int) {
 	}
 	actions, records := engine.ActionsAndRecordsFromCommits(commits, e.rel())
 	if len(commits) > 0 {
-		e.persistRecords(backend, records, commits[0].ID)
+		tip, _ := decodeOID(commits[0].ID)
+		e.persistRecords(backend, records, tip)
+		// The scan already holds every commit in git's order: seed the enumeration
+		// snapshot so the next read does not have to ask git for the same list.
+		e.storeEnumFromCommits(commits)
 	}
 	return engine.Build(actions, e.rel()), 0
 }

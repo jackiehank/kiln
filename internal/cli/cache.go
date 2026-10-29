@@ -142,8 +142,11 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 	if len(layers) == 0 {
 		return nil, false // cold: full scan + persist in the caller
 	}
-	oids, err := cb.LogOIDs()
-	if err != nil || len(oids) == 0 {
+	// The enumeration is the one thing the record layer cannot answer: it comes
+	// from a snapshot of git's own output, so a hit costs a file read and zero
+	// processes. A miss runs git once and stores what it printed.
+	oids, ok := e.enumerateDefault(cb)
+	if !ok || len(oids) == 0 {
 		return nil, false
 	}
 	// The record count is the map's size hint: without one, 100k [20]byte keys
@@ -154,35 +157,41 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 			index[r.OID] = r
 		}
 	}
-	var missing []string
-	for _, id := range oids {
-		oid, ok := decodeOID(id)
-		if !ok {
-			return nil, false
-		}
+	var missing [][20]byte
+	for _, oid := range oids {
 		if _, hit := index[oid]; !hit {
-			missing = append(missing, id)
+			missing = append(missing, oid)
 		}
 	}
-	var fetched map[string]vcs.RawCommit
+	var fetched map[[20]byte]vcs.RawCommit
 	if len(missing) > 0 {
-		if fetched, err = cb.Commits(missing); err != nil {
+		ids := make([]string, len(missing))
+		for i, oid := range missing {
+			ids[i] = hex.EncodeToString(oid[:])
+		}
+		byID, err := cb.Commits(ids)
+		if err != nil {
 			return nil, false
+		}
+		fetched = make(map[[20]byte]vcs.RawCommit, len(byID))
+		for id, raw := range byID {
+			if oid, ok := decodeOID(id); ok {
+				fetched[oid] = raw
+			}
 		}
 	}
 	records := make([]cache.Record, 0, len(oids))
 	var fresh []cache.Record
-	for _, id := range oids {
-		oid, _ := decodeOID(id)
+	for _, oid := range oids {
 		if r, hit := index[oid]; hit {
 			records = append(records, r)
 			continue
 		}
-		raw, ok := fetched[id]
+		raw, ok := fetched[oid]
 		if !ok {
 			return nil, false
 		}
-		rec := engine.RecordFromCommit(vcs.Commit{ID: id, Date: raw.Date, Message: raw.Message}, e.rel())
+		rec := engine.RecordFromCommit(vcs.Commit{ID: hex.EncodeToString(oid[:]), Date: raw.Date, Message: raw.Message}, e.rel())
 		records = append(records, rec)
 		fresh = append(fresh, rec)
 	}
@@ -208,7 +217,7 @@ func (e *env) loadCached(backend vcs.Repo) (*model.Repo, bool) {
 
 // persistRecords writes the records of a full scan. It is the cold path: the
 // command already parsed every message, so the layer costs an encode and a write.
-func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip string) {
+func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip [20]byte) {
 	cb, dir, fp, ok := e.cacheSite(backend)
 	if !ok || len(records) == 0 {
 		return
@@ -228,14 +237,11 @@ func (e *env) persistRecords(backend vcs.Repo, records []cache.Record, tip strin
 // can count it without re-reading the directory. Every error is swallowed: a
 // cache that cannot be written must not change what the command prints or what
 // it exits with.
-func (e *env) persist(dir string, fp [20]byte, records []cache.Record, tip string) *cache.Layer {
+func (e *env) persist(dir string, fp [20]byte, records []cache.Record, tip [20]byte) *cache.Layer {
 	if len(records) == 0 {
 		return nil
 	}
-	var tips [][20]byte
-	if oid, ok := decodeOID(tip); ok {
-		tips = append(tips, oid)
-	}
+	tips := [][20]byte{tip}
 	name, err := cache.Write(dir, records, tips, fp)
 	if err != nil || name == "" {
 		return nil
@@ -345,46 +351,34 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 		}
 	}
 	emitted := 0
-	first := ""
 	var fresh []cache.Record
-	var writeErr error
-	err = cb.EachOIDAuthorDate(func(id string) bool {
-		if first == "" {
-			first = id
-		}
-		oid, ok := decodeOID(id)
-		if !ok {
-			return false
-		}
+	oids, ok := e.enumerateAuthorDate(cb)
+	if !ok || len(oids) == 0 {
+		return 0, false, nil
+	}
+	for _, oid := range oids {
 		rec, hit := index[oid]
 		if !hit {
+			id := hex.EncodeToString(oid[:])
 			raw, ferr := cb.Commits([]string{id})
 			if ferr != nil || raw[id].Date.IsZero() {
-				return false
+				return 0, false, nil
 			}
 			rec = engine.RecordFromCommit(vcs.Commit{ID: id, Date: raw[id].Date, Message: raw[id].Message}, e.rel())
 			fresh = append(fresh, rec)
 		}
 		if !rec.Action {
-			return true
+			continue
 		}
 		when := time.Unix(rec.Date, 0).In(time.FixedZone("", int(rec.TZ)*60))
 		if werr := e.writeActionLogRow(hex.EncodeToString(rec.OID[:]), when, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc); werr != nil {
-			writeErr = werr
-			return false
+			return emitted, true, werr
 		}
 		emitted++
-		return true
-	})
-	if writeErr != nil {
-		return emitted, true, writeErr
-	}
-	if err != nil {
-		return 0, false, nil
 	}
 	// The first enumerated commit is the newest tip of HEAD's history; claiming it
 	// covers a subset of what HEAD covers, which is all the records prove.
-	if l := e.persist(dir, fp, fresh, first); l != nil {
+	if l := e.persist(dir, fp, fresh, oids[0]); l != nil {
 		layers = append(layers, *l)
 	}
 	e.maybeMerge(cb, layers, dir, fp, emitted)
@@ -444,6 +438,9 @@ func (e *env) cacheGC(backend vcs.Repo) int {
 		fmt.Fprint(e.errw, i18n.T("读取可达集失败: %v\n", err))
 		return 1
 	}
+	// Snapshots are keyed by HEAD, so one per commit piles up; the write path keeps
+	// the newest few, and a forced gc drops the ones no ref can reach any more.
+	gcEnums(dir, reachable)
 	records, _ := cache.Merge(keep)
 	kept := make([]cache.Record, 0, len(records))
 	for _, r := range records {

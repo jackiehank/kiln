@@ -204,15 +204,15 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 
 ## 缓存（后台行为，默认开启）
 
-每条读命令都要遍历全史。仓库大到几千提交以后，这段扫描就是主要成本；kiln 把解析结果落到 `.git/kiln/records/`（每克隆一份、所有 worktree 共享），下次直接读层——**输出逐字节不变**，没有配置项。
+每条读命令都要两样东西：一份"提交列表"，和每条提交解析后的字段。两样都落盘——列表按 HEAD 存成**枚举快照**（`.git/kiln/enums/`，约 20 B/提交），字段存成**记录层**（`.git/kiln/records/`，每克隆一份、所有 worktree 共享）。**热读不启动 git**，输出逐字节不变：快照就是 git 自己的输出，层里存的就是解析后的同一份字段。
 
-- 第一次读顺手把记录写进去（一次性多花几十毫秒），之后的读命中；层数到 64 自动合并，合并时发现不可达记录会顺手剪掉。
+- 第一次读顺手写进去（一次性多花几十毫秒），之后命中。HEAD 前进就是一份新快照，旧的自动收敛（写时保留最近 4 份，`kiln cache gc` 清掉不可达的）；层数到 64 自动合并，合并时顺手剪掉不可达记录。
 - 单个命令可以 `--no-cache`（或 `KILN_NO_CACHE=1`）绕过，输出不变。
-- `kiln cache gc`：按可达集强制清理（旧记录、坏层、旧版本）。日常不需要——读路径会自己写、自己合并。
-- 只读仓 / CI 挂载：写失败静默跳过，读照常。
-- 实测（100k 提交）：`graph --json` 1,258 → 548 ms（−56%）、`list` 1,131 → 439 ms（−61%）、`action log --jsonl` 1,375 → 867 ms（−37%）；1k 提交也已开始省（−24%）。首次读一次性多花约 100 ms；磁盘约 73 B/提交（合成仓语料标题重复，真实仓约 130 B）。
+- 只读仓 / CI 挂载：写失败静默跳过，读照常（退化成每次问 git）。
+- 仓库里若出现 `refs/replace`、`info/grafts`、`shallow`、reftable，或设了 `GIT_DIR` 一类变量，kiln 不猜——直接按老办法每次问 git。
+- 实测（本仓 408 提交）：读命令 130 → 42 ms（−68%）；100k 提交：`graph --json` 1,185 → 246 ms（−79%）、`list` 1,162 → 219（−81%）、`action log --jsonl` 1,381 → 405（−71%）、`path --all --json` 1,308 → 360（−73%）。首次读一次性多花约 100 ms；磁盘约 20 B/提交（快照）+ 约 130 B/提交（层，真实仓）。
 
-设计细节见 [docs/commit-cache.md](docs/commit-cache.md)。
+设计细节见 [docs/commit-cache.md](docs/commit-cache.md)；"热读不起 git"的取舍与实验数据见 [docs/refactor.md](docs/refactor.md)。
 
 ## 工作区模式（隔离）
 

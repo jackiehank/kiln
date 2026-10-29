@@ -428,3 +428,56 @@ P1 是唯一"改形态"的改动，也是唯一能让真仓从 96 ms 掉到 50 m
 ### 4. 下一步
 
 P1（枚举快照：热读不起 git）仍是主菜——P0 只是把它前面的噪声清掉。真仓的 −1~−3% 说明：在"热读还起 git"的前提下，代码热修已经到头了。
+
+## 落地（P1，2026-10-29）：枚举快照——热读不再启动 git
+
+### 1. 形状
+
+- 新文件 `internal/cli/enum.go`；快照落在 `<common>/kiln/enums/enum-<hash>.oid`。
+- **键 = (格式版本, 枚举种类, HEAD, 失效因子)**，文件名是键的 SHA-1 ⇒ **没有失效逻辑**：新 HEAD 就是一份新文件，旧文件永远不会再被查到，由"写时保留最近 4 份"和 `kiln cache gc` 收敛。这与记录层的"内容寻址、只增不改、没有索引"是同一种思路。
+- **内容 = 头部 + N×20 B OID + CRC32C**（Castagnoli，2 MB 上约 1 ms）。读时逐项校验 magic / 版本 / 种类 / HEAD / 失效因子 / 长度 / 校验和；任何一项不符就当没有，下次重建。
+- **HEAD 从文件系统解，不跑 git**：`.git` 目录或 worktree 的 `.git` 文件 → `gitdir` → `HEAD`（`ref:` → 先松散 ref（worktree 目录再共享目录）→ `packed-refs`；detached 直接读 40 位 hex）。`shallow` 的内容进失效因子；一旦见到 `refs/replace/*`、`info/grafts`、`reftable`，或 `GIT_DIR` / `GIT_WORK_TREE` / `GIT_COMMON_DIR` / `GIT_REPLACE_REF_BASE` / `GIT_NO_REPLACE_OBJECTS` / `GIT_GRAFT_FILE` 任一在场，**整条退避**，按老办法每次问 git。
+- 两条枚举各一份快照：默认序（全部读命令）与 author-date 序（`action log`）。
+- **冷读顺手种下快照**：全扫已经拿到每个提交的 id，且顺序就是 git 的顺序；只有 `commits[0].ID == HEAD` 时才落盘，避免扫描期间有新提交把旧清单挂到新 HEAD 上。
+- 写入前把 HEAD 再解一次，两次一致才落盘（枚举前后各一次）。
+- `--no-cache` 仍然全线绕过；只读仓 / 写失败静默跳过；`kiln cache gc` 顺带按可达集清掉 HEAD 不可达的快照。
+
+### 2. 数字（同进程；"P0" 是上一动作的稳态值）
+
+| 规模 | 命令 | P0 | P1 | Δ |
+| --- | --- | --- | --- | --- |
+| 真仓 | `status` / `list` / `check` / `graph --json` | 49.9 / 51.2 / 51.5 / 51.5 ms | 1.5 / 1.5 / 1.5 / 1.5 | **−97%** |
+| 真仓 | `path --all --json` / `action log --jsonl` | 51.4 / 67.4 | 2.6 / 2.0 | −95% / −97% |
+| 10k | `graph` / `list` / `path` / `action log` | 79.0 / 74.0 / 85.0 / 116.0 | 13.5 / 10.4 / 21.9 / 18.1 | −83% / −86% / −74% / −84% |
+| 100k | `graph` / `list` / `path` / `action log` | 382.5 / 349.4 / 473.4 / 784.1 | 173.6 / 149.5 / 255.6 / 186.0 | −55% / −57% / −46% / −76% |
+
+端到端（.NET harness，7 次取 min，含约 40 ms 进程地板）：
+
+| 仓 | 命令 | 起点（P0 之前） | P0 | P0+P1 |
+| --- | --- | --- | --- | --- |
+| 真仓 | `graph --json` | 95.4 ms | 93.2 | **42.7** |
+| 真仓 | `action log --jsonl` | 109.2 | 107.6 | **43.3** |
+| 真仓 | `status` | — | — | 42.5 |
+| 100k | `graph --json` | 551.9 | 457.4 | **241.1** |
+| 100k | `path --all --json` | 671.8 | 573.8 | **363.8** |
+| 100k | `action log --jsonl` | 863.2 | 836.2 | **411.6** |
+| 100k | `status` | 454.3 | 424.8 | 212.6 |
+
+同一口径的"热读 vs `--no-cache`"：真仓 `graph` 42.7 / 131.2（−68%）；100k `status` 216.5 / 1,166.7（−81%）、`list` 219.2 / 1,161.5（−81%）、`graph` 245.8 / 1,184.6（−79%）、`path` 359.7 / 1,308.0（−73%）、`action log` 404.5 / 1,380.7（−71%）。
+
+**git 调用数**（PATH 前置垫片实测）：`status` / `list` / `check` / `graph` / `path` / `action log` 热读 **0 次**；`action log --limit 5` 1 次（按设计直连 git）；`show` 1 次（只剩取 diff 的那次，枚举已被快照接住）；冷读 1 次（枚举）+ 有缺口时每缺一条 `cat-file` 一次。
+
+**成本**：快照 20 B/提交——本仓 8.3 KB、100k 2.0 MB；读一次含校验约 2 ms（已包含在上表的 173.6 ms 里）。
+
+### 3. 验证
+
+- 新增 11 条测试（`internal/cli/enum_test.go`）：编解码往返、键/种类/损坏/截断全部拒绝、保留最近 4 份、两种顺序互不干扰；快照命中时**把 PATH 指向空目录也能读**（证明没起 git），同环境下 `--no-cache` 必须失败（证明 git 真的被需要）；新提交 / amend / reset 后与 `--no-cache` 逐字节一致；**packed-refs**（`pack-refs --all --prune` 后只靠 packed 也能解出 HEAD）、**detached HEAD**、**linked worktree**、`refs/replace` 在场时退避、缓存目录不可写时静默。
+- `go test ./...` 全绿；`gofmt` / `go vet` 干净。
+- 六命令 × 四仓（真仓 / 3k / 10k / 100k）× 热读 vs `--no-cache`：输出哈希全部相同（含 31.5 MB 的 `path`）。
+
+### 4. 代价与遗留
+
+- **顺序信任 git**：快照是 git 的输出，所以升级 git 若改变默认落序，旧快照会与新 git 不一致——删掉 `.git/kiln` 即可。这是"存输出"而不是"复现走图"的固有取舍；换来的是顺序永远逐字节等于 git（上一轮实测过：自己按时间排序在本仓第 163 行就分叉）。
+- `action log` 现在把枚举物化了（100k 2 MB），不再"边 walk 边渲染"；冷读 / `--no-cache` 仍走流式。
+- `show` / `--limit` 仍要 git（取 diff / 按设计直连）。
+- P2 还在：`kiln commit` 之后 HEAD 变了，下一次读仍要跑一次枚举（提交时知道新旧 HEAD，可以直接把新列表拼出来）。

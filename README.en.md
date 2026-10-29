@@ -204,15 +204,15 @@ The config file is `.kilnconfig.jsonc` at the **repository root** (JSONC: JSON +
 
 ## Cache (background behaviour, on by default)
 
-Every read command walks the whole history; past a few thousand commits that walk is the cost. kiln stores the parsed result under `.git/kiln/records/` (one per clone, shared by every worktree) and answers from it next time — **with byte-identical output**, no configuration needed.
+Every read command needs two things: the ordered list of commits, and each commit's parsed fields. Both are stored — the list as an **enumeration snapshot** keyed by HEAD (`.git/kiln/enums/`, about 20 B per commit), the fields as **record layers** (`.git/kiln/records/`, one per clone, shared by every worktree). **A warm read starts no git at all**, with byte-identical output: the snapshot *is* git's own output, and a layer holds the same fields the parser derives.
 
-- The first read writes the records (tens of milliseconds, once); later reads hit. Layers merge at 64, and a merge drops records no ref can reach.
+- The first read writes both (tens of milliseconds, once); later reads hit. A new HEAD is a new snapshot and the old ones converge (the newest four survive; `kiln cache gc` drops the unreachable ones). Layers merge at 64, and a merge drops records no ref can reach.
 - `--no-cache` (or `KILN_NO_CACHE=1`) bypasses it per command; output is unchanged.
-- `kiln cache gc` reclaims by reachability (old records, broken layers, old versions). You should not need it: reads write and merge the cache themselves.
-- Read-only checkouts / CI mounts: a failed write is skipped silently; reads keep working.
-- Measured (100k commits): `graph --json` 1,258 → 548 ms (−56%), `list` 1,131 → 439 ms (−61%), `action log --jsonl` 1,375 → 867 ms (−37%); already a win at 1k commits (−24%). The first read pays ~100 ms once; about 73 B per commit on disk (the synthetic corpus repeats titles; a real repository is closer to 130 B).
+- Read-only checkouts / CI mounts: a failed write is skipped silently; reads keep working (by asking git every time).
+- A repository with `refs/replace`, `info/grafts`, `shallow`, reftable, or `GIT_DIR`-style environment variables makes kiln back off: it asks git every time rather than guess.
+- Measured: this repository (408 commits) 130 → 42 ms per read (−68%); 100k commits: `graph --json` 1,185 → 246 ms (−79%), `list` 1,162 → 219 (−81%), `action log --jsonl` 1,381 → 405 (−71%), `path --all --json` 1,308 → 360 (−73%). The first read pays ~100 ms once; about 20 B per commit (snapshot) plus ~130 B (layer) on disk.
 
-Design notes: [docs/commit-cache.md](docs/commit-cache.md).
+Design notes: [docs/commit-cache.md](docs/commit-cache.md); the "warm reads start no git" trade-off and its experiments: [docs/refactor.md](docs/refactor.md).
 
 ## Worktree mode (isolation)
 
