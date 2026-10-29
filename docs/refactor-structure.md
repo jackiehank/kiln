@@ -306,3 +306,25 @@ collect 把 `loadCached` 排在最后，是"先易后难"的直觉。但 `cache.
 
 - 矩阵里没有 `do`/`commit`：写路径的输出也值得锁，但它们改 HEAD，得换成"每个用例克隆一份 fixture"，成本高一些，等阶段 2（拆 `loadCached`）需要时再补。
 - `graph --mermaid`、`path --stat` 等变体已经覆盖，但没有 `--shortstat`、`graph --format=ascii` 的显式重复（二者与已录用例等价）。
+
+## 落地（阶段 1，2026-10-29）：四个叶子簇搬完，cli.go 3,475 → 2,743
+
+| 提交 | 搬了什么 | 新文件 | cli.go |
+| --- | --- | --- | --- |
+| `71bf20c` | 参数解析：`flags`/`parse`/`reject*`/`allowedFlags`/`warnUnknownFlags`/`dedupeStrings` | `args.go` 184 行 / 11 函数 | −174 |
+| `f9179c5` | 用法与帮助：`usageText`/`doCommitFlag*`/`commandUsageText`/`flagLinesFor`/`pad`/`displayWidth`/`isWide` + 四段用法文案 | `help.go` 258 行 / 9 函数 | −248 |
+| `9adb3c8` | 入口与全局开关：`Run`/`extractLang`/`printVersion` + `stripNoCache`（原在 `cache.go`） | `run.go` 200 行 / 4 函数 | −175 |
+| `373db17` | 词表与 JSON：`modeName`/`stateWord`/`progressWord`/`tagsSuffix`/`issueTitle`/`issueCommit`/`shortID`/`writeJSON`/`issueCore`，以及序数三件套 | `render.go` 114 行 / 8 函数、`ordinals.go` 41 行 / 3 函数 | −135 |
+
+结果：`cli.go` **3,475 → 2,743 行**（−732，−21%），函数 117 → 94，`(*env)` 方法仍是 52 个（命令本体一个没动）。5 个新文件合计 897 行，最大 `help.go` 258 行。
+
+验收（每步都跑）：
+
+- `go build ./...`、`go vet ./...`、`gofmt -l internal cmd` 空、`go test ./...` 全绿（`internal/cli` 20.2 s，含 golden）；
+- **纯移动**用"行多重集"验证：`git diff --cached -U0` 里新文件的每一行（除 `package`/`import` 头）都必须出现在旧文件的删除行里，且计数相等。4 次搬家全部通过（脚本在临时目录，未入仓——它只服务于这次拆分，进仓反而多一份要维护的代码）。
+
+**更正**：hypothesize 里写的验收是"`git diff -M` 显示 100% 相似度"，这只对整文件重命名成立，拆文件不会触发 rename 检测，所以那条口径是错的。正确的验收是上面的行多重集相等。
+
+**一次事故（记一笔）**：第一次搬 `run` 时直接用了上一轮生成的调用图行号，而 `cli.go` 在此之前已经被 `args`/`help` 两次搬家缩短了 420 行，于是切出来的三段其实是 `e.write` 的尾部与别的函数。`go build` 立刻报错，`git checkout -- internal/cli/cli.go internal/cli/cache.go` 回滚，重新生成调用图后重做。流程改为：**每次搬家前重新生成调用图**（`go run` 那个分析器 + 当前文件清单）。
+
+遗留：`cli.go` 仍有 94 个函数、2,118 行函数体，最大的是 `e.write`（152 行 / 32 分支）与 `e.list`（128 行 / 28 分支）。下阶段（阶段 2）先拆 `loadCached`，再按命令分文件（阶段 3）。
