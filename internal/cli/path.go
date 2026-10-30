@@ -154,7 +154,10 @@ func (e *env) pathJSON(repo *model.Repo, p *model.Issue, mode statDisplay) int {
 	if code != 0 {
 		return code
 	}
-	doc, err := e.pathDocOf(p, mode, backend, engine.FoldEdges(repo, e.rel()), nil)
+	edges := engine.FoldEdges(repo, e.rel())
+	doc, err := e.pathDocOf(p, mode, backend, func(id string) []graphEdge {
+		return incidentEdges(edges, e.rel(), id)
+	}, nil)
 	if err != nil {
 		fmt.Fprint(e.errw, i18n.T("读取变更失败: %v\n", err))
 		return 1
@@ -177,7 +180,7 @@ func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
 		return code
 	}
 	stats := e.batchStats(repo, backend, ids, mode)
-	edges := engine.FoldEdges(repo, e.rel())
+	idx := newIncidentIndex(engine.FoldEdges(repo, e.rel()), e.rel())
 	w := newPathBatchWriter(e.out)
 	var errs []pathBatchError
 	for _, id := range ids {
@@ -186,7 +189,7 @@ func (e *env) pathBatch(repo *model.Repo, ids []string, mode statDisplay) int {
 			errs = append(errs, pathBatchError{Issue: id, Error: errUnknownIssue})
 			continue
 		}
-		d, err := e.pathDocOf(p, mode, backend, edges, stats)
+		d, err := e.pathDocOf(p, mode, backend, idx.incident, stats)
 		if err != nil {
 			errs = append(errs, pathBatchError{Issue: id, Error: errStatFailed})
 			continue
@@ -339,18 +342,20 @@ func (e *env) batchStats(repo *model.Repo, backend vcs.Repo, ids []string, mode 
 	return stats
 }
 
-// pathDocOf fills one path document without writing it. The folded edges are
-// passed in so a batch folds them once instead of once per issue; backend may be
-// nil when no stats were asked for. stats is the batch lookup from batchStats:
-// a hit renders without another backend call, a miss (a merge commit, or no
-// batch at all) still asks ShowStat, so no action can silently lose its stat.
-func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, edges []engine.Edge, stats map[string]string) (pathDoc, error) {
+// pathDocOf fills one path document without writing it. The incident lookup is
+// passed in so a batch builds the adjacency index once instead of scanning the
+// edge list per issue; a single path passes the scan, which is cheaper for one
+// issue. backend may be nil when no stats were asked for. stats is the batch
+// lookup from batchStats: a hit renders without another backend call, a miss (a
+// merge commit, or no batch at all) still asks ShowStat, so no action can
+// silently lose its stat.
+func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, incident func(string) []graphEdge, stats map[string]string) (pathDoc, error) {
 	doc := pathDoc{
 		Issue:     p.ID,
 		Action:    p.State(),
 		Done:      e.isDone(p),
 		Actions:   make([]pathAction, 0, len(p.Actions)),
-		Relations: incidentEdges(edges, e.rel(), p.ID),
+		Relations: incident(p.ID),
 	}
 	for i, a := range p.Actions {
 		item := pathAction{
@@ -407,6 +412,12 @@ func incidentEdges(edges []engine.Edge, rel *model.RelationSet, id string) []gra
 			Directed: rel.Inverse(ed.Name) != "",
 		})
 	}
+	sortIncident(out)
+	return out
+}
+
+// sortIncident orders one issue's edges the way both path views print them.
+func sortIncident(out []graphEdge) {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].From != out[j].From {
 			return out[i].From < out[j].From
@@ -416,7 +427,60 @@ func incidentEdges(edges []engine.Edge, rel *model.RelationSet, id string) []gra
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out
+}
+
+// incidentIndex answers "which folded edges touch this issue" without scanning
+// the whole edge list per issue: one O(E) pass builds out/in buckets, then each
+// issue costs its own degree. `path --all` used to be O(issues × edges) because
+// it asked the scan question once per issue; with a 16k-issue/240k-edge repo
+// that is minutes.
+//
+// incidentEdges stays for the single-issue view: there, one scan (O(E)) is
+// cheaper than building two maps.
+type incidentIndex struct {
+	rel *model.RelationSet
+	out map[string][]engine.Edge
+	in  map[string][]engine.Edge
+}
+
+func newIncidentIndex(edges []engine.Edge, rel *model.RelationSet) *incidentIndex {
+	idx := &incidentIndex{
+		rel: rel,
+		out: make(map[string][]engine.Edge, len(edges)),
+		in:  make(map[string][]engine.Edge, len(edges)),
+	}
+	for _, ed := range edges {
+		idx.out[ed.From] = append(idx.out[ed.From], ed)
+		idx.in[ed.To] = append(idx.in[ed.To], ed)
+	}
+	return idx
+}
+
+// incident mirrors incidentEdges: an edge is listed once even when it is a
+// self-relation (it sits in both buckets), and the result carries the same
+// (from, to, name) order.
+func (x *incidentIndex) incident(id string) []graphEdge {
+	out, in := x.out[id], x.in[id]
+	res := make([]graphEdge, 0, len(out)+len(in))
+	add := func(ed engine.Edge) {
+		res = append(res, graphEdge{
+			From:     ed.From,
+			To:       ed.To,
+			Name:     ed.Name,
+			Directed: x.rel.Inverse(ed.Name) != "",
+		})
+	}
+	for _, ed := range out {
+		add(ed)
+	}
+	for _, ed := range in {
+		if ed.From == id {
+			continue // self-relation: already added from the out bucket
+		}
+		add(ed)
+	}
+	sortIncident(res)
+	return res
 }
 
 // statDisplay selects how `path` annotates each action with its diffstat.

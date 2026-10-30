@@ -4579,7 +4579,9 @@ func TestPathBatchStreamsTheSameBytesAsWriteJSON(t *testing.T) {
 	edges := engine.FoldEdges(repo, e.rel())
 	docs := make([]pathDoc, 0, len(repo.Issues))
 	for _, id := range engine.IDs(repo) {
-		d, err := e.pathDocOf(repo.Issues[id], statNone, nil, edges, nil)
+		d, err := e.pathDocOf(repo.Issues[id], statNone, nil, func(id string) []graphEdge {
+			return incidentEdges(edges, e.rel(), id)
+		}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
