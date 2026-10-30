@@ -487,17 +487,39 @@ type foldItem struct {
 	i     int
 }
 
+// edgePair keys an unordered pair of issues: a relation's two ends are the same
+// pair whichever side declared it. The NUL keeps two ids from running together.
+func edgePair(a, b string) string {
+	if a > b {
+		a, b = b, a
+	}
+	return a + "\x00" + b
+}
+
 // FoldEdges folds every declaration in the repository by (unordered pair, slot)
 // — last declaration wins, whichever side made it — so a relationship declared
 // from both sides shows one shape once. Within one issue the strength chain
 // still decides: a later weaker name does not displace a stronger earlier one
 // (higher rank wins, a tie goes to the later action), which is exactly
 // foldRelations' rule.
+//
+// The fold has two walks. A history that never writes `unrelate` uses one flat
+// (pair, slot) map — the cheapest shape when no pair is ever cleared. A history
+// that does uses a pair→slot map, so clearing a pair is one map delete instead
+// of a scan over every edge in the graph; both walks produce the same edge set.
 func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
 	ids := IDs(repo)
 	total := 0
+	unrelates := false
 	for _, id := range ids {
-		total += len(repo.Issues[id].Actions)
+		p := repo.Issues[id]
+		total += len(p.Actions)
+		for i := range p.Actions {
+			if len(p.Actions[i].Unrelate) > 0 {
+				unrelates = true
+				break
+			}
+		}
 	}
 	items := make([]foldItem, 0, total)
 	for _, id := range ids {
@@ -517,14 +539,47 @@ func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
 		return cmp.Compare(a.issue, b.issue)
 	})
 
-	type key struct{ pair, slot string }
-	pair := func(a, b string) string {
-		if a > b {
-			a, b = b, a
-		}
-		return a + "\x00" + b
+	if unrelates {
+		return foldEdgesByPair(items, rel)
 	}
-	state := map[key]Edge{}
+	return foldEdgesFlat(items, rel)
+}
+
+// foldEdgesFlat is the walk for a history without `unrelate`: one flat map keyed
+// by (pair, slot). It is the shape the fold had before the pair index existed,
+// minus the unrelate branch that made clearing a pair quadratic.
+func foldEdgesFlat(items []foldItem, rel *model.RelationSet) []Edge {
+	type key struct{ pair, slot string }
+	state := make(map[key]Edge)
+	for _, it := range items {
+		a := &it.p.Actions[it.i]
+		for _, r := range a.Relations {
+			n, ok := rel.Lookup(r.Name)
+			if !ok {
+				continue
+			}
+			k := key{edgePair(it.issue, r.Target), n.Slot}
+			if cur, ok := state[k]; ok && cur.From == it.issue {
+				if c, ok := rel.Lookup(cur.Name); ok && c.Rank > n.Rank {
+					continue
+				}
+			}
+			state[k] = Edge{From: it.issue, To: r.Target, Name: r.Name, Slot: n.Slot}
+		}
+	}
+	out := make([]Edge, 0, len(state))
+	for _, e := range state {
+		out = append(out, e)
+	}
+	return out
+}
+
+// foldEdgesByPair is the walk for a history that uses `unrelate`: state is keyed
+// by pair first, so clearing a pair is `delete(state, pair)` instead of a scan
+// over every declared edge. The per-slot rank rule and the "a target declared in
+// the same action survives its unrelate" rule are unchanged.
+func foldEdgesByPair(items []foldItem, rel *model.RelationSet) []Edge {
+	state := map[string]map[string]Edge{}
 	declared := make(map[string]bool)
 	for _, it := range items {
 		a := &it.p.Actions[it.i]
@@ -538,30 +593,37 @@ func FoldEdges(repo *model.Repo, rel *model.RelationSet) []Edge {
 			if declared[t] {
 				continue
 			}
-			p := pair(it.issue, t)
-			for k := range state {
-				if k.pair == p {
-					delete(state, k)
-				}
-			}
+			delete(state, edgePair(it.issue, t))
 		}
 		for _, r := range a.Relations {
 			n, ok := rel.Lookup(r.Name)
 			if !ok {
 				continue
 			}
-			k := key{pair(it.issue, r.Target), n.Slot}
-			if cur, ok := state[k]; ok && cur.From == it.issue {
+			p := edgePair(it.issue, r.Target)
+			bySlot := state[p]
+			var cur Edge
+			curOK := false
+			if bySlot != nil {
+				cur, curOK = bySlot[n.Slot]
+			}
+			if curOK && cur.From == it.issue {
 				if c, ok := rel.Lookup(cur.Name); ok && c.Rank > n.Rank {
 					continue
 				}
 			}
-			state[k] = Edge{From: it.issue, To: r.Target, Name: r.Name, Slot: n.Slot}
+			if bySlot == nil {
+				bySlot = make(map[string]Edge, 2)
+				state[p] = bySlot
+			}
+			bySlot[n.Slot] = Edge{From: it.issue, To: r.Target, Name: r.Name, Slot: n.Slot}
 		}
 	}
-	out := make([]Edge, 0, len(state))
-	for _, e := range state {
-		out = append(out, e)
+	out := make([]Edge, 0, len(state)*2)
+	for _, bySlot := range state {
+		for _, e := range bySlot {
+			out = append(out, e)
+		}
 	}
 	return out
 }

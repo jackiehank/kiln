@@ -2,6 +2,7 @@ package engine
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -442,4 +443,149 @@ func TestMermaidIsStable(t *testing.T) {
 	if Mermaid(repo, testRel) != Mermaid(repo, testRel) {
 		t.Fatal("mermaid must be stable")
 	}
+}
+
+// graph fold: an unrelate clears the pair, but a later declaration brings it
+// back — with the new declarant as the tail.
+func TestGraphFoldUnrelateThenRedeclare(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g4", "乙重新声明\nissue: b\naction: collect\nblocked-by: a", 4),
+		mkCommit("g3", "甲解除\nissue: a\naction: collect\nunrelate: b", 3),
+		mkCommit("g2", "甲阻塞乙\nissue: a\naction: ask\nblocks: b", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	edges := FoldEdges(repo, testRel)
+	if len(edges) != 1 {
+		t.Fatalf("want one edge after unrelate + redeclare: %+v", edges)
+	}
+	if e := edges[0]; e.From != "b" || e.To != "a" || e.Name != "blocked-by" {
+		t.Fatalf("later declaration must win after the unrelate: %+v", e)
+	}
+}
+
+// graph fold: a target the same action declares survives that action's
+// unrelate — the action says "no longer related to the old target", not "drop
+// what I am declaring right now".
+func TestGraphFoldUnrelateSkipsTargetDeclaredInSameAction(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g2", "甲同时声明与解除\nissue: a\naction: collect\nrelates-to: b\nunrelate: b", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	edges := FoldEdges(repo, testRel)
+	if len(edges) != 1 || edges[0].Name != "relates-to" {
+		t.Fatalf("same-action declaration must survive its unrelate: %+v", edges)
+	}
+}
+
+// graph fold: the pair-indexed walk (taken when a history has unrelates) must
+// agree with a straight replay that keeps a slice and clears a pair by
+// filtering it — the definition the map shape has to reproduce.
+func TestFoldEdgesWithUnrelateMatchesReplay(t *testing.T) {
+	commits := []vcs.Commit{
+		mkCommit("g9", "丙解除与甲\nissue: c\naction: collect\nunrelate: a", 9),
+		mkCommit("g8", "丙反收甲\nissue: c\naction: collect\nhas-part: a", 8),
+		mkCommit("g7", "乙反向声明\nissue: b\naction: collect\nblocked-by: a", 7),
+		mkCommit("g6", "甲重新阻塞乙\nissue: a\naction: collect\nblocks: b", 6),
+		mkCommit("g5", "甲解除乙\nissue: a\naction: collect\nunrelate: b", 5),
+		mkCommit("g4", "甲分解丙\nissue: a\naction: collect\npart-of: c", 4),
+		mkCommit("g3", "甲开题\nissue: a\naction: ask", 3),
+		mkCommit("g2", "丙开题\nissue: c\naction: ask", 2),
+		mkCommit("g1", "乙开题\nissue: b\naction: ask", 1),
+	}
+	repo := Build(ActionsFromCommits(commits, testRel), testRel)
+	got := FoldEdges(repo, testRel)
+	want := replayFold(repo, testRel)
+	if g, w := edgeSet(got), edgeSet(want); !reflect.DeepEqual(g, w) {
+		t.Fatalf("pair-indexed fold = %v, replay = %v", g, w)
+	}
+}
+
+// replayFold is the definition FoldEdges must implement, written the slow way:
+// a slice of live edges, a pair cleared by filtering, and last-declaration-wins
+// with the same per-side rank rule.
+func replayFold(repo *model.Repo, rel *model.RelationSet) []Edge {
+	type live struct {
+		pair, slot string
+		e          Edge
+	}
+	type act struct {
+		issue string
+		a     model.Action
+	}
+	var acts []act
+	for _, id := range IDs(repo) {
+		for _, a := range repo.Issues[id].Actions {
+			acts = append(acts, act{id, a})
+		}
+	}
+	sort.SliceStable(acts, func(i, j int) bool {
+		if !acts[i].a.Date.Equal(acts[j].a.Date) {
+			return acts[i].a.Date.Before(acts[j].a.Date)
+		}
+		return acts[i].issue < acts[j].issue
+	})
+
+	var state []live
+	find := func(pair, slot string) int {
+		for i := range state {
+			if state[i].pair == pair && state[i].slot == slot {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, it := range acts {
+		declared := map[string]bool{}
+		for _, r := range it.a.Relations {
+			declared[r.Target] = true
+		}
+		for _, t := range it.a.Unrelate {
+			if declared[t] {
+				continue
+			}
+			p := edgePair(it.issue, t)
+			kept := state[:0]
+			for _, s := range state {
+				if s.pair != p {
+					kept = append(kept, s)
+				}
+			}
+			state = kept
+		}
+		for _, r := range it.a.Relations {
+			n, ok := rel.Lookup(r.Name)
+			if !ok {
+				continue
+			}
+			p := edgePair(it.issue, r.Target)
+			if i := find(p, n.Slot); i >= 0 {
+				cur := state[i].e
+				if cur.From == it.issue {
+					if c, ok := rel.Lookup(cur.Name); ok && c.Rank > n.Rank {
+						continue
+					}
+				}
+				state[i].e = Edge{From: it.issue, To: r.Target, Name: r.Name, Slot: n.Slot}
+				continue
+			}
+			state = append(state, live{p, n.Slot, Edge{From: it.issue, To: r.Target, Name: r.Name, Slot: n.Slot}})
+		}
+	}
+	out := make([]Edge, len(state))
+	for i, s := range state {
+		out[i] = s.e
+	}
+	return out
+}
+
+// edgeSet renders edges as comparable, order-free strings.
+func edgeSet(es []Edge) []string {
+	out := make([]string, len(es))
+	for i, e := range es {
+		out[i] = e.From + "|" + e.To + "|" + e.Name + "|" + e.Slot
+	}
+	sort.Strings(out)
+	return out
 }

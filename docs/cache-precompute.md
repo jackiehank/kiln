@@ -244,6 +244,27 @@ E 从 80k 到 240k（3×），incident 从 4.5 s 到 14.7 s（3.3×）⇒ 对 E 
 
 结论：先落 **B1**（收益最大、改动最小、可用混合路径避开回归）；A1 的原型数据留档，等 B 落地后再做。
 
+## apply（2026-10-30）：B1 已落地
+
+`FoldEdges` 折之前先预扫有没有 `Unrelate`：
+
+- 没有 → `foldEdgesFlat`：原来的扁平 `(pair, slot)` map，但去掉 unrelate 分支（这段仓里不会有）。
+- 有 → `foldEdgesByPair`：`map[pair]map[slot]Edge`，`unrelate` 变成 `delete(state, pair)`，不再扫全表。
+
+rank 规则、"同一动作里声明过的目标不被该动作的 unrelate 清掉"规则都原样保留。新增单测：unrelate 后重新声明、同动作声明+解除、以及一个"慢速重放"oracle 对拍（slice 逐条过滤，独立于 map 结构）。
+
+**输出不变**：旧/新二进制在 plain-100k、dense2-100k、dense-100k 和真仓上跑 `graph`、`graph --json`、`graph --mermaid`、`graph --issue --depth`、`path <one>`、`path --all --json`、`list`、`status`、`check`、`action log`，共 **20 组逐字节一致**。
+
+实测（100k，E≈236k，每 4 个动作 1 条 unrelate）：
+
+| 命令 | 改前 | 改后 |
+| --- | --- | --- |
+| `graph` | 61 698 ms | **484 ms** |
+| `graph --json` | 51 271 ms | **595 ms** |
+| `graph`（无 unrelate 的同形状仓） | 387 ms | 387 ms（走原路径，无回归） |
+
+`path --all --json` 仍是 15.6 s——A1 没动，留作下一步。
+
 ## 非目标
 
 - 不做视图级（`status`/`list` 输出字节）缓存，除非出现同 HEAD 重复读的证据；
@@ -256,3 +277,4 @@ E 从 80k 到 240k（3×），incident 从 4.5 s 到 14.7 s（3.3×）⇒ 对 E 
 - 2026-10-30：由"kiln 的命令里有多少需要计算"的盘点触发，ask + collect 计入。
 - 2026-10-30：hypothesize 用 1k/10k/100k 合成仓（无关系 / 1 关系 / 3 关系 / 3 关系 + unrelate 四档）实测出"线性主干 + 两个二次项"：折叠 104 ms@100k，`path --all` 4.8 s，`graph` 带 unrelate 61.7 s；预测见 §8，等 test 验证。
 - 2026-10-30：test 用临时原型量出两条改法的收益与等价性：incident 索引 120–135×、unrelate 改 pair→slot 352×（无 unrelate 时 +70%，故必须混合）；P1 修正为 ~0.7 s。决定先落 B1。
+- 2026-10-30：apply 落地 B1（`FoldEdges` 混合路径 + 单测 + 慢速 oracle），20 组输出逐字节一致；100k dense `graph` 61.7 s → 0.48 s。A1 的 `path --all` 索引留待下一步。
