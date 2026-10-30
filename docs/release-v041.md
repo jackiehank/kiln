@@ -27,6 +27,17 @@
 
 ## 验收
 
-- `rg -n 'v0\.4\.0' README.md README.en.md` 无输出（4 处示例都是 `v0.4.1`）。
+- 两份 README 的版本示例 4 处都是 `v0.4.1`（实测段里对 v0.4.0 的一次对比保留）。
 - 两份 README 的实测段数字与 2026-10-30 的测量一致（`.bench/readme.ps1` 的 tsv）。
 - `go test ./...` 全过、`kiln check` 退出 0（只改文档）。
+
+## apply（2026-10-30）：README 版本示例与实测段
+
+- 版本示例 4 处 → `v0.4.1`（`README.md:45/59`、`README.en.md:43/57`）。
+- 实测段换成 2026-10-30 的测量：本仓 469 提交 `list` 114 → 28 ms、`action log --jsonl` 114 → 29 ms；
+  100k 合成仓（80k 动作 / 16k issue）冷读 → 热读 `list` 978 → 162（−83%）、`action log --jsonl` 800 → 220（−73%）、
+  `graph --json` 1,076 → 236（−78%）、`path --all --json` 1,155 → 320（−72%）。
+- 新增一条关系密集仓（≈240k 边）的热读：`graph --json` 545 ms、`path --all --json` 706 ms，并注明
+  v0.4.0 在同一形状仓上是 51 秒 / 16 秒——两个二次项已修掉，热读回到线性。
+- 测量方式（`.bench/readme.ps1`，不进仓）：本仓 + plain-100k + dense-100k，`timeit` 冷读 3 次 / 热读 5 次取中位数。
+- 验证：`go test ./...` 全过，`go vet` / `gofmt -l` 干净，`kiln check` 退出 0；未 tag、未 push。

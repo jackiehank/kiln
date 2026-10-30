@@ -42,7 +42,7 @@ kiln 把两样东西都拆成**原子**，再让复杂性从**组合**里长出�
 go install github.com/jackiehank/kiln/cmd/kiln@latest
 ```
 
-二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.4.0` 之类的版本写法固定版本。
+二进制装到 `$GOBIN`（默认 `$(go env GOPATH)/bin`，Windows 上是 `%USERPROFILE%\go\bin`）；确保它在 `PATH` 里。也可以用 `@v0.4.1` 之类的版本写法固定版本。
 
 **2. 自己构建（单文件、零外部依赖）**
 
@@ -56,7 +56,7 @@ go build -o kiln ./cmd/kiln
 
 从 [Releases](https://github.com/jackiehank/kiln/releases) 下载对应平台的产物，放进 `PATH` 即可（Windows 是 `kiln.exe`）。每个 `v*` tag 由 GitHub Actions 构建五个产物：Windows amd64、macOS arm64/amd64、Linux amd64/arm64，并附 `checksums.txt`；Termux 等 arm64 Linux 环境取 `kiln_linux_arm64`。tag 需是 `v0.x` / `v1.x`——模块路径没有 `/v2`，更高的主版本会被 Go 的版本戳忽略。
 
-单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.4.0`）。
+单文件 CLI，`go.mod` 里没有 `require`。`kiln --version` 可确认装的是哪个构建（release 产物显示 tag 名，如 `v0.4.1`）。
 
 ## 五分钟上手
 
@@ -212,7 +212,8 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 - 单个命令不再有"关缓存"的开关；缓存出错或升级 kiln 之后，用 `kiln cache clear` 清空（下一次读会用当前版本重建），`kiln cache gc` 只做日常回收。
 - 只读仓 / CI 挂载：写失败静默跳过，读照常（退化成每次问 git）。
 - 仓库里若出现 `refs/replace`、`info/grafts`、`shallow`、reftable，或设了 `GIT_DIR` 一类变量，kiln 不猜——直接按老办法每次问 git。
-- 实测（2026-10-30，本仓 455 提交）：`list` 151 → 25 ms、`action log --jsonl` 112 → 27 ms；100k 提交：`graph --json` 1,022 → 144 ms（−86%）、`list` 1,035 → 146（−86%）、`action log --jsonl` 1,173 → 166（−86%）、`path --all --json` 1,084 → 203（−81%）。冷读比热读多付一次全扫（本仓约 0.1 秒，100k 约 1 秒）；磁盘约 20 B/提交（快照）+ 约 130 B/提交（层，真实仓）。
+- 实测（2026-10-30，本仓 469 提交）：`list` 114 → 28 ms、`action log --jsonl` 114 → 29 ms；100k 合成仓（80k 动作 / 16k issue，每动作 1 条关系）：`list` 978 → 162 ms（−83%）、`action log --jsonl` 800 → 220（−73%）、`graph --json` 1,076 → 236（−78%）、`path --all --json` 1,155 → 320（−72%）。冷读比热读多付一次全扫（本仓约 0.1 秒，100k 约 1 秒）；磁盘约 20 B/提交（快照）+ 约 130 B/提交（层，真实仓）。
+- 关系密集时（每动作 3 条关系 + 每第 4 个动作 unrelate，≈240k 边）热读也只到 `graph --json` 545 ms、`path --all --json` 706 ms：这两条路径不再随边数二次增长（v0.4.0 在同一形状仓上是 51 秒 / 16 秒）。
 
 设计细节见 [docs/commit-cache.md](docs/commit-cache.md)；"热读不起 git"的取舍与实验数据见 [docs/refactor.md](docs/refactor.md)。
 
