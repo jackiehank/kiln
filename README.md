@@ -239,7 +239,7 @@ kiln do session-expiry test --title "压测复现" --target internal/session/loc
 - 单个命令不再有"关缓存"的开关；缓存出错或升级 kiln 之后，用 `kiln cache clear` 清空（下一次读会用当前版本重建），`kiln cache gc` 只做日常回收。
 - 只读仓 / CI 挂载：写失败静默跳过，读照常（退化成每次问 git）。
 - 仓库里若出现 `refs/replace`、`info/grafts`、`shallow`、reftable，或设了 `GIT_DIR` 一类变量，kiln 不猜——直接按老办法每次问 git。
-- 实测（2026-10-30，本仓 469 提交）：`list` 114 → 28 ms、`action log --jsonl` 114 → 29 ms；100k 合成仓（80k 动作 / 16k issue，每动作 1 条关系）：`list` 978 → 162 ms（−83%）、`action log --jsonl` 800 → 220（−73%）、`graph --json` 1,076 → 236（−78%）、`path --all --json` 1,155 → 320（−72%）。冷读比热读多付一次全扫（本仓约 0.1 秒，100k 约 1 秒）；磁盘约 20 B/提交（快照）+ 约 130 B/提交（层，真实仓）。
+- 实测（2026-10-30，本仓 469 提交）：`list` 114 → 28 ms、`action log --jsonl` 114 → 29 ms；100k 合成仓（80k 动作 / 16k issue，每动作 1 条关系）：`list` 978 → 162 ms（−83%）、`action log --jsonl` 800 → 220（−73%）、`graph --json` 1,076 → 236（−78%）、`path --all --json` 1,155 → 320（−72%）。冷读比热读多付一次全扫（本仓约 0.1 秒，100k 约 1 秒）；磁盘约 20 B/提交（快照）+ 约 237 B/提交（层，本仓 2026-11-02 实测 476 提交；作者名/邮箱也进层，每条记录多 8 B 索引和共享串表里的两条串）。
 - 关系密集时（每动作 3 条关系 + 每第 4 个动作 unrelate，≈240k 边）热读也只到 `graph --json` 545 ms、`path --all --json` 706 ms：这两条路径不再随边数二次增长（v0.4.0 在同一形状仓上是 51 秒 / 16 秒）。
 
 设计细节见 [docs/commit-cache.md](docs/commit-cache.md)；"热读不起 git"的取舍与实验数据见 [docs/refactor.md](docs/refactor.md)。
@@ -338,7 +338,8 @@ kiln path --all --json
 - **缺省即省略**（省略 = 没有），**布尔恒显**（`false` 是判定结果，不是"没有"）。
 - **stdout 只放一个 JSON 文档**：提示、legend、报错一律在 stderr，退出码与文本视图一致。
 - **`path --all --json` 一次进程读全仓**：`{"issues":[<单条 path 文档>…]}`，每项与 `kiln path <id> --json` 逐字节同形。显式给多条 issue 时保持给定顺序，`--all` 按 id 字典序；单条取不到不拖垮整份——该条进 `errors`（`unknown-issue` / `stat-failed`），其余照出，退出码 1。批量只服务 `--json`（文本视图一次只展开一条）。
-- **例外：`action log --jsonl` 是 NDJSON**，不是"一份文档"——一行一个动作、一个独立对象，没有信封也没有终止记录；字段为 `issue` / `action` / `commit` / `date` / `title` / `domain` / `tags` / `refs` / `target` / `scope` / `relations` / `unrelate`，为空省键。`relations` 是**这条动作的声明**（`has-part: X` 原样保留，不翻成边），要当前关系图请用 `graph --json` / `path --json`。见 [docs/action-log.md](docs/action-log.md)。
+- **例外：`action log --jsonl` 是 NDJSON**，不是"一份文档"——一行一个动作、一个独立对象，没有信封也没有终止记录；字段为 `issue` / `action` / `commit` / `date` / `title` / `domain` / `tags` / `refs` / `target` / `scope` / `relations` / `unrelate` / `author`，为空省键（`author` 是最后追加的一键，见下条）。`relations` 是**这条动作的声明**（`has-part: X` 原样保留，不翻成边），要当前关系图请用 `graph --json` / `path --json`。见 [docs/action-log.md](docs/action-log.md)。
+- **`author` 是投影，不是字段**：`path --json` 的每个动作、`show --json`、`action log --jsonl` 都带 `"author": {"name": …, "email": …}`，直接来自 git 的 `%an` / `%ae`（jj 的 `author`）——**写侧不写 `author:` trailer**。取不到时整个键省略；`list` / `status` 是 issue 级摘要，暂不带。
 
 ## 与 agent 协作
 

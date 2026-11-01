@@ -20,10 +20,11 @@ import (
 )
 
 // Magic and Layout identify the on-disk format. Changing either means a new
-// Magic: old layers are then ignored rather than migrated.
+// Magic: old layers are then ignored rather than migrated. Layout 2 added the
+// author name and email to every record (json-author).
 const (
-	Magic  = "KILNREC1"
-	Layout = 1
+	Magic  = "KILNREC2"
+	Layout = 2
 
 	headerFixed = 8 + 2 + 20 + 2 // magic, layout, vocabulary fingerprint, tip count
 	trailerSize = sha1.Size
@@ -43,6 +44,12 @@ type Record struct {
 	Date   int64 // author date, unix seconds
 	TZ     int16 // author timezone, minutes east of UTC
 	Action bool  // the commit carries both `issue:` and `action:`
+
+	// AuthorName / AuthorEmail are the commit's git author, verbatim. They are
+	// stored rather than re-read so a cache hit and a full scan answer the same
+	// `--json` document (kiln projects the author, it never writes one).
+	AuthorName  string
+	AuthorEmail string
 
 	Issue   string
 	Kind    string
@@ -94,6 +101,8 @@ func Encode(records []Record, tips [][20]byte, fingerprint [20]byte) []byte {
 		tab.add(r.Domain)
 		tab.add(r.Scope)
 		tab.add(r.Target)
+		tab.add(r.AuthorName)
+		tab.add(r.AuthorEmail)
 		for _, s := range r.Refs {
 			tab.add(s)
 		}
@@ -139,7 +148,7 @@ func Encode(records []Record, tips [][20]byte, fingerprint [20]byte) []byte {
 			flags |= 2
 		}
 		b.WriteByte(flags)
-		for _, s := range []string{r.Issue, r.Kind, r.Title, r.Subject, r.Domain, r.Scope, r.Target} {
+		for _, s := range []string{r.Issue, r.Kind, r.Title, r.Subject, r.Domain, r.Scope, r.Target, r.AuthorName, r.AuthorEmail} {
 			putU32(&b, tab.idx[s])
 		}
 		putStringIndices(&b, r.Refs, tab)

@@ -34,6 +34,8 @@ const (
 type Commit struct {
 	ID           string
 	Date         time.Time
+	AuthorName   string
+	AuthorEmail  string
 	Message      string
 	Parents      []string
 	ParentsKnown bool
@@ -63,8 +65,10 @@ func LastNonEmptyLine(out string) string {
 // message. It is the input of the record layer, so a backend that can serve it can
 // take part in the cache; jj does not, and simply does not implement CacheBackend.
 type RawCommit struct {
-	Date    time.Time
-	Message string
+	Date        time.Time
+	AuthorName  string
+	AuthorEmail string
+	Message     string
 }
 
 // Line is one commit id with its parents: the shape the enumeration paths need.

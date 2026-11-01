@@ -74,6 +74,8 @@ func recordFrom(c vcs.Commit, f trailer.Fields, ok bool, rel *model.RelationSet)
 	if _, offset := c.Date.Zone(); offset != 0 {
 		rec.TZ = int16(offset / 60)
 	}
+	rec.AuthorName = c.AuthorName
+	rec.AuthorEmail = c.AuthorEmail
 	rec.Action = ok
 	rec.Issue = f.Issue
 	rec.Kind = f.Action
@@ -117,7 +119,7 @@ func ActionsAndRecordsFromCommits(commits []vcs.Commit, rel *model.RelationSet) 
 		rec := recordFrom(c, f, ok, rel)
 		records = append(records, rec)
 		if ok {
-			actions = append(actions, actionFrom(c.ID, c.Date, Subject(c.Message), f, rec.Unknown))
+			actions = append(actions, actionFrom(c.ID, c.Date, c.AuthorName, c.AuthorEmail, Subject(c.Message), f, rec.Unknown))
 		}
 	}
 	return actions, records
@@ -130,6 +132,8 @@ func ActionFromRecord(r cache.Record) model.Action {
 	return actionFrom(
 		hex.EncodeToString(r.OID[:]),
 		time.Unix(r.Date, 0).In(time.FixedZone("", int(r.TZ)*60)),
+		r.AuthorName,
+		r.AuthorEmail,
 		r.Subject,
 		FieldsFromRecord(r),
 		r.Unknown,
@@ -151,11 +155,13 @@ func FieldsFromRecord(r cache.Record) trailer.Fields {
 
 // actionFrom is the single place an Action is assembled, so the commit path and
 // the record path cannot drift apart.
-func actionFrom(id string, date time.Time, subject string, f trailer.Fields, unknown []string) model.Action {
+func actionFrom(id string, date time.Time, authorName, authorEmail, subject string, f trailer.Fields, unknown []string) model.Action {
 	return model.Action{
 		ID:                 id,
 		Subject:            subject,
 		Date:               date,
+		AuthorName:         authorName,
+		AuthorEmail:        authorEmail,
 		Issue:              f.Issue,
 		Kind:               f.Action,
 		Title:              f.Title,

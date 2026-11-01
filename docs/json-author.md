@@ -65,6 +65,17 @@
 
 缓存命中与冷读必须逐字节同形（`cache_test.go` 已经在守这条），所以记录层必须存 author——否则 `action log --jsonl` 的两条路径会给出不同结果。
 
+## apply：落地
+
+- **写侧零改动**：没有新 trailer、没有 `author:` 字段——作者就是提交自己的 `%an` / `%ae`（jj 的 `author`）。
+- **读侧三处**：`path --json` 的每个 `actions[]`、`show --json`、`action log --jsonl`。前两者把 `author` 放在 `date` 后；`--jsonl` 按本 issue 定过的键序规则**追加在最后**。
+- **形状**：`{"name": …, "email": …}`（`person.go` 的 `personDoc`），缺省省键——后端没给作者时整个 `author` 不出现。
+- **数据通路**：git 的 `%H%x1f%P%x1f%aI%x1f%an%x1f%ae%x1f%B`（流式是同一套 NUL 版），`cat-file` 侧解析 `author Name <email> ts zone` 一行；jj 用 `author.name()` / `author.email()`。`path` / `show` **零额外进程**。
+- **缓存**：`cache.Record` 加 `AuthorName` / `AuthorEmail`，`Magic` → `KILNREC2`、`Layout` → 2——旧层直接忽略、自动重建。每条记录多 8 B 索引；本仓 476 提交实测记录层 112,748 B ≈ **237 B/提交**（README 原先写的 130 B 是更早的测量，已按今日实测更新）。
+- **一致性**：`cache_test.go` 的"缓存命中与冷读逐字节同形"通过——gap fill 走 `RawCommit`，那条路也补了 author（否则新动作那一行会缺键）。
+- **测试**：`go test ./...` 全绿；golden（`basic` / `area` 的 `path_all_json` / `show_json` / `action_log_jsonl`）用 `-update` 重录；jj 的模板测试与 cache 的 magic 测试同步更新。
+- **文档**：`machine-readable-output` 文末新增契约，`read-json` / `action-log` 各加一条后续，README 中英的 `--jsonl` 字段表与缓存占用同步。
+
 ## 记录
 
 - 2026-11-02：由人工提出——写侧不写 author（git 已有），读侧 `--json` 可以带；并确认**单开一条 issue**，不并回 `author-attribution`。

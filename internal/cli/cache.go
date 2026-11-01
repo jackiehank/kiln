@@ -295,7 +295,7 @@ func (e *env) actionLogCached(backend vcs.Repo, jsonl bool, scratch *bytes.Buffe
 	sink := newLayerSink(r.dir, r.fp)
 	emit := func(rec cache.Record) error {
 		when := time.Unix(rec.Date, 0).In(time.FixedZone("", int(rec.TZ)*60))
-		return e.writeActionLogRow(hex.EncodeToString(rec.OID[:]), when, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc)
+		return e.writeActionLogRow(hex.EncodeToString(rec.OID[:]), when, rec.AuthorName, rec.AuthorEmail, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc)
 	}
 	if limit > 0 {
 		// Resolve the rows before printing any of them: a row that cannot be

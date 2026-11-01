@@ -108,3 +108,7 @@ issue `json-commit-hash` 把 hash 键统一了：**`id` 只指 issue，`commit` 
 ### 与旧示例的关系
 
 上文「采集 / 设计 / apply」保留了当时的键名（`mode` / `complete` / `ok` / `summary` / `body=diffstat`）作过程记录；契约以本节与「结论」为准。`machine-readable-output` 里的 `status` / `check` 示例同样是历史记录，其文末指向本节。
+
+### 2026-11-02：`author`（动作级三视图）
+
+`path.actions[]` / `show` / `action log --jsonl` 各多一个**可选对象** `author: {name, email}`，直接投影 git 的 `%an` / `%ae`（jj 的 `author`）；**写侧不加 trailer**。缺省即省略；`--jsonl` 里追加在最后（键序规则优先）。契约见 [machine-readable-output](machine-readable-output.md) 文末，来由见 [json-author](json-author.md)。

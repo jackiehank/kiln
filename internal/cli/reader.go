@@ -108,7 +108,13 @@ func (e *env) recordOf(r *reader, oid [20]byte, fetched map[[20]byte]vcs.RawComm
 	if !hit {
 		return cache.Record{}, false, false
 	}
-	return engine.RecordFromCommit(vcs.Commit{ID: hex.EncodeToString(oid[:]), Date: raw.Date, Message: raw.Message}, e.rel()), true, true
+	return engine.RecordFromCommit(vcs.Commit{
+		ID:          hex.EncodeToString(oid[:]),
+		Date:        raw.Date,
+		AuthorName:  raw.AuthorName,
+		AuthorEmail: raw.AuthorEmail,
+		Message:     raw.Message,
+	}, e.rel()), true, true
 }
 
 // walk hands the records of oids to fn in enumeration order, or backwards when

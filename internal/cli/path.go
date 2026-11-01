@@ -135,11 +135,12 @@ const (
 // the action's own `tags:` trailer (commit order, duplicates kept); they are not
 // the issue-level union, which is what `graph --json` and `list --json` carry.
 type pathAction struct {
-	Ordinal int      `json:"ordinal"`
-	Action  string   `json:"action"`
-	Commit  string   `json:"commit"`
-	Date    string   `json:"date"`
-	Title   string   `json:"title,omitempty"`
+	Ordinal int        `json:"ordinal"`
+	Action  string     `json:"action"`
+	Commit  string     `json:"commit"`
+	Date    string     `json:"date"`
+	Author  *personDoc `json:"author,omitempty"`
+	Title   string     `json:"title,omitempty"`
 	Refs    []string `json:"refs,omitempty"`
 	Tags    []string `json:"tags,omitempty"`
 	Stat    string   `json:"stat,omitempty"`
@@ -363,6 +364,7 @@ func (e *env) pathDocOf(p *model.Issue, mode statDisplay, backend vcs.Repo, inci
 			Action:  a.Kind,
 			Commit:  a.ID,
 			Date:    a.Date.Format(time.RFC3339),
+			Author:  personOf(a.AuthorName, a.AuthorEmail),
 			Title:   a.Title,
 			Refs:    a.Refs,
 			Tags:    a.Tags,

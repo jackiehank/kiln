@@ -231,7 +231,7 @@ func (e *env) actionLogStream(stream vcs.LogEach, backend vcs.Repo, jsonl bool, 
 			return true
 		}
 		when := time.Unix(rec.Date, 0).In(time.FixedZone("", int(rec.TZ)*60))
-		if werr := e.writeActionLogRow(c.ID, when, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc); werr != nil {
+		if werr := e.writeActionLogRow(c.ID, when, rec.AuthorName, rec.AuthorEmail, engine.FieldsFromRecord(rec), rec.Subject, jsonl, scratch, enc); werr != nil {
 			writeErr = werr
 			return false
 		}
@@ -264,7 +264,7 @@ func (e *env) actionLogStream(stream vcs.LogEach, backend vcs.Repo, jsonl bool, 
 
 // writeActionLogRow renders one action's row. Both read paths — the stream and the
 // cache — call it, so their bytes cannot drift apart.
-func (e *env) writeActionLogRow(id string, when time.Time, f trailer.Fields, subject string, jsonl bool, scratch *bytes.Buffer, enc *json.Encoder) error {
+func (e *env) writeActionLogRow(id string, when time.Time, authorName, authorEmail string, f trailer.Fields, subject string, jsonl bool, scratch *bytes.Buffer, enc *json.Encoder) error {
 	label := f.Title
 	if label == "" {
 		label = subject
@@ -276,6 +276,7 @@ func (e *env) writeActionLogRow(id string, when time.Time, f trailer.Fields, sub
 			Action:    f.Action,
 			Commit:    id,
 			Date:      when.Format(time.RFC3339),
+			Author:    personOf(authorName, authorEmail),
 			Title:     label,
 			Domain:    f.Domain,
 			Tags:      f.Tags,
@@ -391,6 +392,7 @@ type actionLogDoc struct {
 	Scope     string              `json:"scope,omitempty"`
 	Relations []actionLogRelation `json:"relations,omitempty"`
 	Unrelate  []string            `json:"unrelate,omitempty"`
+	Author    *personDoc          `json:"author,omitempty"`
 }
 
 // actionLogRelation is one declared relation: the canonical name and its target

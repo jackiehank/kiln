@@ -112,6 +112,12 @@ type Action struct {
 	Subject string
 	Date    time.Time
 
+	// Author is the commit's git author, verbatim from the backend. kiln never
+	// writes an author trailer — the identity is the commit's own — and `--json`
+	// only projects it back out.
+	AuthorName  string
+	AuthorEmail string
+
 	Issue  string
 	Kind   string
 	Title  string

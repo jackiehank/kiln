@@ -90,7 +90,7 @@ func TestDecodeRejectsCorruptionAndTruncation(t *testing.T) {
 		t.Fatal("a truncated layer must be rejected")
 	}
 	renamed := append([]byte(nil), data...)
-	copy(renamed, "KILNREC2")
+	copy(renamed, "KILNREC9")
 	if _, _, _, err := Decode(renamed); err == nil {
 		t.Fatal("an unknown magic must be rejected")
 	}

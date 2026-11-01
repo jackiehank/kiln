@@ -36,7 +36,7 @@ type ExecRunner struct {
 // without ~@ an uncommitted action would be counted.
 const (
 	revset    = "all() ~ root() ~ @"
-	template  = `commit_id ++ "\n" ++ author.timestamp() ++ "\n" ++ description ++ "\n@@KILN@@\n"`
+	template  = `commit_id ++ "\n" ++ author.timestamp() ++ "\n" ++ author.name() ++ "\n" ++ author.email() ++ "\n" ++ description ++ "\n@@KILN@@\n"`
 	recordSep = "@@KILN@@"
 )
 
@@ -62,6 +62,8 @@ type streamRecord struct {
 	CommitID    string `json:"commit_id"`
 	Description string `json:"description"`
 	Author      struct {
+		Name      string `json:"name"`
+		Email     string `json:"email"`
 		Timestamp string `json:"timestamp"`
 	} `json:"author"`
 }
@@ -150,9 +152,11 @@ func parseStreamRecord(line []byte) (vcs.Commit, error) {
 		return vcs.Commit{}, fmt.Errorf("jj log: %w", err)
 	}
 	return vcs.Commit{
-		ID:      rec.CommitID,
-		Date:    when,
-		Message: strings.TrimRight(rec.Description, "\r\n"),
+		ID:          rec.CommitID,
+		Date:        when,
+		AuthorName:  rec.Author.Name,
+		AuthorEmail: rec.Author.Email,
+		Message:     strings.TrimRight(rec.Description, "\r\n"),
 	}, nil
 }
 
@@ -464,8 +468,9 @@ func (r ExecRunner) run(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// parseLog splits the template output into commits. Each record is three
-// sections — id, author timestamp, description — terminated by recordSep.
+// parseLog splits the template output into commits. Each record is five
+// sections — id, author timestamp, author name, author email, description —
+// terminated by recordSep.
 func parseLog(out string) []vcs.Commit {
 	var commits []vcs.Commit
 	for _, rec := range strings.Split(out, recordSep) {
@@ -478,13 +483,22 @@ func parseLog(out string) []vcs.Commit {
 			continue
 		}
 		msg := ""
+		if len(lines) > 4 {
+			msg = strings.TrimRight(strings.Join(lines[4:], "\n"), "\n")
+		}
+		name, email := "", ""
 		if len(lines) > 2 {
-			msg = strings.TrimRight(strings.Join(lines[2:], "\n"), "\n")
+			name = strings.TrimSpace(lines[2])
+		}
+		if len(lines) > 3 {
+			email = strings.TrimSpace(lines[3])
 		}
 		commits = append(commits, vcs.Commit{
-			ID:      id,
-			Date:    parseTime(strings.TrimSpace(lines[1])),
-			Message: msg,
+			ID:          id,
+			Date:        parseTime(strings.TrimSpace(lines[1])),
+			AuthorName:  name,
+			AuthorEmail: email,
+			Message:     msg,
 		})
 	}
 	return commits

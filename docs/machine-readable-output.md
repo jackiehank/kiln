@@ -417,3 +417,19 @@ agent / 脚本要拿数据，只能**解析这些为"给人看"而排版的文�
 - 退出码：`0` 正常（含空结果、`--limit` 用尽、Windows 上消费者提前关管道）；`1` 后端不支持（jj）或读历史失败；`2` 参数错误。Unix 上被 SIGPIPE 终止时 shell 看到 `141`，这是平台惯例（git 与 rg 同样），不是 kiln 额外定义；
 - 没有终止记录：`--limit` 用尽或流被截断只能靠退出码与行数判断；加一条 `summary` 会推翻“一行一条动作”，暂不做；
 - 顺序与首行按后端：**git** 是 author-date 倒序，首行随第一批提交到达即出；**jj** 用 jj 自己的拓扑序（“children before parents”，线性历史下即 newest-first），且 jj 会把整份 log 算完才写第一行（实测 200 提交首行 141ms / 全量 152ms）。两边的 `date` 都恒有，要严格日期序的消费方自行按 `date` 排序。`--limit` 只在调用方生效：后端不知道哪条提交是动作，`jj log -n` 数的是提交而不是动作，下推会让 `--limit` 少给行，所以 jj 上也照样读完整流、由调用方在第 N 条动作处停止。
+
+## 后续（2026-11-02）：动作级 JSON 带上作者
+
+**写侧不动**：kiln 不写 `author:` trailer（[author-attribution](author-attribution.md) 的结论仍然成立），作者本来就是提交自己的 `%an` / `%ae`。这次只把读侧已有的数据投影出来，见 [json-author](json-author.md)。
+
+```json
+"author": { "name": "Jackie Han", "email": "jackiehank@163.com" }
+```
+
+- **范围**：`path --json` 的 `actions[]`、`show --json`、`action log --jsonl` 三条**动作级**视图。`list` / `status` 是 issue 级摘要，本轮不动。
+- **缺失即省略**：后端没给作者时整个 `author` 键不出现，不留空对象；`email` 缺失时只省 `email` 这一键。
+- **位置**：`path` / `show` 里紧跟在 `date` 后（同一语义的字段挨着）；`--jsonl` 里追加在**最后**——上一节"新键追加在末尾、已有键位置不动"的规则优先于"挨着 date"的美感。
+- **形状是对象**：以后加 `role` / `signature` 不破形状。
+- **价格**：`path` / `show` **零额外进程**（`git log` 的格式串多两列，raw commit 的 `author` 行本来就要解析）。`action log` 走记录层，所以缓存格式升到 `KILNREC2`：旧层直接忽略、自动重建；每条记录多两个 u32 索引，名字与邮箱各进共享串表一条。
+- **一致性**：缓存命中与冷读必须逐字节同形（`cache_test.go` 守着这条）——记录层必须存 author，否则两条路径会分叉。
+

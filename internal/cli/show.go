@@ -103,15 +103,16 @@ func (e *env) show(args []string) int {
 // the same text the text view prints), so the key never changes meaning; --stat
 // only adds the diffstat beside it instead of replacing the body.
 type showDoc struct {
-	Issue   string `json:"issue"`
-	Ordinal int    `json:"ordinal"`
-	Total   int    `json:"total"`
-	Action  string `json:"action"`
-	Commit  string `json:"commit"`
-	Date    string `json:"date"`
-	Title   string `json:"title,omitempty"`
-	Body    string `json:"body,omitempty"`
-	Stat    string `json:"stat,omitempty"`
+	Issue   string     `json:"issue"`
+	Ordinal int        `json:"ordinal"`
+	Total   int        `json:"total"`
+	Action  string     `json:"action"`
+	Commit  string     `json:"commit"`
+	Date    string     `json:"date"`
+	Author  *personDoc `json:"author,omitempty"`
+	Title   string     `json:"title,omitempty"`
+	Body    string     `json:"body,omitempty"`
+	Stat    string     `json:"stat,omitempty"`
 }
 
 // showJSON renders one action as one document: metadata plus body, where body
@@ -143,6 +144,7 @@ func (e *env) showJSON(p *model.Issue, ordinal int, a model.Action, stat bool) i
 		Action:  a.Kind,
 		Commit:  a.ID,
 		Date:    a.Date.Format(time.RFC3339),
+		Author:  personOf(a.AuthorName, a.AuthorEmail),
 		Title:   a.Title,
 		Body:    trimNewlines(body),
 		Stat:    trimNewlines(statText),

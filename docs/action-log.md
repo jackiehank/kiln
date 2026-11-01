@@ -892,3 +892,7 @@ export function tailActions(repoDir, limit, onAction, onDone) {
 - 两后端还不对称：git 给机器友好的三元组，jj 只有 `diff.summary()` 的文本。
 
 形状已经设计好（`{path,add,del}` / `{binary:true}` / `{path,from}`），真有消费方时再上——那时做成 opt-in `--files`，默认路径一行都不变。
+
+### 2026-11-02：`author`（追加在最后）
+
+每条记录多一个可选对象 `author: {name, email}`，来自提交自己的 `%an` / `%ae`（jj 的 `author`）——写侧仍然不写 `author:` trailer。放在**最后**，是因为本 issue 定过"新键追加在末尾、已有键位置不动"；`path` / `show` 没有这条约束，那里它紧跟 `date`。因为 `action log` 走记录层，缓存格式一并升到 `KILNREC2`（旧层忽略、自动重建）。契约见 [machine-readable-output](machine-readable-output.md) 文末。

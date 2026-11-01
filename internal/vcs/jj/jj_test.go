@@ -10,8 +10,8 @@ import (
 )
 
 func TestParseLogSplitsRecords(t *testing.T) {
-	out := "id1\n2026-10-14 21:30:47.000 +08:00\nfirst\n\nissue: demo\naction: ask\n@@KILN@@\n" +
-		"id2\n2026-10-14 22:00:00.000 +08:00\nsecond\n@@KILN@@\n"
+	out := "id1\n2026-10-14 21:30:47.000 +08:00\nJackie Han\njackiehank@163.com\nfirst\n\nissue: demo\naction: ask\n@@KILN@@\n" +
+		"id2\n2026-10-14 22:00:00.000 +08:00\nAgent\nagent@example.com\nsecond\n@@KILN@@\n"
 	got := parseLog(out)
 	if len(got) != 2 {
 		t.Fatalf("got %d commits, want 2", len(got))
@@ -21,6 +21,12 @@ func TestParseLogSplitsRecords(t *testing.T) {
 	}
 	if want := "first\n\nissue: demo\naction: ask"; got[0].Message != want {
 		t.Fatalf("message = %q, want %q", got[0].Message, want)
+	}
+	if got[0].AuthorName != "Jackie Han" || got[0].AuthorEmail != "jackiehank@163.com" {
+		t.Fatalf("author = %q <%q>", got[0].AuthorName, got[0].AuthorEmail)
+	}
+	if got[1].AuthorName != "Agent" || got[1].AuthorEmail != "agent@example.com" {
+		t.Fatalf("second author = %q <%q>", got[1].AuthorName, got[1].AuthorEmail)
 	}
 	want := time.Date(2026, 10, 14, 21, 30, 47, 0, time.FixedZone("", 8*3600))
 	if !got[0].Date.Equal(want) {

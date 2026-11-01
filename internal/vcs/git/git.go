@@ -29,8 +29,10 @@ type ExecRunner struct {
 // logFormat uses unit (0x1f) and record (0x1e) separators so that commit
 // messages containing newlines survive the round trip. %P (parents) rides along
 // so a reader can tell a linear history from one with merges without another
-// process; see vcs.Commit.
-const logFormat = "%H%x1f%P%x1f%aI%x1f%B%x1e"
+// process; see vcs.Commit. %an/%ae (the author) ride along for the same reason:
+// every read command already walks these commits, so exposing the author costs
+// no extra process.
+const logFormat = "%H%x1f%P%x1f%aI%x1f%an%x1f%ae%x1f%B%x1e"
 
 // Log returns every commit, newest first.
 func (r ExecRunner) Log() ([]vcs.Commit, error) {
@@ -41,13 +43,13 @@ func (r ExecRunner) Log() ([]vcs.Commit, error) {
 	return parseLog(out), nil
 }
 
-// streamLogFormat is the streaming form of logFormat: four NUL-separated fields,
-// with -z adding one more NUL after each record. A reader that has seen four
+// streamLogFormat is the streaming form of logFormat: six NUL-separated fields,
+// with -z adding one more NUL after each record. A reader that has seen six
 // terminators therefore owns exactly one complete commit — no guessing where a
 // record ends, and no "the last one has no terminator" special case. NUL is git's
 // own machine separator; unlike the unit/record separators logFormat uses, a
 // commit body can never make it ambiguous.
-const streamLogFormat = "%H%x00%P%x00%aI%x00%B"
+const streamLogFormat = "%H%x00%P%x00%aI%x00%an%x00%ae%x00%B"
 
 // LogEach streams commits newest-first to fn, stopping as soon as fn returns
 // false. See vcs.LogEach.
@@ -95,6 +97,16 @@ func (r ExecRunner) LogEach(fn func(vcs.Commit) bool) error {
 			readErr = truncated(err)
 			break
 		}
+		author, err := readNULField(br)
+		if err != nil {
+			readErr = truncated(err)
+			break
+		}
+		email, err := readNULField(br)
+		if err != nil {
+			readErr = truncated(err)
+			break
+		}
 		msg, err := readNULField(br)
 		if err != nil {
 			readErr = truncated(err)
@@ -104,6 +116,8 @@ func (r ExecRunner) LogEach(fn func(vcs.Commit) bool) error {
 		c := vcs.Commit{
 			ID:           strings.TrimSpace(id),
 			Date:         when,
+			AuthorName:   author,
+			AuthorEmail:  email,
 			Message:      strings.TrimRight(msg, "\r\n"),
 			Parents:      splitParents(parents),
 			ParentsKnown: true,
@@ -766,12 +780,12 @@ func (r ExecRunner) Commits(oids []string) (map[string]vcs.RawCommit, error) {
 			parseErr = err
 			break
 		}
-		when, msg, err := splitRawCommit(payload)
+		raw, err := splitRawCommit(payload)
 		if err != nil {
 			parseErr = err
 			break
 		}
-		out[fields[0]] = vcs.RawCommit{Date: when, Message: msg}
+		out[fields[0]] = raw
 	}
 	waitErr := cmd.Wait()
 	if parseErr != nil {
@@ -783,25 +797,34 @@ func (r ExecRunner) Commits(oids []string) (map[string]vcs.RawCommit, error) {
 	return out, nil
 }
 
-// splitRawCommit pulls the author date and the message out of a raw commit
-// object, which is the field layout the record layer stores.
-func splitRawCommit(payload []byte) (time.Time, string, error) {
+// splitRawCommit pulls the author (name, email, date) and the message out of a
+// raw commit object, which is the field layout the record layer stores. The
+// author line is `author Name <email> <unix> <zone>`; the name may contain
+// spaces, so it is the text before the last " <", never a whitespace split.
+func splitRawCommit(payload []byte) (vcs.RawCommit, error) {
 	sep := bytes.Index(payload, []byte("\n\n"))
 	if sep < 0 {
-		return time.Time{}, "", errors.New("cat-file: commit without a message")
+		return vcs.RawCommit{}, errors.New("cat-file: commit without a message")
 	}
-	var when time.Time
+	var raw vcs.RawCommit
 	for _, line := range strings.Split(string(payload[:sep]), "\n") {
 		if !strings.HasPrefix(line, "author ") {
 			continue
 		}
-		f := strings.Fields(line)
+		rest := line[len("author "):]
+		if lt := strings.LastIndex(rest, " <"); lt >= 0 {
+			raw.AuthorName = rest[:lt]
+		}
+		if lt, gt := strings.Index(rest, "<"), strings.LastIndex(rest, ">"); lt >= 0 && gt > lt {
+			raw.AuthorEmail = rest[lt+1 : gt]
+		}
+		f := strings.Fields(rest)
 		if len(f) < 2 {
 			continue
 		}
 		ts, err := strconv.ParseInt(f[len(f)-2], 10, 64)
 		if err != nil {
-			return time.Time{}, "", err
+			return vcs.RawCommit{}, err
 		}
 		zone := f[len(f)-1]
 		offset := 0
@@ -813,12 +836,13 @@ func splitRawCommit(payload []byte) (time.Time, string, error) {
 				offset = -offset
 			}
 		}
-		when = time.Unix(ts, 0).In(time.FixedZone("", offset))
+		raw.Date = time.Unix(ts, 0).In(time.FixedZone("", offset))
 	}
-	if when.IsZero() {
-		return time.Time{}, "", errors.New("cat-file: commit without an author line")
+	if raw.Date.IsZero() {
+		return vcs.RawCommit{}, errors.New("cat-file: commit without an author line")
 	}
-	return when, strings.TrimRight(string(payload[sep+2:]), "\r\n"), nil
+	raw.Message = strings.TrimRight(string(payload[sep+2:]), "\r\n")
+	return raw, nil
 }
 
 // runIn executes git in dir and returns stdout; on failure the error carries
@@ -850,8 +874,8 @@ func parseLog(out string) []vcs.Commit {
 		if strings.TrimSpace(rec) == "" {
 			continue
 		}
-		parts := strings.SplitN(rec, "\x1f", 4)
-		if len(parts) < 4 {
+		parts := strings.SplitN(rec, "\x1f", 6)
+		if len(parts) < 6 {
 			continue
 		}
 		var date time.Time
@@ -861,7 +885,9 @@ func parseLog(out string) []vcs.Commit {
 		commits = append(commits, vcs.Commit{
 			ID:           strings.TrimSpace(parts[0]),
 			Date:         date,
-			Message:      strings.TrimRight(parts[3], "\r\n"),
+			AuthorName:   parts[3],
+			AuthorEmail:  parts[4],
+			Message:      strings.TrimRight(parts[5], "\r\n"),
 			Parents:      splitParents(parts[1]),
 			ParentsKnown: true,
 		})

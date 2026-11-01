@@ -150,7 +150,7 @@ func (r *reader) record(dst *Record, strs []string) bool {
 	flags := head[30]
 	dst.Action = flags&1 != 0
 	sameSubject := flags&2 != 0
-	fields := []*string{&dst.Issue, &dst.Kind, &dst.Title, &dst.Subject, &dst.Domain, &dst.Scope, &dst.Target}
+	fields := []*string{&dst.Issue, &dst.Kind, &dst.Title, &dst.Subject, &dst.Domain, &dst.Scope, &dst.Target, &dst.AuthorName, &dst.AuthorEmail}
 	for _, f := range fields {
 		s, ok := r.ref(strs)
 		if !ok {
