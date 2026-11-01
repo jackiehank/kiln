@@ -2,14 +2,41 @@
 
 **Issue tracking and research-path reconstruction, driven by git trailers.**
 
-In one sentence: **kiln is a filter, not a registry.** It creates no database, no index, no record files for you; it does exactly two things:
+Language: [中文](README.md) · this English edition translates **this README only**; the design records under [`docs/`](docs/) stay in Chinese.
+
+## When to use it
+
+kiln is for **one person plus one (or a few) agents**: you bring the questions and the calls, the agent does the legwork and writes the code, and the process has to survive — and be re-readable later. Three cases are typical:
+
+1. **The agent finishes the job and the process lives only in the chat.** A few rounds later nobody remembers why an approach was dropped — the session is gone and the commit carries only a diff. kiln makes every research action (ask / hypothesize / collect / test / conclude / apply) a commit, so **the process travels with the code**.
+2. **You need to reconstruct how a conclusion was reached.** `kiln path <issue>` lists each action in order with its commit, `kiln show <issue> <n>` expands the full diff of one of them, `kiln graph` draws the relations between issues. It answers "what was tried, what was the evidence, why did we settle" — not "is it done".
+3. **Several agents at once pollute each other.** In one working copy, two agents' uncommitted changes get mixed into a single commit and action attribution breaks. kiln isolates structurally with worktrees (`kiln worktree new`), which also works for one person running two agents.
+
+If none of these is you, kiln probably will not help: it does not schedule, assign, or keep a to-do list.
+
+## What it is
+
+**A filter, not a registry.** It creates no database, no index, no record files for you; it does exactly two things:
 
 - **Write**: encode one research action (ask / hypothesize / collect / test / conclude / apply) as a **canonical commit message with semantic trailers**;
 - **Read**: *filter* those actions back out of the Git history by that convention, and rebuild an issue's **research path**, relation graph and completeness.
 
 All state lives in **commit messages** — wherever `git clone` takes the repository, the research history goes with it. No server, no storage, no implicit state. Underneath is the `git` or `jj` you (and your agent) already know; kiln only adds structural semantics on top.
 
-Language: [中文](README.md) · this English edition translates **this README only**; the design records under [`docs/`](docs/) stay in Chinese.
+## How it differs from a kanban board
+
+Jira / Trello / GitHub Projects / Linear record **coordination state**: who is on it, where it sits, which column it is stuck in. kiln records **research process**: how the question got answered, where the evidence is, how the conclusion landed. The subject differs — on a board it is the **card**, in kiln it is the **action**.
+
+| Dimension | Kanban-style tools | kiln |
+| --- | --- | --- |
+| Where state lives | Card fields in a central service; no service, no state | Trailers in commit messages; wherever `git clone` goes, state follows |
+| Unit of record | A card = coordination state | An action = a step in the research, carrying its own diff |
+| "Where is it?" | Look at the column | Look at the action sequence (`kiln path`) — not "is it done" but "what was tried" |
+| Relations | Parent / dependency / link, rendered server-side | 9 typed relations written into the commit, rebuilt from history by `graph` |
+| Who writes | People click a UI; agents call an API (credentials, concurrency, field semantics) | People or agents just run `kiln commit` — the agent's bookkeeping *is* the commit it was going to make anyway |
+| Audit | A separate change log | The commit history itself; `git log` / `blame` work as-is |
+
+**What boards do better, honestly**: cross-team visibility, scheduling and milestones, permissions and notifications, non-engineering stakeholders, WIP limits. kiln does none of that and **does not replace a board** — it replaces the *second* copy of state a team otherwise keeps just for its agents: that state already belongs in the commits.
 
 ## Design: two atoms + emergence
 
@@ -315,18 +342,22 @@ Rules (full schema in [docs/machine-readable-output.md](docs/machine-readable-ou
 
 ## Working with agents
 
-kiln's model suits agents naturally:
+kiln's model suits agents naturally, and it is deliberately scoped to **one person plus agents**: the person asks, decides and reviews (reading `path` / `graph` / `show`), the agent collects and commits (turning each research action into a commit with trailers). Both share one repository and one git history — no second source of truth, and no "remember to update the board" step.
 
 - **One convention is enough**: use `kiln commit` (or `git commit -m "$(kiln do …)"`) for research actions. That one sentence is all an agent needs.
+- **The division of labour lives in the actions**: nobody has to guess who said what — each action is a commit, `kiln path` gives the order, `kiln show` gives what changed in that one; the person's calls land in `conclude` / `apply`, the agent's legwork in `collect` / `test`.
 - **Open the issue before writing code**: put only the issue doc in the `ask` action, commit it, then write the implementation. In that order nothing extra is needed; when you really must go the other way, `kiln commit … --only docs/<issue>.md` commits just the doc (identical on both backends) instead of moving the code aside. See [docs/commit-order.md](docs/commit-order.md), [docs/commit-scope.md](docs/commit-scope.md).
 - **Structured output**: `status` / `list` / `check` / `graph` / `path` / `show` / `worktree list` with `--json` are **truly** machine-readable, stdout carrying one JSON document; `path --all --json` returns every research path in one process (saving N startups), `graph` also has `--mermaid` (flowchart text), and `graph --json --issue <id> --depth N` emits only that issue's undirected neighborhood. See "Machine-readable output".
 - **Honesty**: `check` points straight at structural problems — a missing terminal action, a missing relation target, an unknown trailer key (under `--json` it gives rule codes, not Chinese text).
 - **Isolation**: parallel agents each take a worktree via `kiln worktree new`, removing cross-contamination **structurally**.
 
+> **Boundary: multi-person collaboration is out of scope for now.** Every action does carry git's `%an/%ae`, but all commits in this repo share one identity and `path` / `show` / `list` do not render an author — with several agents' work interleaved you cannot tell who made the call. Multi-person use needs action attribution first; see [docs/author-attribution.md](docs/author-attribution.md).
+
 ## What it does not do
 
 - It creates no files (records like `q1.md` are written by a human or agent); it **does not classify changes** — change display is delegated to git (`--stat` / `show`), and the write side only glances at the file list for `--target`;
 - It has no central registry / index / database — all state is in commit messages;
+- **It does not manage people**: no assignee, notifications, permission model or scheduling — that is a board's job (see "How it differs from a kanban board");
 - It has no mode switch (no "changes-only mode vs record mode"; everything is trailer convention);
 - It does not orchestrate your workflow (no builds, no dependency installs, no pinned cwd);
 - It does not rewrite history — an action *is* a commit; undo / revert / reuse across branches are git's own tools.
