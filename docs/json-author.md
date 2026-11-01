@@ -36,6 +36,35 @@
 - 不代管 git 身份配置（那是使用者自己的 `user.name` / 环境变量）；
 - 不承诺"能区分人 vs agent"——那要先有独立身份，属于 `author-attribution` 重启时的事。
 
+## hypothesize：动作级 + 对象形状（用户裁定）
+
+> 用户裁定（2026-11-02）：① **动作级先上**——`path` / `show` / `action log --jsonl`；`list` / `status` 本轮不动。② **对象形状**——`"author": {"name": …, "email": …}`。
+
+### 1. 覆盖范围
+
+三条都是"一次动作一行"的视图，加作者等于给每一行补一列来源；`list` / `status` 是 issue 级摘要，要先回答"末条动作的作者，还是全部作者"，还会立刻牵动缓存记录层——留到形状稳定后再说。
+
+### 2. 形状
+
+```json
+{ "author": { "name": "Jackie Han", "email": "jackiehank@163.com" } }
+```
+
+- **对象**而不是平铺：以后加 `role` / `signature` 不破形状；jsonl 多一层嵌套是明确接受的代价。
+- **缺省即省略**：取不到作者时整个 `author` 键不出现，不留空对象（与既有约定一致）。
+- **email 跟 name 一起出**：`%ae` / jj 的 `author.email()` 本来就取得到；它是 PII，但本仓提交本来就带着它。
+
+### 3. 读取成本
+
+| 视图 | 数据来源 | 加 author 的代价 |
+| --- | --- | --- |
+| `path` / `show` | `git log` 流、raw commit | 格式串加两列；`splitRawCommit` 本来就解析 `author` 行 → **0 个额外进程** |
+| `action log --jsonl` | 流 / 缓存记录 | 记录层多存两个字符串 → **缓存格式升级**（`Magic` 换一版，旧层直接忽略、自动重建） |
+
+### 4. 一致性约束
+
+缓存命中与冷读必须逐字节同形（`cache_test.go` 已经在守这条），所以记录层必须存 author——否则 `action log --jsonl` 的两条路径会给出不同结果。
+
 ## 记录
 
 - 2026-11-02：由人工提出——写侧不写 author（git 已有），读侧 `--json` 可以带；并确认**单开一条 issue**，不并回 `author-attribution`。
