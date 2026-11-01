@@ -76,6 +76,28 @@
 - 内核计划移除 `Assisted-by` 要求（Phoronix 原文被 403，多家转述）：<https://www.phoronix.com/news/Linux-AI-Attribution-Again>
 - Aider 用 `GIT_AUTHOR_NAME` 把身份改成 `"User Name (aider)"`、以及 `Co-Authored-By` 相关讨论（二手研究笔记与 issue）：<https://github.com/Aider-AI/aider/issues/3270>
 
+## conclude：暂不推进（2026-11-02）
+
+**结论：业界尚未形成规范，本仓也没有消费方——不推进。**
+
+- 五种做法（内核 `Assisted-by`、Claude / Aider 的 `Co-Authored-By`、Copilot 的 agent-as-author、Cursor 的开关、git-ai 的 notes、IETF 草案）没有一种同时满足"可核验 + 跨 clone + 零额外基础设施 + 不依赖平台"；唯一稳定的是"**责任在人**"（DCO 只能人签）——而这条用 git 的 author / committer 双角色本来就表达得了。
+- 本仓只有一个人 + 一个 agent，且共用同一 git 身份：加了也分不出人机，**没有可消费的差别**；单人场景下"是谁做的"本来就没有歧义。
+
+**不做的（留档，免得以后重开时再讨论一遍）**
+
+- 不加 `author:` / `agent:` trailer，不新造身份机制；
+- 不做 notes 方案（与 `git clone` 即带走冲突）；
+- 不解析 `Co-authored-by` / `Assisted-by`（没有消费方；真需要时读侧加一层即可）；
+- 不改 `commit` 的身份透传（git 本来就认 `GIT_AUTHOR_*`）。
+
+**重启条件（满足任一再回来）**
+
+1. 出现**第二个行动者**：第二个人，或第二个需要区分的独立 agent；
+2. 出现**具体消费方**：按作者过滤（`list --author=`）、按作者审计、或文本视图要显示人 vs agent；
+3. 某个上游把 `Assisted-by` / `Co-Authored-By` 变成硬要求（例如给内核类项目投稿）。
+
+**今天已经能用的**：`json-author` 已把 git author 投影进 `path` / `show` / `action log --jsonl`；给 agent 配一个独立 `GIT_AUTHOR_NAME` / `EMAIL` 就能区分，零代码改动。
+
 ## 记录
 
 - 2026-11-02：由人工提出——作者字段有了，但身份本身不好解决，先核实业界现状，再决定 kiln 要不要碰。
